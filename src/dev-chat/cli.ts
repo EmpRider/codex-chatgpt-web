@@ -58,6 +58,7 @@ Interactive commands:
 
 Experimental settings:
   Bigger Context       Enable in Settings; adapts context across 1, 2, or 3 messages
+  Chat Clean           Enabled by default; retains 3 user messages and 3 responses
 `;
 
 function takeFlag(args: string[], name: string): boolean {
@@ -355,6 +356,11 @@ export async function runDevCommand(args: string[]): Promise<void> {
     if (biggerContext && standardContext) {
       throw new Error("Choose at most one context mode: --bigger-context or --standard-context");
     }
+    const chatClean = takeFlag(args, "--chat-clean");
+    const noChatClean = takeFlag(args, "--no-chat-clean");
+    if (chatClean && noChatClean) {
+      throw new Error("Choose at most one Chat Clean mode: --chat-clean or --no-chat-clean");
+    }
     if (args.length > 0) throw new Error(`Unknown DEV setup arguments: ${args.join(" ")}`);
     const result = await setupDevProfile({
       mode: full ? "full" : "browser-only",
@@ -365,6 +371,7 @@ export async function runDevCommand(args: string[]): Promise<void> {
         ? { browserInteractionMode: manualBrowserInteraction ? "manual" : "automatic" }
         : {}),
       ...(biggerContext || standardContext ? { experimentalBiggerContext: biggerContext } : {}),
+      ...(chatClean || noChatClean ? { chatCleanEnabled: chatClean } : {}),
       ...(tunnelId ? { tunnelId } : {}),
       ...(runtimeKeyFile ? { runtimeKeyFile } : {}),
     });

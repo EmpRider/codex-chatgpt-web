@@ -124,6 +124,12 @@ The pasted task carries one opaque `request_id` for routing concurrent requests.
 sequencing lives in the Zero Risk MCP server metadata, not in user-authored imperative text; the
 per-tab nonce used to validate the Launcher confirmation never leaves the local runtime.
 
+Automatic retained conversations run Chat Clean after completion evidence and diagnostic capture.
+The page-side cleanup keeps six rendered turn nodes (three user/assistant exchanges), removes older
+heavy turn subtrees, and preserves any outer `data-turn-id-container` shells used for logical
+identity and virtualization. Cleanup is best effort: a selector drift is logged but cannot change a
+completed response into an adapter failure. Zero Risk/manual conversations are never modified.
+
 The appended models advertise the authenticated account's context window and a ten-percent
 auto-compaction reserve. Usage is counted with the GPT-5 tokenizer plus fixed platform/image
 reserves, rather than inferred from character length. The ChatGPT composer also has an independent

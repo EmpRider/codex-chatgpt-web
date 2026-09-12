@@ -654,6 +654,7 @@ function registerIpc({ logger, stateStore }) {
       mcpGuideStep: 0,
       codexRestartRequired: true,
       browserInteractionMode: "automatic",
+      chatCleanEnabled: true,
       experimentalBiggerContext: false,
       zeroRiskProEnabled: false,
     });
@@ -764,6 +765,12 @@ function registerIpc({ logger, stateStore }) {
     });
     send("launcher:state-changed", state);
     if (!IS_DEV_PROFILE) startCatalogVerificationMonitor({ logger, stateStore });
+    return state;
+  });
+  handle("launcher:chat-clean", async (_event, enabled) => {
+    const result = await runtimeHost.setChatClean(enabled === true);
+    const state = stateStore.update({ chatCleanEnabled: result.enabled });
+    send("launcher:state-changed", state);
     return state;
   });
   handle("launcher:zero-risk-pro", async (_event, enabled) => {
@@ -1102,6 +1109,7 @@ async function start() {
       ...(config?.mode !== "full" ? { mcpSetupComplete: false, mcpGuideStep: 0 } : {}),
       codexRestartRequired: false,
       autoStart: false,
+      chatCleanEnabled: config?.chatCleanEnabled !== false,
       experimentalBiggerContext: config?.experimentalBiggerContext === true,
       zeroRiskProEnabled: config?.zeroRiskProEnabled === true,
     });
@@ -1128,6 +1136,7 @@ async function start() {
         coreSetupComplete: true,
         codexCatalogVerified: false,
         codexRestartRequired: true,
+        chatCleanEnabled: runtimeHost.runtimeConfigSnapshot().config?.chatCleanEnabled !== false,
         experimentalBiggerContext: runtimeHost.runtimeConfigSnapshot().config?.experimentalBiggerContext === true,
         zeroRiskProEnabled: runtimeHost.runtimeConfigSnapshot().config?.zeroRiskProEnabled === true,
         ...(upgrade.mode === "full" ? {
@@ -1151,11 +1160,13 @@ async function start() {
     const configuredRuntime = runtimeHost.runtimeConfigSnapshot();
     if (configuredRuntime.configured) {
       const enabled = configuredRuntime.config?.experimentalBiggerContext === true;
+      const chatCleanEnabled = configuredRuntime.config?.chatCleanEnabled !== false;
       const zeroRiskProEnabled = configuredRuntime.config?.zeroRiskProEnabled === true;
       const saved = stateStore.read();
       if (saved.experimentalBiggerContext !== enabled
+        || saved.chatCleanEnabled !== chatCleanEnabled
         || saved.zeroRiskProEnabled !== zeroRiskProEnabled) {
-        const state = stateStore.update({ experimentalBiggerContext: enabled, zeroRiskProEnabled });
+        const state = stateStore.update({ chatCleanEnabled, experimentalBiggerContext: enabled, zeroRiskProEnabled });
         send("launcher:state-changed", state);
       }
     }
@@ -1170,6 +1181,7 @@ async function start() {
       const patch = {
         coreSetupComplete: true,
         mcpRuntimeInstalled: config.mode === "full",
+        chatCleanEnabled: config.chatCleanEnabled !== false,
         experimentalBiggerContext: config.experimentalBiggerContext === true,
         zeroRiskProEnabled: config.zeroRiskProEnabled === true,
         ...(runtime.bridgeRouteChanged ? {

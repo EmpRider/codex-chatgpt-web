@@ -165,6 +165,12 @@ Use **Activity** for safe local diagnostics and **Settings → Run doctor** for 
 Settings can also cancel a retained browser turn or remove the Codex integration before uninstall.
 Set `CODEX_CHATGPT_WEB_BROWSER_DIAGNOSTICS=1` only when every browser checkpoint needs a screenshot.
 
+**Chat Clean** is enabled by default for Automatic mode. After each completed response, it keeps
+only the latest three user messages and their three assistant responses rendered in a retained
+ChatGPT tab. Older logical turn identities remain available to the browser worker, while their
+heavy Markdown, code, image, and control DOM is removed. Disable it from Settings if you need the
+complete rendered transcript; this option does not affect Zero Risk/manual chats.
+
 New installs use **Compatibility V1** for cross-backend subagents. **Native** preserves Codex's own
 feature settings and enables plaintext Web-to-Web V2 delegation. Restart Codex and start a new task
 after changing the protocol:

@@ -19,6 +19,7 @@ interface RunMessage {
     browserDiagnosticsPath?: string;
     turnTimeoutMs: number;
     autoApproveToolCalls: boolean;
+    chatCleanEnabled?: boolean;
   };
   turn: {
     traceId: string;
@@ -177,6 +178,10 @@ async function run(message: RunMessage): Promise<void> {
   if (message.turn.externalProgress !== undefined && typeof message.turn.externalProgress !== "boolean") {
     throw new Error("Browser helper external progress flag is invalid");
   }
+  if (message.config.chatCleanEnabled !== undefined
+    && typeof message.config.chatCleanEnabled !== "boolean") {
+    throw new Error("Browser helper Chat Clean preference is invalid");
+  }
   const provider: CodexProviderConfig = {
     adapter: "chatgpt-web",
     baseUrl: "https://chatgpt.com",
@@ -187,6 +192,7 @@ async function run(message: RunMessage): Promise<void> {
       browserDiagnosticsPath: message.config.browserDiagnosticsPath,
       turnTimeoutMs: message.config.turnTimeoutMs,
       autoApproveToolCalls: message.config.autoApproveToolCalls,
+      chatCleanEnabled: message.config.chatCleanEnabled,
     },
   };
   const abortController = new AbortController();

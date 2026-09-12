@@ -84,6 +84,8 @@ export interface AppConfig {
   solAvailable: boolean;
   proAvailable: boolean;
   experimentalBiggerContext: boolean;
+  /** Keep only the latest three rendered user/assistant exchanges in retained launcher chats. */
+  chatCleanEnabled: boolean;
   /** Explicitly install the additional Pro-sized model row while Zero Risk is active. */
   zeroRiskProEnabled: boolean;
   /** Optional adapter-silence budget for the Responses watchdog. */
@@ -212,6 +214,7 @@ export function defaultConfig(mode: RuntimeMode = "browser-only"): AppConfig {
     solAvailable: true,
     proAvailable: false,
     experimentalBiggerContext: false,
+    chatCleanEnabled: true,
     zeroRiskProEnabled: false,
     autoApproveToolCalls: false,
     controlToken: randomBytes(32).toString("base64url"),
@@ -490,6 +493,9 @@ function parseConfig(value: unknown, path: string): AppConfig {
     && typeof parsed.experimentalBiggerContext !== "boolean") {
     throw new Error(`Invalid experimentalBiggerContext in ${path}`);
   }
+  if (parsed.chatCleanEnabled !== undefined && typeof parsed.chatCleanEnabled !== "boolean") {
+    throw new Error(`Invalid chatCleanEnabled in ${path}`);
+  }
   if (parsed.zeroRiskProEnabled !== undefined && typeof parsed.zeroRiskProEnabled !== "boolean") {
     throw new Error(`Invalid zeroRiskProEnabled in ${path}`);
   }
@@ -500,6 +506,7 @@ function parseConfig(value: unknown, path: string): AppConfig {
   const solAvailable = parsed.solAvailable !== false;
   const proAvailable = parsed.proAvailable === true;
   const experimentalBiggerContext = parsed.experimentalBiggerContext === true;
+  const chatCleanEnabled = parsed.chatCleanEnabled !== false;
   const zeroRiskProEnabled = parsed.zeroRiskProEnabled === true;
   if (browserInteractionMode === "manual" && experimentalBiggerContext) {
     throw new Error(`Zero Risk does not support Bigger Context in ${path}`);
@@ -517,6 +524,7 @@ function parseConfig(value: unknown, path: string): AppConfig {
     solAvailable,
     proAvailable,
     experimentalBiggerContext,
+    chatCleanEnabled,
     zeroRiskProEnabled,
   } as AppConfig;
 }
@@ -571,6 +579,7 @@ export function providerConfig(config: AppConfig): CodexProviderConfig {
       solAvailable: manual ? false : config.solAvailable,
       proAvailable: manual ? false : config.proAvailable,
       experimentalBiggerContext: manual ? false : config.experimentalBiggerContext,
+      chatCleanEnabled: manual ? false : config.chatCleanEnabled,
       ...(config.stallTimeoutSec !== undefined ? { stallTimeoutSec: config.stallTimeoutSec } : {}),
       autoApproveToolCalls: manual ? false : config.autoApproveToolCalls,
     },

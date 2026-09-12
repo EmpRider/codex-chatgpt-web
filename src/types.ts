@@ -303,5 +303,7 @@ export interface CodexProviderConfig {
     autoApproveToolCalls?: boolean;
     /** DEV-only experimental transport: adapt one context across one, two, or three ChatGPT messages. */
     experimentalBiggerContext?: boolean;
+    /** Prune completed launcher conversations to the latest three user/assistant exchanges. */
+    chatCleanEnabled?: boolean;
   };
 }

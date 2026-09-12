@@ -176,11 +176,13 @@ test("existing v3 configurations deterministically retain automatic browser inte
   mkdirSync(root, { recursive: true });
   const legacyV3: Record<string, unknown> = { ...defaultConfig("browser-only") };
   delete legacyV3.browserInteractionMode;
+  delete legacyV3.chatCleanEnabled;
   delete legacyV3.zeroRiskProEnabled;
   writeFileSync(join(root, "config.json"), `${JSON.stringify(legacyV3)}\n`);
 
   expect(loadConfig()).toMatchObject({
     browserInteractionMode: "automatic",
+    chatCleanEnabled: true,
     zeroRiskProEnabled: false,
   });
   expect(loadConfigForSetup()).toMatchObject({
@@ -233,6 +235,7 @@ test("launcher browser ownership is explicit in provider configuration", () => {
   expect(providerConfig(config).chatgptWeb).toMatchObject({
     browserHost: "launcher",
     browserHostDescriptorPath: config.browserHostDescriptorPath,
+    chatCleanEnabled: true,
     solAvailable: true,
     stallTimeoutSec: 900,
   });

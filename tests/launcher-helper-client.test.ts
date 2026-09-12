@@ -19,7 +19,8 @@ test("daemon streams browser lifecycle through the real helper process", async (
   writeFileSync(helper, `
     import { ChatGptBrowserWorker } from ${JSON.stringify(new URL("../src/adapters/chatgpt-web/browser-worker.ts", import.meta.url).href)};
     // Substitute only the browser. Both sides of the production IPC protocol run unchanged.
-    ChatGptBrowserWorker.prototype.run = async turn => {
+    ChatGptBrowserWorker.prototype.run = async function(this: any, turn) {
+      if (this.config.chatCleanEnabled !== false) throw new Error("Chat Clean preference was lost");
       await turn.onPreparedSelected(false);
       const prepared = await turn.prepare();
       if (prepared.multipart.parts.length !== 3) throw new Error("Multipart context was lost");
@@ -75,6 +76,7 @@ test("daemon streams browser lifecycle through the real helper process", async (
     turnTimeoutMs: 60_000,
     headed: true,
     autoApproveToolCalls: false,
+    chatCleanEnabled: false,
   };
   const reasoning: Array<{ text: string; continuation: boolean }> = [];
   const deltas: string[] = [];

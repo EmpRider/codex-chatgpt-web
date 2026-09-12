@@ -53,6 +53,7 @@ export interface SetupOptions {
   forceLogin?: boolean;
   autoApproveToolCalls?: boolean;
   experimentalBiggerContext?: boolean;
+  chatCleanEnabled?: boolean;
   zeroRiskProEnabled?: boolean;
   replaceCodexRoute?: boolean;
   restartService?: boolean;
@@ -142,6 +143,7 @@ function meaningfulRuntimeChange(before: AppConfig, after: AppConfig): boolean {
     solAvailable: before.solAvailable,
     proAvailable: before.proAvailable,
     experimentalBiggerContext: before.experimentalBiggerContext,
+    chatCleanEnabled: before.chatCleanEnabled,
     zeroRiskProEnabled: before.zeroRiskProEnabled,
     autoApproveToolCalls: before.autoApproveToolCalls,
     controlToken: before.controlToken,
@@ -169,6 +171,7 @@ function meaningfulRuntimeChange(before: AppConfig, after: AppConfig): boolean {
     solAvailable: after.solAvailable,
     proAvailable: after.proAvailable,
     experimentalBiggerContext: after.experimentalBiggerContext,
+    chatCleanEnabled: after.chatCleanEnabled,
     zeroRiskProEnabled: after.zeroRiskProEnabled,
     autoApproveToolCalls: after.autoApproveToolCalls,
     controlToken: after.controlToken,
@@ -266,6 +269,9 @@ function baseConfig(
   if (options.autoApproveToolCalls !== undefined) config.autoApproveToolCalls = options.autoApproveToolCalls;
   if (options.experimentalBiggerContext !== undefined) {
     config.experimentalBiggerContext = options.experimentalBiggerContext;
+  }
+  if (options.chatCleanEnabled !== undefined) {
+    config.chatCleanEnabled = options.chatCleanEnabled;
   }
   if (options.zeroRiskProEnabled !== undefined) {
     if (config.browserInteractionMode !== "manual") {

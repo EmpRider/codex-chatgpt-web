@@ -16,6 +16,7 @@ import { compileChatGptWebPrompt, formatChatGptWebMultipartCommit, formatChatGpt
 import { estimateCompiledChatGptWebInputTokens } from "../src/adapters/chatgpt-web/input-tokens";
 import { estimateTokens } from "../src/lib/token-estimate";
 import { chatGptHtmlToMarkdown } from "../src/adapters/chatgpt-web/markdown";
+import * as browserWorkerExports from "../src/adapters/chatgpt-web/browser-worker";
 
 function personalizedTemporaryChatRole(
   _role: string,
@@ -30,6 +31,112 @@ function personalizedTemporaryChatRole(
   };
   return locator;
 }
+
+test("Chat Clean keeps the latest three user turns and latest three assistant turns on tag-agnostic markup", () => {
+  const clean = (browserWorkerExports as Record<string, unknown>).cleanChatGptConversationDocument;
+  expect(typeof clean).toBe("function");
+  if (typeof clean !== "function") return;
+
+  const removed: number[] = [];
+  const turns = Array.from({ length: 12 }, (_unused, index) => ({
+    role: index < 7 ? "user" : "assistant",
+    tagName: index % 2 === 0 ? "ARTICLE" : "SECTION",
+    closest: () => ({ stableIdentity: index + 1 }),
+    remove: () => removed.push(index + 1),
+  }));
+  const root = {
+    querySelectorAll: (selector: string) => {
+      if (selector === '[data-testid^="conversation-turn-"]') return turns;
+      if (selector === "user turns") return turns.filter(turn => turn.role === "user");
+      if (selector === "assistant turns") return turns.filter(turn => turn.role === "assistant");
+      throw new Error(`Unexpected selector: ${selector}`);
+    },
+  };
+
+  expect((clean as Function)({
+    turnSelector: '[data-testid^="conversation-turn-"]',
+    userTurnSelector: "user turns",
+    assistantTurnSelector: "assistant turns",
+  }, root)).toEqual({
+    found: 12,
+    pruned: 6,
+    retained: 6,
+  });
+  expect(removed).toEqual([1, 2, 3, 4, 8, 9]);
+});
+
+test("Chat Clean preserves a stable identity container when it is also the message node", () => {
+  const clean = (browserWorkerExports as Record<string, unknown>).cleanChatGptConversationDocument;
+  expect(typeof clean).toBe("function");
+  if (typeof clean !== "function") return;
+
+  const removedAttributes: string[] = [];
+  const attributes = new Map<string, string>();
+  const stableTurn = {
+    role: "user",
+    closest: () => stableTurn,
+    remove: () => { throw new Error("stable container must not be removed"); },
+    replaceChildren: () => attributes.set("children", "removed"),
+    removeAttribute: (name: string) => removedAttributes.push(name),
+    setAttribute: (name: string, value: string) => attributes.set(name, value),
+  };
+  const trailingTurns = Array.from({ length: 6 }, (_unused, index) => ({
+    role: index < 3 ? "user" : "assistant",
+    closest: () => ({}),
+    remove: () => { throw new Error("retained turn must not be removed"); },
+  }));
+  const turns = [stableTurn, ...trailingTurns];
+  const root = {
+    querySelectorAll: (selector: string) => selector === "user turns"
+      ? turns.filter(turn => turn.role === "user")
+      : selector === "assistant turns"
+        ? turns.filter(turn => turn.role === "assistant")
+        : turns,
+  };
+
+  expect((clean as Function)({
+    turnSelector: '[data-testid^="conversation-turn-"]',
+    userTurnSelector: "user turns",
+    assistantTurnSelector: "assistant turns",
+  }, root)).toEqual({
+    found: 7,
+    pruned: 1,
+    retained: 6,
+  });
+  expect(removedAttributes).toEqual([
+    "data-testid",
+    "data-turn",
+    "data-message-author-role",
+    "data-turn-id",
+  ]);
+  expect(attributes.get("children")).toBe("removed");
+  expect(attributes.get("aria-hidden")).toBe("true");
+  expect(attributes.get("data-chat-cleaned")).toBe("true");
+});
+
+test("Chat Clean completion cleanup absorbs thrown and stalled page evaluations", async () => {
+  const cleanup = (browserWorkerExports as Record<string, unknown>).runChatGptChatClean;
+  expect(typeof cleanup).toBe("function");
+  if (typeof cleanup !== "function") return;
+
+  const warnings: string[] = [];
+  const thrownPage = {
+    evaluate: () => Promise.reject(new Error("renderer closed")),
+  };
+  expect(await (cleanup as Function)(thrownPage, 10, (message: string) => warnings.push(message)))
+    .toBeUndefined();
+
+  const stalledPage = {
+    evaluate: () => new Promise(() => {}),
+  };
+  const startedAt = Date.now();
+  expect(await (cleanup as Function)(stalledPage, 10, (message: string) => warnings.push(message)))
+    .toBeUndefined();
+  expect(Date.now() - startedAt).toBeLessThan(250);
+  expect(warnings).toHaveLength(2);
+  expect(warnings[0]).toContain("renderer closed");
+  expect(warnings[1]).toContain("did not respond within 10ms");
+});
 
 test("conversation turn identity survives ChatGPT DOM virtualization", () => {
   expect(chatGptNewTurnIdentity(

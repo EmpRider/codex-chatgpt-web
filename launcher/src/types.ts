@@ -13,6 +13,7 @@ export interface LauncherState {
   keepRunningOnClose: boolean;
   showBrowserDuringTurns: boolean;
   browserInteractionMode: BrowserInteractionMode;
+  chatCleanEnabled: boolean;
   experimentalBiggerContext: boolean;
   zeroRiskProEnabled: boolean;
   sidebarOpen: boolean;
@@ -155,6 +156,7 @@ export interface LauncherApi {
   setMcpStep(step: number): Promise<LauncherState>;
   setAutostart(enabled: boolean): Promise<{ state: LauncherState; supported: boolean; enabled: boolean }>;
   setBiggerContext(enabled: boolean): Promise<LauncherState>;
+  setChatClean(enabled: boolean): Promise<LauncherState>;
   setZeroRiskPro(enabled: boolean): Promise<LauncherState>;
   setBrowserInteractionMode(mode: BrowserInteractionMode): Promise<{
     state: LauncherState;
