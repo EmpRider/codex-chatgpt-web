@@ -1,0 +1,164 @@
+name: Build clean upstream MCP context contribution
+
+on:
+  push:
+    branches:
+      - automation/build-mcp-context-upstream
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.0
+
+      - name: Assemble focused contribution
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          base="e85e3693fdb4e3e033348c08df0298c20fcdb612"
+          feature="32f2ed377c09af1936b8d35fd55274a10ab3c18b"
+          target_branch="feat/mcp-large-context-transport-upstream"
+
+          git fetch origin "$feature"
+          git fetch https://github.com/miuuyy/codex-chatgpt-web.git main
+          test "$(git rev-parse FETCH_HEAD)" = "$base"
+
+          git checkout -B "$target_branch" "$base"
+
+          git checkout "$feature" -- \
+            src/adapters/chatgpt-web/context-transport.ts \
+            src/adapters/chatgpt-web/index.ts \
+            src/adapters/chatgpt-web/input-tokens.ts \
+            src/adapters/chatgpt-web/mcp-server.ts \
+            src/adapters/chatgpt-web/prompt.ts \
+            src/adapters/chatgpt-web/turn-broker.ts \
+            tests/chatgpt-web-harness.test.ts \
+            tests/dev-chat.test.ts \
+            tests/mcp-context-adapter.test.ts \
+            tests/mcp-context-read-safety.test.ts \
+            tests/mcp-context-transport.test.ts
+
+          python3 <<'PY'
+          from pathlib import Path
+
+          path = Path("tests/prompt-contract.test.ts")
+          text = path.read_text()
+          marker = 'test("keeps large contexts intact in the inline text envelope", () => {'
+          start = text.index(marker)
+          end = text.index('\n});', start) + len('\n});')
+          replacement = '''test("keeps large Full-mode contexts exact while moving them out of the visible composer", () => {
+            const token = "turn_12345678901234567890123456789012";
+            const largeContent = "x".repeat(600_000);
+            const large = request("high");
+            large.context.messages.push({
+              role: "toolResult",
+              toolCallId: "call_large",
+              toolName: "exec_command",
+              content: largeContent,
+              isError: false,
+              timestamp: 3,
+            });
+            const compiled = compileChatGptWebPrompt(
+              large,
+              { localToolsEnabled: true, solAvailable: true, proAvailable: true },
+              token,
+            );
+
+            expect(compiled.contextTransport).toBeDefined();
+            expect(compiled.contextTransport!.text).toContain(largeContent);
+            expect(compiled.text.length).toBeLessThan(10_000);
+            expect(compiled.text).not.toContain(largeContent);
+            expect(compiled.text).toContain(token);
+            expect(compiled.text).toContain("codex_web_context_read");
+            expect(compiled.text).toContain(compiled.contextTransport!.contextId);
+            expect(compiled.text).toContain(compiled.contextTransport!.sha256);
+            expect(compiled.text).not.toContain(`<codex_context_json>`);
+            expect(compiled.text).not.toContain(`<codex_context_attachment>`);
+          });'''
+          text = text[:start] + replacement + text[end:]
+          path.write_text(text)
+
+          path = Path("docs/architecture.md")
+          text = path.read_text()
+          old = '''The current compiled Codex task context is inserted as one inline JSON envelope. Image bytes stay
+          out of the JSON and are attached natively with stable references. The runtime does not create a
+          context JSONL file, upload a synthetic context document, include prompt hashes, or silently truncate
+          the envelope. Attachment acceptance and send readiness are verified before the turn begins.'''
+          new = '''Small compiled Codex task contexts are inserted as one inline JSON envelope. In automatic Full
+          mode, canonical envelopes of at least 32,768 characters are instead kept by the turn broker and the
+          browser submits only a compact manifest. The existing read-only `codex_tool_inventory` MCP operation
+          accepts a bridge-reserved `codex_web_context_read:<context_id>` query and returns the exact context in
+          bounded 32,768-character chunks. Every chunk carries the same context identity and SHA-256 metadata,
+          and the model must reconstruct the complete sequence before executing the task. No new public MCP tool
+          is registered and the generic `codex_tool_call` safety contract is unchanged. Browser-only, Zero Risk/
+          manual, compaction, Bigger Context, and image-attachment transports retain their established behavior.
+          The runtime does not upload a synthetic context document or silently truncate the envelope. Attachment
+          acceptance and send readiness are verified before the turn begins.'''
+          if text.count(old) != 1:
+              raise SystemExit("expected architecture paragraph not found exactly once")
+          path.write_text(text.replace(old, new))
+          PY
+
+          expected="$(cat <<'EOF'
+          docs/architecture.md
+          src/adapters/chatgpt-web/context-transport.ts
+          src/adapters/chatgpt-web/index.ts
+          src/adapters/chatgpt-web/input-tokens.ts
+          src/adapters/chatgpt-web/mcp-server.ts
+          src/adapters/chatgpt-web/prompt.ts
+          src/adapters/chatgpt-web/turn-broker.ts
+          tests/chatgpt-web-harness.test.ts
+          tests/dev-chat.test.ts
+          tests/mcp-context-adapter.test.ts
+          tests/mcp-context-read-safety.test.ts
+          tests/mcp-context-transport.test.ts
+          tests/prompt-contract.test.ts
+          EOF
+          )"
+
+          printf '%s\n' "$expected" | sort > /tmp/expected-files
+          git diff --name-only "$base" | sort > /tmp/actual-files
+          diff -u /tmp/expected-files /tmp/actual-files
+
+          git diff --check
+
+          bun install --frozen-lockfile
+          bun test \
+            tests/prompt-contract.test.ts \
+            tests/mcp-context-transport.test.ts \
+            tests/mcp-context-adapter.test.ts \
+            tests/mcp-context-read-safety.test.ts \
+            tests/chatgpt-web-harness.test.ts \
+            tests/dev-chat.test.ts
+          bun run typecheck
+
+          git config user.name "EmpRider"
+          git config user.email "156989500+EmpRider@users.noreply.github.com"
+          git add \
+            docs/architecture.md \
+            src/adapters/chatgpt-web/context-transport.ts \
+            src/adapters/chatgpt-web/index.ts \
+            src/adapters/chatgpt-web/input-tokens.ts \
+            src/adapters/chatgpt-web/mcp-server.ts \
+            src/adapters/chatgpt-web/prompt.ts \
+            src/adapters/chatgpt-web/turn-broker.ts \
+            tests/chatgpt-web-harness.test.ts \
+            tests/dev-chat.test.ts \
+            tests/mcp-context-adapter.test.ts \
+            tests/mcp-context-read-safety.test.ts \
+            tests/mcp-context-transport.test.ts \
+            tests/prompt-contract.test.ts
+
+          git diff --cached --check
+          git commit -m "feat: transport large Full-mode context through MCP"
+          git push --force origin "HEAD:refs/heads/$target_branch"
