@@ -1,0 +1,33 @@
+name: Apply MCP Context Usage Fix
+
+on:
+  push:
+    branches: [feat/mcp-context-transport]
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: feat/mcp-context-transport
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.0
+      - run: bun install --frozen-lockfile
+      - run: python3 scripts/apply_mcp_context_usage_fix.py
+      - run: bun run typecheck
+      - run: bun test tests/dev-chat.test.ts tests/chatgpt-web-harness.test.ts tests/mcp-context-transport.test.ts tests/mcp-context-adapter.test.ts
+      - run: git diff --check
+      - name: Commit fix
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm -f scripts/apply_mcp_context_usage_fix.py .github/workflows/apply-mcp-context-usage-fix.yml
+          git add src/adapters/chatgpt-web/input-tokens.ts tests/dev-chat.test.ts tests/chatgpt-web-harness.test.ts
+          git commit -m "fix: account for MCP-delivered context tokens"
+          git push origin HEAD:feat/mcp-context-transport
