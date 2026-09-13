@@ -17,7 +17,7 @@ afterAll(() => rmSync(root, { recursive: true, force: true }));
 function brokerEndpoint(): string {
   return process.platform === "win32"
     ? defaultBrokerEndpoint(join(root, "broker"), "win32")
-    : join(root, "broker.sock");
+    : join(tmpdir(), `cgw-mcp-adapter-${process.pid}.sock`);
 }
 
 function requestWithLargeCurrentUser(sentinel: string): CodexParsedRequest {
