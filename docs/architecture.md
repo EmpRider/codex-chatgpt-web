@@ -105,10 +105,16 @@ server-authenticated session and the Temporary Chat composer in the primary owne
 the temporary auth view. There is no browser-profile handoff, cookie import, CDP login port, or
 temporary session-transfer directory.
 
-The current compiled Codex task context is inserted as one inline JSON envelope. Image bytes stay
-out of the JSON and are attached natively with stable references. The runtime does not create a
-context JSONL file, upload a synthetic context document, include prompt hashes, or silently truncate
-the envelope. Attachment acceptance and send readiness are verified before the turn begins.
+Small compiled Codex task contexts are inserted as one inline JSON envelope. In automatic Full
+mode, a large canonical envelope is instead held by the turn broker and the browser sends only a
+small manifest/bootstrap. The existing `codex_tool_inventory` and `codex_tool_call` MCP ABI exposes
+a bridge-reserved `codex_web_context_read` wire name, allowing the active ChatGPT response to read
+the exact context in bounded local chunks before it executes the task. No new public MCP tool is
+registered, so the `Codex Native2` connector schema identity does not change. Browser-only,
+Zero Risk/manual, and compaction transports keep their established paths. Image bytes stay out of
+the JSON and are attached natively with stable references. The runtime does not upload a synthetic
+context document or silently truncate the envelope. Attachment acceptance and send readiness are
+verified before the turn begins.
 
 Initial Launcher setup asks which interaction mode to install and defaults to With Automation. The
 same choice remains available in Settings; changing it uses the transactional setup path, replaces
