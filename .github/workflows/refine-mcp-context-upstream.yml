@@ -18,78 +18,32 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.0
-      - name: Remove generic tool-call context reader compatibility path
+      - name: Keep context reads on read-only inventory only
         shell: bash
         run: |
           set -euo pipefail
           target_branch="feat/mcp-large-context-transport-upstream"
           git fetch origin "$target_branch"
           git checkout -B "$target_branch" "origin/$target_branch"
+          bun install --frozen-lockfile
 
+          # RED: first tighten the regression test so the current generic codex_tool_call
+          # compatibility path must fail. The unmodified implementation must not satisfy it.
           python3 <<'PY'
           from pathlib import Path
 
-          path = Path("src/adapters/chatgpt-web/mcp-server.ts")
-          text = path.read_text()
-          text = text.replace(
-              '  CHATGPT_WEB_MCP_CONTEXT_READ_WIRE_NAME,\n  chatGptWebMcpContextReadQuery,\n',
-              '  chatGptWebMcpContextReadQuery,\n',
-          )
-          old = '''        const contextDescription = "Read one exact chunk of the canonical Codex task context held locally for this turn.";
-          const contextMatches = contract === "native"
-            && claimed.contextTransport
-            && (!needle || `${CHATGPT_WEB_MCP_CONTEXT_READ_WIRE_NAME}\\n${contextDescription}`.toLowerCase().includes(needle))
-            ? [{
-              wire_name: CHATGPT_WEB_MCP_CONTEXT_READ_WIRE_NAME,
-              name: CHATGPT_WEB_MCP_CONTEXT_READ_WIRE_NAME,
-              namespace: null,
-              description: contextDescription,
-              kind: "bridge",
-              ...(include_schema ? {
-                parameters: {
-                  type: "object",
-                  additionalProperties: false,
-                  properties: {
-                    context_id: { type: "string", const: claimed.contextTransport.contextId },
-                    chunk: { type: "integer", minimum: 0 },
-                  },
-                  required: ["context_id", "chunk"],
-                },
-              } : {}),
-            }]
-            : [];
-          const localMatches = [...contextMatches, ...directDescriptors];
-          const directPage = localMatches.slice(offset, offset + limit);'''
-          new = '''        const directPage = directDescriptors.slice(offset, offset + limit);'''
-          if text.count(old) != 1:
-              raise SystemExit("inventory compatibility block not found exactly once")
-          text = text.replace(old, new)
-          text = text.replace(
-              '          const nestedOffset = Math.max(0, offset - localMatches.length);',
-              '          const nestedOffset = Math.max(0, offset - directDescriptors.length);',
-          )
-          text = text.replace(
-              '        const total = localMatches.length + nestedTotal;',
-              '        const total = directDescriptors.length + nestedTotal;',
-          )
-          start_marker = '''        if (contract === "native" && wire_name === CHATGPT_WEB_MCP_CONTEXT_READ_WIRE_NAME) {'''
-          start = text.index(start_marker)
-          end_marker = '''          return result(response);\n        }\n'''
-          end = text.index(end_marker, start) + len(end_marker)
-          text = text[:start] + text[end:]
-          if "CHATGPT_WEB_MCP_CONTEXT_READ_WIRE_NAME" in text:
-              raise SystemExit("legacy generic reader symbol still present in mcp-server")
-          path.write_text(text)
-
           path = Path("tests/mcp-context-transport.test.ts")
           text = path.read_text()
-          text = text.replace(
-              '  CHATGPT_WEB_MCP_CONTEXT_READ_WIRE_NAME,\n  createChatGptWebMcpContextTransport,\n',
-              '  CHATGPT_WEB_MCP_CONTEXT_READ_WIRE_NAME,\n  chatGptWebMcpContextReadQuery,\n  createChatGptWebMcpContextTransport,\n',
-          )
+          old_import = '  CHATGPT_WEB_MCP_CONTEXT_READ_WIRE_NAME,\n  createChatGptWebMcpContextTransport,\n'
+          new_import = '  CHATGPT_WEB_MCP_CONTEXT_READ_WIRE_NAME,\n  chatGptWebMcpContextReadQuery,\n  createChatGptWebMcpContextTransport,\n'
+          if text.count(old_import) != 1:
+              raise SystemExit("context transport import anchor not found exactly once")
+          text = text.replace(old_import, new_import, 1)
+
           marker = 'test("native MCP exposes the reserved reader through existing inventory/call tools only", async () => {'
           start = text.index(marker)
-          end = text.index('\n}, 30_000);', start) + len('\n}, 30_000);')
+          end_marker = '\n}, 30_000);'
+          end = text.index(end_marker, start) + len(end_marker)
           replacement = '''test("native MCP keeps context reads private and serves them through read-only inventory only", async () => {
             const socketPath = brokerEndpoint("stdio");
             const broker = TurnBroker.forSocket(socketPath);
@@ -155,12 +109,61 @@ jobs:
           path.write_text(text)
           PY
 
+          set +e
+          bun test tests/mcp-context-transport.test.ts >/tmp/red.log 2>&1
+          red_status=$?
+          set -e
+          cat /tmp/red.log
+          if [ "$red_status" -eq 0 ]; then
+            echo "Expected tightened regression test to fail before implementation cleanup" >&2
+            exit 1
+          fi
+          grep -F 'native MCP keeps context reads private and serves them through read-only inventory only' /tmp/red.log >/dev/null
+
+          # GREEN: remove the old ordinary-inventory synthetic descriptor and the generic
+          # codex_tool_call reader. The exact reserved inventory query above remains intact.
+          python3 <<'PY'
+          from pathlib import Path
+
+          path = Path("src/adapters/chatgpt-web/mcp-server.ts")
+          text = path.read_text()
+
+          import_line = '  CHATGPT_WEB_MCP_CONTEXT_READ_WIRE_NAME,\n'
+          if text.count(import_line) != 1:
+              raise SystemExit("legacy context reader import not found exactly once")
+          text = text.replace(import_line, '', 1)
+
+          start_marker = '        const contextDescription = "Read one exact chunk of the canonical Codex task context held locally for this turn.";'
+          end_marker = '        const directPage = localMatches.slice(offset, offset + limit);'
+          start = text.index(start_marker)
+          end = text.index(end_marker, start) + len(end_marker)
+          text = text[:start] + '        const directPage = directDescriptors.slice(offset, offset + limit);' + text[end:]
+
+          old_nested = '          const nestedOffset = Math.max(0, offset - localMatches.length);'
+          old_total = '        const total = localMatches.length + nestedTotal;'
+          if text.count(old_nested) != 1 or text.count(old_total) != 1:
+              raise SystemExit("legacy inventory pagination anchors not found exactly once")
+          text = text.replace(old_nested, '          const nestedOffset = Math.max(0, offset - directDescriptors.length);', 1)
+          text = text.replace(old_total, '        const total = directDescriptors.length + nestedTotal;', 1)
+
+          start_marker = '        if (contract === "native" && wire_name === CHATGPT_WEB_MCP_CONTEXT_READ_WIRE_NAME) {'
+          next_marker = '        const tool = safeVisibleTools(bound, contract)'
+          start = text.index(start_marker)
+          end = text.index(next_marker, start)
+          text = text[:start] + text[end:]
+
+          if "CHATGPT_WEB_MCP_CONTEXT_READ_WIRE_NAME" in text:
+              raise SystemExit("legacy generic context reader symbol still present in mcp-server")
+          if "localMatches" in text or "contextMatches" in text or "contextDescription" in text:
+              raise SystemExit("legacy synthetic inventory reader block still present")
+          path.write_text(text)
+          PY
+
           git diff --check
           changed="$(git diff --name-only | sort)"
           expected="$(printf '%s\n' src/adapters/chatgpt-web/mcp-server.ts tests/mcp-context-transport.test.ts | sort)"
           test "$changed" = "$expected"
 
-          bun install --frozen-lockfile
           bun test \
             tests/mcp-context-transport.test.ts \
             tests/mcp-context-read-safety.test.ts \
