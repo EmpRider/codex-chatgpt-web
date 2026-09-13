@@ -100,7 +100,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git rm scripts/apply_mcp_context_transport.py .github/workflows/apply-mcp-context-transport.yml
+          git rm -f scripts/apply_mcp_context_transport.py .github/workflows/apply-mcp-context-transport.yml
           git add src/adapters/chatgpt-web/context-transport.ts \
                   src/adapters/chatgpt-web/prompt.ts \
                   src/adapters/chatgpt-web/turn-broker.ts \
