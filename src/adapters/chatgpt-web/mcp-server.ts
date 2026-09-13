@@ -6,7 +6,6 @@ import { namespacedToolName, type CodexTool } from "../../types";
 import { VERSION } from "../../version";
 import type { ChatGptTurnEnvironment } from "./environment";
 import {
-  CHATGPT_WEB_MCP_CONTEXT_READ_WIRE_NAME,
   chatGptWebMcpContextReadQuery,
   type ChatGptWebMcpContextManifest,
 } from "./context-transport";
@@ -808,37 +807,13 @@ export async function runChatGptMcpServer(options: {
           kind: tool.freeform ? "freeform" : tool.toolSearch ? "tool_search" : "function",
           ...(include_schema ? { parameters: browserToolParameters(tool) } : {}),
         }));
-        const contextDescription = "Read one exact chunk of the canonical Codex task context held locally for this turn.";
-        const contextMatches = contract === "native"
-          && claimed.contextTransport
-          && (!needle || `${CHATGPT_WEB_MCP_CONTEXT_READ_WIRE_NAME}\n${contextDescription}`.toLowerCase().includes(needle))
-          ? [{
-            wire_name: CHATGPT_WEB_MCP_CONTEXT_READ_WIRE_NAME,
-            name: CHATGPT_WEB_MCP_CONTEXT_READ_WIRE_NAME,
-            namespace: null,
-            description: contextDescription,
-            kind: "bridge",
-            ...(include_schema ? {
-              parameters: {
-                type: "object",
-                additionalProperties: false,
-                properties: {
-                  context_id: { type: "string", const: claimed.contextTransport.contextId },
-                  chunk: { type: "integer", minimum: 0 },
-                },
-                required: ["context_id", "chunk"],
-              },
-            } : {}),
-          }]
-          : [];
-        const localMatches = [...contextMatches, ...directDescriptors];
-        const directPage = localMatches.slice(offset, offset + limit);
+        const directPage = directDescriptors.slice(offset, offset + limit);
         let nestedTotal = 0;
         let nestedPage: Array<Record<string, unknown>> = [];
         const gateway = execGateway(bound);
         if (gateway) {
           const excludedGatewayNames = bound.tools.map(wireName);
-          const nestedOffset = Math.max(0, offset - localMatches.length);
+          const nestedOffset = Math.max(0, offset - directDescriptors.length);
           const nestedLimit = Math.max(0, limit - directPage.length);
           const response = await invoke(claimed.bindingId, bound, gateway, {
             input: gatewayToolCatalogProgram({
@@ -869,7 +844,7 @@ export async function runChatGptMcpServer(options: {
           }));
         }
         const page = [...directPage, ...nestedPage];
-        const total = localMatches.length + nestedTotal;
+        const total = directDescriptors.length + nestedTotal;
         return result({
           tools: page,
           total,
@@ -917,25 +892,6 @@ export async function runChatGptMcpServer(options: {
       }
       return withClaimedTurn("codex_tool_call", requestId, extra, async claimed => {
         const bound = claimed.environment;
-        if (contract === "native" && wire_name === CHATGPT_WEB_MCP_CONTEXT_READ_WIRE_NAME) {
-          if (input !== undefined) throw new Error("Codex MCP context reader accepts structured arguments only");
-          if (!claimed.contextTransport) throw new Error("Codex MCP context is unavailable for this turn");
-          const contextId = args?.context_id;
-          const chunk = args?.chunk;
-          if (typeof contextId !== "string" || contextId.length === 0) {
-            throw new Error("Codex MCP context reader requires context_id");
-          }
-          if (!Number.isSafeInteger(chunk) || Number(chunk) < 0) {
-            throw new Error("Codex MCP context reader requires a non-negative integer chunk");
-          }
-          const response = await callTurnBroker<Record<string, unknown>>(options.brokerSocketPath, {
-            method: "context_read",
-            bindingId: claimed.bindingId,
-            contextId,
-            chunk: Number(chunk),
-          }, 5_000, extra.signal);
-          return result(response);
-        }
         const tool = safeVisibleTools(bound, contract)
           .find(candidate => wireName(candidate) === wire_name);
         if (!tool) {

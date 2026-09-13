@@ -8,6 +8,7 @@ import {
   CHATGPT_WEB_MCP_CONTEXT_CHUNK_CHARS,
   CHATGPT_WEB_MCP_CONTEXT_MIN_CHARS,
   CHATGPT_WEB_MCP_CONTEXT_READ_WIRE_NAME,
+  chatGptWebMcpContextReadQuery,
   createChatGptWebMcpContextTransport,
 } from "../src/adapters/chatgpt-web/context-transport";
 import type { ChatGptTurnEnvironment } from "../src/adapters/chatgpt-web/environment";
@@ -184,7 +185,7 @@ test("RemoteTurnBroker installs context into the live owner protocol", async () 
   }
 });
 
-test("native MCP exposes the reserved reader through existing inventory/call tools only", async () => {
+test("native MCP keeps context reads private and serves them through read-only inventory only", async () => {
   const socketPath = brokerEndpoint("stdio");
   const broker = TurnBroker.forSocket(socketPath);
   const transport = new StdioClientTransport({
@@ -206,23 +207,25 @@ test("native MCP exposes the reserved reader through existing inventory/call too
     expect(publicTools.tools.map(tool => tool.name)).toContain("codex_tool_inventory");
     expect(publicTools.tools.map(tool => tool.name)).toContain("codex_tool_call");
 
-    const inventory = await client.callTool({
+    const read = await client.callTool({
       name: "codex_tool_inventory",
       arguments: {
         turn_token: token,
-        query: CHATGPT_WEB_MCP_CONTEXT_READ_WIRE_NAME,
+        query: chatGptWebMcpContextReadQuery(context.contextId),
+        offset: 0,
+        limit: 1,
+        include_schema: false,
       },
     });
-    expect(inventory.isError).not.toBe(true);
-    expect(inventory.structuredContent).toMatchObject({
-      total: 1,
-      tools: [{
-        wire_name: CHATGPT_WEB_MCP_CONTEXT_READ_WIRE_NAME,
-        kind: "bridge",
-      }],
+    expect(read.isError).not.toBe(true);
+    expect(read.structuredContent).toMatchObject({
+      context_id: context.contextId,
+      sha256: context.sha256,
+      chunk: 0,
+      text: context.text.slice(0, CHATGPT_WEB_MCP_CONTEXT_CHUNK_CHARS),
     });
 
-    const read = await client.callTool({
+    const genericCall = await client.callTool({
       name: "codex_tool_call",
       arguments: {
         turn_token: token,
@@ -230,12 +233,7 @@ test("native MCP exposes the reserved reader through existing inventory/call too
         arguments: { context_id: context.contextId, chunk: 0 },
       },
     });
-    expect(read.isError).not.toBe(true);
-    expect(read.structuredContent).toMatchObject({
-      context_id: context.contextId,
-      chunk: 0,
-      text: context.text.slice(0, CHATGPT_WEB_MCP_CONTEXT_CHUNK_CHARS),
-    });
+    expect(genericCall.isError).toBe(true);
 
     const pendingOuterTool = broker.nextToolBatch(token);
     expect(await Promise.race([
