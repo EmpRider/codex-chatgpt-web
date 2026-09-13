@@ -725,6 +725,11 @@ export function createChatGptWebAdapter(
           turnToken,
           compileOptionsFor(input),
         );
+        if (broker.setContextTransport) {
+          await Promise.resolve(broker.setContextTransport(turnToken, compiled.contextTransport));
+        } else if (compiled.contextTransport) {
+          throw new Error("The active Codex turn broker does not support MCP context transport");
+        }
         // Publish only after preparation succeeds: otherwise its failure revokes the token
         // before the response observer uses it and masks the cause as an expired capability.
         observeCapabilityRetirement(turnToken, externalProgress);

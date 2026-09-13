@@ -549,7 +549,7 @@ test("uses the public Instant name without leaking the browser menu alias into t
   expect(compiled.text).not.toContain("Instant 5.5");
 });
 
-test("keeps large contexts intact in the inline text envelope", () => {
+test("keeps large Full-mode contexts exact while moving them out of the visible composer", () => {
   const token = "turn_12345678901234567890123456789012";
   const largeContent = "x".repeat(600_000);
   const large = request("high");
@@ -567,11 +567,14 @@ test("keeps large contexts intact in the inline text envelope", () => {
     token,
   );
 
-  expect(compiled.text.length).toBeGreaterThan(600_000);
-  expect(compiled.text).toContain(largeContent);
+  expect(compiled.contextTransport).toBeDefined();
+  expect(compiled.contextTransport!.text).toContain(largeContent);
+  expect(compiled.text.length).toBeLessThan(10_000);
+  expect(compiled.text).not.toContain(largeContent);
   expect(compiled.text).toContain(token);
-  expect(compiled.text).toContain(`<codex_context_json>`);
+  expect(compiled.text).toContain("codex_web_context_read");
+  expect(compiled.text).toContain(compiled.contextTransport!.contextId);
+  expect(compiled.text).toContain(compiled.contextTransport!.sha256);
+  expect(compiled.text).not.toContain(`<codex_context_json>`);
   expect(compiled.text).not.toContain(`<codex_context_attachment>`);
-  expect(compiled.text).not.toContain("sha256");
-  expect(compiled.text).not.toContain("SHA-256");
 });
