@@ -12,7 +12,7 @@ permissions:
 
 jobs:
   release:
-    if: github.event.head_commit.message == 'ci: trigger v5.0.10 release'
+    if: ${{ github.event.head_commit.message == 'ci: trigger v5.0.10 release' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -22,8 +22,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          target="$(git rev-parse "$GITHUB_SHA^")"
-          test "$target" = "32f2ed377c09af1936b8d35fd55274a10ab3c18b"
+          target="32f2ed377c09af1936b8d35fd55274a10ab3c18b"
+          git cat-file -e "$target^{commit}"
           test "$(git show "$target:package.json" | jq -r .version)" = "5.0.10"
           if git ls-remote --exit-code --tags origin refs/tags/v5.0.10 >/dev/null 2>&1; then
             remote_target="$(git ls-remote origin refs/tags/v5.0.10 | awk '{print $1}')"
