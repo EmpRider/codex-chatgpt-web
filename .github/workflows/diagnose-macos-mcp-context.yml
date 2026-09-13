@@ -1,0 +1,36 @@
+name: Diagnose macOS MCP Context
+
+on:
+  push:
+    branches: [feat/mcp-context-transport]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v6
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.0
+      - run: bun install --frozen-lockfile
+      - name: Capture environment and targeted test output
+        shell: bash
+        run: |
+          set -o pipefail
+          {
+            echo "uname: $(uname -a)"
+            echo "TMPDIR=${TMPDIR:-<unset>}"
+            bun -e 'import { tmpdir } from "node:os"; import { join } from "node:path"; const a=join(tmpdir(), `cgw-mcp-context-adapter-${process.pid}-${Date.now()}`, "broker.sock"); const b=join(tmpdir(), `cgw-mcp-context-XXXXXX`, "runtime", "turn-broker.sock"); console.log(`node tmpdir=${tmpdir()}`); console.log(`adapter socket chars=${a.length} path=${a}`); console.log(`transport socket chars=${b.length} path=${b}`);'
+            bun test tests/mcp-context-transport.test.ts tests/mcp-context-adapter.test.ts
+          } 2>&1 | tee macos-mcp-context-diagnostic.log
+      - name: Upload diagnostic log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-mcp-context-diagnostic
+          path: macos-mcp-context-diagnostic.log
+          if-no-files-found: error
