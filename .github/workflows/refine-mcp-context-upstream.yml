@@ -1,4 +1,4 @@
-name: Refine upstream MCP context contribution
+name: Verify final upstream MCP context contribution
 
 on:
   push:
@@ -6,10 +6,10 @@ on:
       - automation/build-mcp-context-upstream
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  refine:
+  verify:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -18,162 +18,49 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.0
-      - name: Keep context reads on read-only inventory only
+      - name: Verify contribution branch
         shell: bash
         run: |
           set -euo pipefail
+          base="e85e3693fdb4e3e033348c08df0298c20fcdb612"
           target_branch="feat/mcp-large-context-transport-upstream"
+
           git fetch origin "$target_branch"
           git checkout -B "$target_branch" "origin/$target_branch"
+
+          test "$(git show "$base:package.json" | jq -r .version)" = "5.0.6"
+          test "$(jq -r .version package.json)" = "5.0.6"
+
+          expected="$(cat <<'EOF'
+          docs/architecture.md
+          src/adapters/chatgpt-web/context-transport.ts
+          src/adapters/chatgpt-web/index.ts
+          src/adapters/chatgpt-web/input-tokens.ts
+          src/adapters/chatgpt-web/mcp-server.ts
+          src/adapters/chatgpt-web/prompt.ts
+          src/adapters/chatgpt-web/turn-broker.ts
+          tests/chatgpt-web-harness.test.ts
+          tests/dev-chat.test.ts
+          tests/mcp-context-adapter.test.ts
+          tests/mcp-context-read-safety.test.ts
+          tests/mcp-context-transport.test.ts
+          tests/prompt-contract.test.ts
+          EOF
+          )"
+          printf '%s\n' "$expected" | sort > /tmp/expected-files
+          git diff --name-only "$base" HEAD | sort > /tmp/actual-files
+          diff -u /tmp/expected-files /tmp/actual-files
+          git diff --check "$base" HEAD
+
           bun install --frozen-lockfile
-
-          # RED: first tighten the regression test so the current generic codex_tool_call
-          # compatibility path must fail. The unmodified implementation must not satisfy it.
-          python3 <<'PY'
-          from pathlib import Path
-
-          path = Path("tests/mcp-context-transport.test.ts")
-          text = path.read_text()
-          old_import = '  CHATGPT_WEB_MCP_CONTEXT_READ_WIRE_NAME,\n  createChatGptWebMcpContextTransport,\n'
-          new_import = '  CHATGPT_WEB_MCP_CONTEXT_READ_WIRE_NAME,\n  chatGptWebMcpContextReadQuery,\n  createChatGptWebMcpContextTransport,\n'
-          if text.count(old_import) != 1:
-              raise SystemExit("context transport import anchor not found exactly once")
-          text = text.replace(old_import, new_import, 1)
-
-          marker = 'test("native MCP exposes the reserved reader through existing inventory/call tools only", async () => {'
-          start = text.index(marker)
-          end_marker = '\n}, 30_000);'
-          end = text.index(end_marker, start) + len(end_marker)
-          replacement = '''test("native MCP keeps context reads private and serves them through read-only inventory only", async () => {
-            const socketPath = brokerEndpoint("stdio");
-            const broker = TurnBroker.forSocket(socketPath);
-            const transport = new StdioClientTransport({
-              command: process.execPath,
-              args: ["src/cli.ts", "mcp", "--broker-socket", socketPath],
-              cwd: process.cwd(),
-              stderr: "pipe",
-            });
-            const client = new Client({ name: "codex-context-transport-test", version: "1.0.0" });
-            let token: string | undefined;
-            try {
-              token = await broker.register(environment(), 60_000, "stdio-context");
-              const context = createChatGptWebMcpContextTransport(`mcp-${"payload-".repeat(10_000)}`);
-              await broker.setContextTransport(token, context);
-              await client.connect(transport);
-
-              const publicTools = await client.listTools();
-              expect(publicTools.tools.map(tool => tool.name)).not.toContain(CHATGPT_WEB_MCP_CONTEXT_READ_WIRE_NAME);
-              expect(publicTools.tools.map(tool => tool.name)).toContain("codex_tool_inventory");
-              expect(publicTools.tools.map(tool => tool.name)).toContain("codex_tool_call");
-
-              const read = await client.callTool({
-                name: "codex_tool_inventory",
-                arguments: {
-                  turn_token: token,
-                  query: chatGptWebMcpContextReadQuery(context.contextId),
-                  offset: 0,
-                  limit: 1,
-                  include_schema: false,
-                },
-              });
-              expect(read.isError).not.toBe(true);
-              expect(read.structuredContent).toMatchObject({
-                context_id: context.contextId,
-                sha256: context.sha256,
-                chunk: 0,
-                text: context.text.slice(0, CHATGPT_WEB_MCP_CONTEXT_CHUNK_CHARS),
-              });
-
-              const genericCall = await client.callTool({
-                name: "codex_tool_call",
-                arguments: {
-                  turn_token: token,
-                  wire_name: CHATGPT_WEB_MCP_CONTEXT_READ_WIRE_NAME,
-                  arguments: { context_id: context.contextId, chunk: 0 },
-                },
-              });
-              expect(genericCall.isError).toBe(true);
-
-              const pendingOuterTool = broker.nextToolBatch(token);
-              expect(await Promise.race([
-                pendingOuterTool.then(() => "unexpected_outer_tool"),
-                Bun.sleep(25).then(() => "none"),
-              ])).toBe("none");
-            } finally {
-              if (token) broker.revoke(token);
-              await client.close().catch(() => {});
-              await broker.close();
-            }
-          }, 30_000);'''
-          text = text[:start] + replacement + text[end:]
-          path.write_text(text)
-          PY
-
-          set +e
-          bun test tests/mcp-context-transport.test.ts >/tmp/red.log 2>&1
-          red_status=$?
-          set -e
-          cat /tmp/red.log
-          if [ "$red_status" -eq 0 ]; then
-            echo "Expected tightened regression test to fail before implementation cleanup" >&2
-            exit 1
-          fi
-          grep -F 'native MCP keeps context reads private and serves them through read-only inventory only' /tmp/red.log >/dev/null
-
-          # GREEN: remove the old ordinary-inventory synthetic descriptor and the generic
-          # codex_tool_call reader. The exact reserved inventory query above remains intact.
-          python3 <<'PY'
-          from pathlib import Path
-
-          path = Path("src/adapters/chatgpt-web/mcp-server.ts")
-          text = path.read_text()
-
-          import_line = '  CHATGPT_WEB_MCP_CONTEXT_READ_WIRE_NAME,\n'
-          if text.count(import_line) != 1:
-              raise SystemExit("legacy context reader import not found exactly once")
-          text = text.replace(import_line, '', 1)
-
-          start_marker = '        const contextDescription = "Read one exact chunk of the canonical Codex task context held locally for this turn.";'
-          end_marker = '        const directPage = localMatches.slice(offset, offset + limit);'
-          start = text.index(start_marker)
-          end = text.index(end_marker, start) + len(end_marker)
-          text = text[:start] + '        const directPage = directDescriptors.slice(offset, offset + limit);' + text[end:]
-
-          old_nested = '          const nestedOffset = Math.max(0, offset - localMatches.length);'
-          old_total = '        const total = localMatches.length + nestedTotal;'
-          if text.count(old_nested) != 1 or text.count(old_total) != 1:
-              raise SystemExit("legacy inventory pagination anchors not found exactly once")
-          text = text.replace(old_nested, '          const nestedOffset = Math.max(0, offset - directDescriptors.length);', 1)
-          text = text.replace(old_total, '        const total = directDescriptors.length + nestedTotal;', 1)
-
-          start_marker = '        if (contract === "native" && wire_name === CHATGPT_WEB_MCP_CONTEXT_READ_WIRE_NAME) {'
-          next_marker = '        const tool = safeVisibleTools(bound, contract)'
-          start = text.index(start_marker)
-          end = text.index(next_marker, start)
-          text = text[:start] + text[end:]
-
-          if "CHATGPT_WEB_MCP_CONTEXT_READ_WIRE_NAME" in text:
-              raise SystemExit("legacy generic context reader symbol still present in mcp-server")
-          if "localMatches" in text or "contextMatches" in text or "contextDescription" in text:
-              raise SystemExit("legacy synthetic inventory reader block still present")
-          path.write_text(text)
-          PY
-
-          git diff --check
-          changed="$(git diff --name-only | sort)"
-          expected="$(printf '%s\n' src/adapters/chatgpt-web/mcp-server.ts tests/mcp-context-transport.test.ts | sort)"
-          test "$changed" = "$expected"
+          bun install --cwd launcher --frozen-lockfile
 
           bun test \
+            tests/prompt-contract.test.ts \
             tests/mcp-context-transport.test.ts \
-            tests/mcp-context-read-safety.test.ts \
             tests/mcp-context-adapter.test.ts \
-            tests/prompt-contract.test.ts
-          bun run typecheck
+            tests/mcp-context-read-safety.test.ts \
+            tests/chatgpt-web-harness.test.ts \
+            tests/dev-chat.test.ts
 
-          git config user.name "EmpRider"
-          git config user.email "156989500+EmpRider@users.noreply.github.com"
-          git add src/adapters/chatgpt-web/mcp-server.ts tests/mcp-context-transport.test.ts
-          git diff --cached --check
-          git commit -m "refactor: keep MCP context reads on read-only inventory"
-          git push origin "$target_branch"
+          bun run verify
