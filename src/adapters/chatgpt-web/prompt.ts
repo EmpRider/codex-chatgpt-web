@@ -8,7 +8,6 @@ import {
 import { ChatGptWebAdapterError } from "./adapter-error";
 import {
   CHATGPT_WEB_MCP_CONTEXT_MIN_CHARS,
-  CHATGPT_WEB_MCP_CONTEXT_READ_WIRE_NAME,
   chatGptWebMcpContextChunks,
   chatGptWebMcpContextReadQuery,
   createChatGptWebMcpContextTransport,

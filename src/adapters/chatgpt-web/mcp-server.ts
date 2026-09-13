@@ -779,6 +779,7 @@ export async function runChatGptMcpServer(options: {
           ? chatGptWebMcpContextReadQuery(contextTransport.contextId)
           : undefined;
         if (contract === "native"
+          && contextTransport
           && reservedContextQuery
           && query?.trim() === reservedContextQuery) {
           if (limit !== 1 || include_schema !== false) {
