@@ -7,6 +7,7 @@ import { VERSION } from "../../version";
 import type { ChatGptTurnEnvironment } from "./environment";
 import {
   CHATGPT_WEB_MCP_CONTEXT_READ_WIRE_NAME,
+  chatGptWebMcpContextReadQuery,
   type ChatGptWebMcpContextManifest,
 } from "./context-transport";
 import { CODEX_COMPACTION_CONTROL_WIRE_NAME } from "./native-compaction-control";
@@ -773,6 +774,25 @@ export async function runChatGptMcpServer(options: {
       async claimed => {
         const { query, offset, limit, include_schema } = input;
         const bound = claimed.environment;
+        const contextTransport = claimed.contextTransport;
+        const reservedContextQuery = contextTransport
+          ? chatGptWebMcpContextReadQuery(contextTransport.contextId)
+          : undefined;
+        if (contract === "native"
+          && contextTransport
+          && reservedContextQuery
+          && query?.trim() === reservedContextQuery) {
+          if (limit !== 1 || include_schema !== false) {
+            throw new Error("Codex MCP context inventory reads require limit=1 and include_schema=false");
+          }
+          const response = await callTurnBroker<Record<string, unknown>>(options.brokerSocketPath, {
+            method: "context_read",
+            bindingId: claimed.bindingId,
+            contextId: contextTransport.contextId,
+            chunk: offset,
+          }, 5_000, extra.signal);
+          return result(response);
+        }
         const needle = query?.trim().toLowerCase();
         const directMatches = safeVisibleTools(bound, contract).filter(tool => !needle || [
           wireName(tool),
