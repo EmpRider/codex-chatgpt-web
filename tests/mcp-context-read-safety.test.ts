@@ -75,6 +75,8 @@ test("large Full-mode context loads through the read-only inventory channel", as
     const publicTools = await client.listTools();
     expect(publicTools.tools.find(tool => tool.name === "codex_tool_inventory")?.annotations)
       .toMatchObject({ readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false });
+    expect(publicTools.tools.find(tool => tool.name === "codex_tool_call")?.annotations)
+      .toMatchObject({ readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true });
 
     const context = compiled.contextTransport!;
     const reservedQuery = `${CHATGPT_WEB_MCP_CONTEXT_READ_WIRE_NAME}:${context.contextId}`;
