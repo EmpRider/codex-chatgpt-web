@@ -24,6 +24,12 @@ import type { CodexParsedRequest } from "../src/types";
 const testRoot = mkdtempSync(join(tmpdir(), "cgw-mcp-context-"));
 afterAll(() => rmSync(testRoot, { recursive: true, force: true }));
 
+function brokerEndpoint(name: string): string {
+  return process.platform === "win32"
+    ? defaultBrokerEndpoint(join(testRoot, name), "win32")
+    : join(tmpdir(), `cgw-mcp-${process.pid}-${name}.sock`);
+}
+
 function environment(): ChatGptTurnEnvironment {
   return {
     cwd: testRoot,
@@ -90,7 +96,7 @@ test("small Full-mode context keeps the proven inline transport", () => {
 });
 
 test("broker context chunks reconstruct exactly and become immutable after MCP binding", async () => {
-  const socketPath = defaultBrokerEndpoint(join(testRoot, "broker-context"));
+  const socketPath = brokerEndpoint("context");
   const broker = TurnBroker.forSocket(socketPath);
   const text = `prefix-${"αβγ-code-json-".repeat(8_000)}-suffix`;
   const context = createChatGptWebMcpContextTransport(text);
@@ -156,7 +162,7 @@ test("broker context chunks reconstruct exactly and become immutable after MCP b
 });
 
 test("RemoteTurnBroker installs context into the live owner protocol", async () => {
-  const socketPath = defaultBrokerEndpoint(join(testRoot, "remote-context"));
+  const socketPath = brokerEndpoint("remote");
   const broker = TurnBroker.forSocket(socketPath);
   const remote = new RemoteTurnBroker(socketPath);
   try {
@@ -179,7 +185,7 @@ test("RemoteTurnBroker installs context into the live owner protocol", async () 
 });
 
 test("native MCP exposes the reserved reader through existing inventory/call tools only", async () => {
-  const socketPath = defaultBrokerEndpoint(join(testRoot, "stdio-context"));
+  const socketPath = brokerEndpoint("stdio");
   const broker = TurnBroker.forSocket(socketPath);
   const transport = new StdioClientTransport({
     command: process.execPath,
