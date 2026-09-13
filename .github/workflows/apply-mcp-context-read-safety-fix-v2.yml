@@ -1,0 +1,115 @@
+name: Apply MCP Context Read Safety Fix V2
+
+on:
+  push:
+    branches:
+      - fix/mcp-context-read-safety-work
+
+permissions:
+  contents: write
+
+jobs:
+  apply-fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: fix/mcp-context-read-safety-work
+          fetch-depth: 0
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.0
+      - run: bun install --frozen-lockfile
+      - name: Apply minimal read-only context transport fix
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path, old, new):
+              p = Path(path)
+              text = p.read_text()
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{path}: expected exactly one match, found {count}")
+              p.write_text(text.replace(old, new, 1))
+
+          replace_once(
+              "src/adapters/chatgpt-web/context-transport.ts",
+              'export const CHATGPT_WEB_MCP_CONTEXT_READ_WIRE_NAME = "codex_web_context_read";\n',
+              'export const CHATGPT_WEB_MCP_CONTEXT_READ_WIRE_NAME = "codex_web_context_read";\n\n'
+              'export function chatGptWebMcpContextReadQuery(contextId: string): string {\n'
+              '  return `${CHATGPT_WEB_MCP_CONTEXT_READ_WIRE_NAME}:${contextId}`;\n'
+              '}\n',
+          )
+
+          replace_once(
+              "src/adapters/chatgpt-web/mcp-server.ts",
+              'import {\n  CHATGPT_WEB_MCP_CONTEXT_READ_WIRE_NAME,\n  type ChatGptWebMcpContextManifest,\n} from "./context-transport";\n',
+              'import {\n  CHATGPT_WEB_MCP_CONTEXT_READ_WIRE_NAME,\n  chatGptWebMcpContextReadQuery,\n  type ChatGptWebMcpContextManifest,\n} from "./context-transport";\n',
+          )
+
+          replace_once(
+              "src/adapters/chatgpt-web/mcp-server.ts",
+              '        const { query, offset, limit, include_schema } = input;\n'
+              '        const bound = claimed.environment;\n'
+              '        const needle = query?.trim().toLowerCase();\n',
+              '        const { query, offset, limit, include_schema } = input;\n'
+              '        const bound = claimed.environment;\n'
+              '        const contextTransport = claimed.contextTransport;\n'
+              '        const reservedContextQuery = contextTransport\n'
+              '          ? chatGptWebMcpContextReadQuery(contextTransport.contextId)\n'
+              '          : undefined;\n'
+              '        if (contract === "native"\n'
+              '          && reservedContextQuery\n'
+              '          && query?.trim() === reservedContextQuery) {\n'
+              '          if (limit !== 1 || include_schema !== false) {\n'
+              '            throw new Error("Codex MCP context inventory reads require limit=1 and include_schema=false");\n'
+              '          }\n'
+              '          const response = await callTurnBroker<Record<string, unknown>>(options.brokerSocketPath, {\n'
+              '            method: "context_read",\n'
+              '            bindingId: claimed.bindingId,\n'
+              '            contextId: contextTransport.contextId,\n'
+              '            chunk: offset,\n'
+              '          }, 5_000, extra.signal);\n'
+              '          return result(response);\n'
+              '        }\n'
+              '        const needle = query?.trim().toLowerCase();\n',
+          )
+
+          replace_once(
+              "src/adapters/chatgpt-web/prompt.ts",
+              '  CHATGPT_WEB_MCP_CONTEXT_READ_WIRE_NAME,\n  chatGptWebMcpContextChunks,\n',
+              '  CHATGPT_WEB_MCP_CONTEXT_READ_WIRE_NAME,\n  chatGptWebMcpContextChunks,\n  chatGptWebMcpContextReadQuery,\n',
+          )
+
+          replace_once(
+              "src/adapters/chatgpt-web/prompt.ts",
+              '      const contextTransport = createChatGptWebMcpContextTransport(envelopeJson);\n'
+              '      const totalChunks = chatGptWebMcpContextChunks(contextTransport).length;\n',
+              '      const contextTransport = createChatGptWebMcpContextTransport(envelopeJson);\n'
+              '      const totalChunks = chatGptWebMcpContextChunks(contextTransport).length;\n'
+              '      const contextReadQuery = chatGptWebMcpContextReadQuery(contextTransport.contextId);\n',
+          )
+
+          replace_once(
+              "src/adapters/chatgpt-web/prompt.ts",
+              '        `First call codex_tool_inventory with the turn_token above and query ${JSON.stringify(CHATGPT_WEB_MCP_CONTEXT_READ_WIRE_NAME)}.`,\n'
+              '        `Then call codex_tool_call with the same turn_token, wire_name ${JSON.stringify(CHATGPT_WEB_MCP_CONTEXT_READ_WIRE_NAME)}, and arguments ${JSON.stringify({ context_id: contextTransport.contextId, chunk: 0 })}.`,\n'
+              '        "For every result, append its text field in chunk order. If next_chunk is a number, call the same wire_name again with that chunk. Continue until next_chunk is null.",\n',
+              '        `Load chunk 0 by calling codex_tool_inventory with the turn_token above, query ${JSON.stringify(contextReadQuery)}, offset 0, limit 1, and include_schema false.`,\n'
+              '        "For every result, append its text field in chunk order. If next_chunk is a number, call codex_tool_inventory again with the same turn_token and query, offset equal to next_chunk, limit 1, and include_schema false. Continue until next_chunk is null.",\n'
+              '        "Do not route these context reads through codex_tool_call; codex_tool_inventory is the read-only transport for context chunks.",\n',
+          )
+          PY
+      - name: Verify focused regression
+        run: bun test tests/mcp-context-read-safety.test.ts tests/mcp-context-transport.test.ts
+      - name: Commit verified fix
+        shell: bash
+        run: |
+          git rm .github/workflows/apply-mcp-context-read-safety-fix.yml .github/workflows/apply-mcp-context-read-safety-fix-v2.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/adapters/chatgpt-web/context-transport.ts src/adapters/chatgpt-web/mcp-server.ts src/adapters/chatgpt-web/prompt.ts
+          git commit -m "fix: read MCP context through read-only inventory"
+          git push origin HEAD:fix/mcp-context-read-safety-work
