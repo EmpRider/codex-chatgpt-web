@@ -12,7 +12,6 @@ permissions:
 
 jobs:
   release:
-    if: ${{ github.event.head_commit.message == 'ci: trigger v5.0.10 release' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
