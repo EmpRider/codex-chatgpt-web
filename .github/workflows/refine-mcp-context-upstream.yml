@@ -1,0 +1,176 @@
+name: Refine upstream MCP context contribution
+
+on:
+  push:
+    branches:
+      - automation/build-mcp-context-upstream
+
+permissions:
+  contents: write
+
+jobs:
+  refine:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.0
+      - name: Remove generic tool-call context reader compatibility path
+        shell: bash
+        run: |
+          set -euo pipefail
+          target_branch="feat/mcp-large-context-transport-upstream"
+          git fetch origin "$target_branch"
+          git checkout -B "$target_branch" "origin/$target_branch"
+
+          python3 <<'PY'
+          from pathlib import Path
+
+          path = Path("src/adapters/chatgpt-web/mcp-server.ts")
+          text = path.read_text()
+          text = text.replace(
+              '  CHATGPT_WEB_MCP_CONTEXT_READ_WIRE_NAME,\n  chatGptWebMcpContextReadQuery,\n',
+              '  chatGptWebMcpContextReadQuery,\n',
+          )
+          old = '''        const contextDescription = "Read one exact chunk of the canonical Codex task context held locally for this turn.";
+          const contextMatches = contract === "native"
+            && claimed.contextTransport
+            && (!needle || `${CHATGPT_WEB_MCP_CONTEXT_READ_WIRE_NAME}\\n${contextDescription}`.toLowerCase().includes(needle))
+            ? [{
+              wire_name: CHATGPT_WEB_MCP_CONTEXT_READ_WIRE_NAME,
+              name: CHATGPT_WEB_MCP_CONTEXT_READ_WIRE_NAME,
+              namespace: null,
+              description: contextDescription,
+              kind: "bridge",
+              ...(include_schema ? {
+                parameters: {
+                  type: "object",
+                  additionalProperties: false,
+                  properties: {
+                    context_id: { type: "string", const: claimed.contextTransport.contextId },
+                    chunk: { type: "integer", minimum: 0 },
+                  },
+                  required: ["context_id", "chunk"],
+                },
+              } : {}),
+            }]
+            : [];
+          const localMatches = [...contextMatches, ...directDescriptors];
+          const directPage = localMatches.slice(offset, offset + limit);'''
+          new = '''        const directPage = directDescriptors.slice(offset, offset + limit);'''
+          if text.count(old) != 1:
+              raise SystemExit("inventory compatibility block not found exactly once")
+          text = text.replace(old, new)
+          text = text.replace(
+              '          const nestedOffset = Math.max(0, offset - localMatches.length);',
+              '          const nestedOffset = Math.max(0, offset - directDescriptors.length);',
+          )
+          text = text.replace(
+              '        const total = localMatches.length + nestedTotal;',
+              '        const total = directDescriptors.length + nestedTotal;',
+          )
+          start_marker = '''        if (contract === "native" && wire_name === CHATGPT_WEB_MCP_CONTEXT_READ_WIRE_NAME) {'''
+          start = text.index(start_marker)
+          end_marker = '''          return result(response);\n        }\n'''
+          end = text.index(end_marker, start) + len(end_marker)
+          text = text[:start] + text[end:]
+          if "CHATGPT_WEB_MCP_CONTEXT_READ_WIRE_NAME" in text:
+              raise SystemExit("legacy generic reader symbol still present in mcp-server")
+          path.write_text(text)
+
+          path = Path("tests/mcp-context-transport.test.ts")
+          text = path.read_text()
+          text = text.replace(
+              '  CHATGPT_WEB_MCP_CONTEXT_READ_WIRE_NAME,\n  createChatGptWebMcpContextTransport,\n',
+              '  CHATGPT_WEB_MCP_CONTEXT_READ_WIRE_NAME,\n  chatGptWebMcpContextReadQuery,\n  createChatGptWebMcpContextTransport,\n',
+          )
+          marker = 'test("native MCP exposes the reserved reader through existing inventory/call tools only", async () => {'
+          start = text.index(marker)
+          end = text.index('\n}, 30_000);', start) + len('\n}, 30_000);')
+          replacement = '''test("native MCP keeps context reads private and serves them through read-only inventory only", async () => {
+            const socketPath = brokerEndpoint("stdio");
+            const broker = TurnBroker.forSocket(socketPath);
+            const transport = new StdioClientTransport({
+              command: process.execPath,
+              args: ["src/cli.ts", "mcp", "--broker-socket", socketPath],
+              cwd: process.cwd(),
+              stderr: "pipe",
+            });
+            const client = new Client({ name: "codex-context-transport-test", version: "1.0.0" });
+            let token: string | undefined;
+            try {
+              token = await broker.register(environment(), 60_000, "stdio-context");
+              const context = createChatGptWebMcpContextTransport(`mcp-${"payload-".repeat(10_000)}`);
+              await broker.setContextTransport(token, context);
+              await client.connect(transport);
+
+              const publicTools = await client.listTools();
+              expect(publicTools.tools.map(tool => tool.name)).not.toContain(CHATGPT_WEB_MCP_CONTEXT_READ_WIRE_NAME);
+              expect(publicTools.tools.map(tool => tool.name)).toContain("codex_tool_inventory");
+              expect(publicTools.tools.map(tool => tool.name)).toContain("codex_tool_call");
+
+              const read = await client.callTool({
+                name: "codex_tool_inventory",
+                arguments: {
+                  turn_token: token,
+                  query: chatGptWebMcpContextReadQuery(context.contextId),
+                  offset: 0,
+                  limit: 1,
+                  include_schema: false,
+                },
+              });
+              expect(read.isError).not.toBe(true);
+              expect(read.structuredContent).toMatchObject({
+                context_id: context.contextId,
+                sha256: context.sha256,
+                chunk: 0,
+                text: context.text.slice(0, CHATGPT_WEB_MCP_CONTEXT_CHUNK_CHARS),
+              });
+
+              const genericCall = await client.callTool({
+                name: "codex_tool_call",
+                arguments: {
+                  turn_token: token,
+                  wire_name: CHATGPT_WEB_MCP_CONTEXT_READ_WIRE_NAME,
+                  arguments: { context_id: context.contextId, chunk: 0 },
+                },
+              });
+              expect(genericCall.isError).toBe(true);
+
+              const pendingOuterTool = broker.nextToolBatch(token);
+              expect(await Promise.race([
+                pendingOuterTool.then(() => "unexpected_outer_tool"),
+                Bun.sleep(25).then(() => "none"),
+              ])).toBe("none");
+            } finally {
+              if (token) broker.revoke(token);
+              await client.close().catch(() => {});
+              await broker.close();
+            }
+          }, 30_000);'''
+          text = text[:start] + replacement + text[end:]
+          path.write_text(text)
+          PY
+
+          git diff --check
+          changed="$(git diff --name-only | sort)"
+          expected="$(printf '%s\n' src/adapters/chatgpt-web/mcp-server.ts tests/mcp-context-transport.test.ts | sort)"
+          test "$changed" = "$expected"
+
+          bun install --frozen-lockfile
+          bun test \
+            tests/mcp-context-transport.test.ts \
+            tests/mcp-context-read-safety.test.ts \
+            tests/mcp-context-adapter.test.ts \
+            tests/prompt-contract.test.ts
+          bun run typecheck
+
+          git config user.name "EmpRider"
+          git config user.email "156989500+EmpRider@users.noreply.github.com"
+          git add src/adapters/chatgpt-web/mcp-server.ts tests/mcp-context-transport.test.ts
+          git diff --cached --check
+          git commit -m "refactor: keep MCP context reads on read-only inventory"
+          git push origin "$target_branch"
