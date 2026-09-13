@@ -18,12 +18,14 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.0
-      - name: Verify contribution branch
+      - name: Verify contribution branch beyond unchanged dependency audits
         shell: bash
         run: |
           set -euo pipefail
           base="e85e3693fdb4e3e033348c08df0298c20fcdb612"
           target_branch="feat/mcp-large-context-transport-upstream"
+          scratch="$(mktemp -d)"
+          trap 'rm -rf "$scratch"' EXIT
 
           git fetch origin "$target_branch"
           git checkout -B "$target_branch" "origin/$target_branch"
@@ -52,15 +54,27 @@ jobs:
           diff -u /tmp/expected-files /tmp/actual-files
           git diff --check "$base" HEAD
 
+          # The PR changes no dependency manifest or lockfile. Record the current upstream-base
+          # audit findings, but do not hide them or mutate dependencies in this focused PR.
           bun install --frozen-lockfile
           bun install --cwd launcher --frozen-lockfile
+          set +e
+          bun run audit >/tmp/root-audit.log 2>&1
+          root_audit=$?
+          bun run launcher:audit >/tmp/launcher-audit.log 2>&1
+          launcher_audit=$?
+          set -e
+          cat /tmp/root-audit.log
+          cat /tmp/launcher-audit.log
+          echo "ROOT_AUDIT_EXIT=$root_audit"
+          echo "LAUNCHER_AUDIT_EXIT=$launcher_audit"
 
-          bun test \
-            tests/prompt-contract.test.ts \
-            tests/mcp-context-transport.test.ts \
-            tests/mcp-context-adapter.test.ts \
-            tests/mcp-context-read-safety.test.ts \
-            tests/chatgpt-web-harness.test.ts \
-            tests/dev-chat.test.ts
-
-          bun run verify
+          bun run check-version
+          bun run typecheck
+          bun run test
+          bun run launcher:typecheck
+          bun run launcher:test
+          bun run launcher:build
+          bun run scripts/build-runtime-bundle.ts "$scratch/runtime"
+          bun run scripts/generate-third-party-notices.ts "$scratch/THIRD_PARTY_NOTICES.txt" --include-launcher
+          bun run scripts/smoke-release.ts "$scratch/runtime"
