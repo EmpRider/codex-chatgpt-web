@@ -60,7 +60,17 @@ export function estimateCompiledChatGptWebInputTokens(
       modelId,
     ), 0)
     : 0;
-  return CHATGPT_WEB_PLATFORM_RESERVE_TOKENS + messageTokens + acknowledgementTokens + imageTokens;
+  // Large Full-mode requests keep the canonical context out of Lexical and deliver it through
+  // MCP tool results instead. It still enters the model context and must therefore count toward
+  // Codex usage/compaction decisions even though it is absent from the visible browser message.
+  const mcpContextTokens = compiled.contextTransport
+    ? estimateTokens(compiled.contextTransport.text, modelId)
+    : 0;
+  return CHATGPT_WEB_PLATFORM_RESERVE_TOKENS
+    + messageTokens
+    + acknowledgementTokens
+    + mcpContextTokens
+    + imageTokens;
 }
 
 export function estimateChatGptWebImageTokens(compiled: CompiledChatGptWebPrompt): number {
