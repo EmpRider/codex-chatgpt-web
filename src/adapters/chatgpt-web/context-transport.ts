@@ -4,6 +4,10 @@ export const CHATGPT_WEB_MCP_CONTEXT_MIN_CHARS = 32_768;
 export const CHATGPT_WEB_MCP_CONTEXT_CHUNK_CHARS = 32_768;
 export const CHATGPT_WEB_MCP_CONTEXT_READ_WIRE_NAME = "codex_web_context_read";
 
+export function chatGptWebMcpContextReadQuery(contextId: string): string {
+  return `${CHATGPT_WEB_MCP_CONTEXT_READ_WIRE_NAME}:${contextId}`;
+}
+
 export interface ChatGptWebMcpContextManifest {
   contextId: string;
   sha256: string;

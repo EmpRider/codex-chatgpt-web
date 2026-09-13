@@ -10,6 +10,7 @@ import {
   CHATGPT_WEB_MCP_CONTEXT_MIN_CHARS,
   CHATGPT_WEB_MCP_CONTEXT_READ_WIRE_NAME,
   chatGptWebMcpContextChunks,
+  chatGptWebMcpContextReadQuery,
   createChatGptWebMcpContextTransport,
   type ChatGptWebMcpContextTransport,
 } from "./context-transport";
@@ -605,6 +606,7 @@ export function compileChatGptWebPrompt(
     if (useMcpContextTransport) {
       const contextTransport = createChatGptWebMcpContextTransport(envelopeJson);
       const totalChunks = chatGptWebMcpContextChunks(contextTransport).length;
+      const contextReadQuery = chatGptWebMcpContextReadQuery(contextTransport.contextId);
       const mcpSharedContract = sharedContract.map(line => line
         .replace("The staged JSON task context", "The MCP-delivered JSON task context")
         .replace("The inline JSON task context", "The MCP-delivered JSON task context")
@@ -622,9 +624,9 @@ export function compileChatGptWebPrompt(
         `chunk_chars_max: ${contextTransport.chunkChars}`,
         `Use turn_token ${turnToken} unchanged for every Codex Native call in this response.`,
         `The canonical Codex task context is local and is not rendered in this ChatGPT message. Load every context chunk before executing the task or calling any other work tool.`,
-        `First call codex_tool_inventory with the turn_token above and query ${JSON.stringify(CHATGPT_WEB_MCP_CONTEXT_READ_WIRE_NAME)}.`,
-        `Then call codex_tool_call with the same turn_token, wire_name ${JSON.stringify(CHATGPT_WEB_MCP_CONTEXT_READ_WIRE_NAME)}, and arguments ${JSON.stringify({ context_id: contextTransport.contextId, chunk: 0 })}.`,
-        "For every result, append its text field in chunk order. If next_chunk is a number, call the same wire_name again with that chunk. Continue until next_chunk is null.",
+        `Load chunk 0 by calling codex_tool_inventory with the turn_token above, query ${JSON.stringify(contextReadQuery)}, offset 0, limit 1, and include_schema false.`,
+        "For every result, append its text field in chunk order. If next_chunk is a number, call codex_tool_inventory again with the same turn_token and query, offset equal to next_chunk, limit 1, and include_schema false. Continue until next_chunk is null.",
+        "Do not route these context reads through codex_tool_call; codex_tool_inventory is the read-only transport for context chunks.",
         `Require every result to report context_id ${contextTransport.contextId} and sha256 ${contextTransport.sha256}. If the reader is missing, any chunk fails, metadata conflicts, or the sequence is incomplete, stop and report the transport failure instead of executing from partial context.`,
         "After all chunks are loaded, parse their concatenation as the single canonical Codex context JSON envelope and apply the role semantics above.",
         "</codex_mcp_context_manifest>",
