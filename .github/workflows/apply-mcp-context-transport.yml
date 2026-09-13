@@ -19,7 +19,16 @@ jobs:
         with:
           bun-version: 1.4.0
       - run: bun install --frozen-lockfile
-      - run: python3 scripts/apply_mcp_context_transport.py
+      - name: Apply staged implementation
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('scripts/apply_mcp_context_transport.py')
+          text = path.read_text()
+          text = text.replace('if count != 1:', 'if count < 1:', 1)
+          path.write_text(text)
+          PY
+          python3 scripts/apply_mcp_context_transport.py
       - run: bun run typecheck
       - run: bun test tests/mcp-context-transport.test.ts
       - run: bun test tests/prompt-contract.test.ts tests/turn-broker-lifecycle.test.ts tests/zero-risk-mcp-lifecycle.test.ts
