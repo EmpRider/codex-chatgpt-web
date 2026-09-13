@@ -1,0 +1,39 @@
+name: Apply MCP Context Transport
+
+on:
+  push:
+    branches: [feat/mcp-context-transport]
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: feat/mcp-context-transport
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.0
+      - run: bun install --frozen-lockfile
+      - run: python3 scripts/apply_mcp_context_transport.py
+      - run: bun run typecheck
+      - run: bun test tests/mcp-context-transport.test.ts
+      - run: bun test tests/prompt-contract.test.ts tests/turn-broker-lifecycle.test.ts tests/zero-risk-mcp-lifecycle.test.ts
+      - run: git diff --check
+      - name: Commit implementation
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm scripts/apply_mcp_context_transport.py .github/workflows/apply-mcp-context-transport.yml
+          git add src/adapters/chatgpt-web/context-transport.ts \
+                  src/adapters/chatgpt-web/prompt.ts \
+                  src/adapters/chatgpt-web/turn-broker.ts \
+                  src/adapters/chatgpt-web/mcp-server.ts \
+                  src/adapters/chatgpt-web/index.ts \
+                  docs/architecture.md
+          git commit -m "feat: add MCP context transport for large Full-mode prompts"
+          git push origin HEAD:feat/mcp-context-transport
