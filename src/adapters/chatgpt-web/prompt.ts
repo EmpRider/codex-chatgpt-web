@@ -499,7 +499,7 @@ export function compileChatGptWebPrompt(
       ]
       : [
       "This is a Codex history-compaction checkpoint, not a normal task turn.",
-      "Do not call local or ChatGPT-native tools. Summarize only the supplied task context according to the final compaction instruction.",
+      "Do not call work tools or ChatGPT-native tools. Read context through codex_tool_inventory when an MCP context manifest is supplied, then summarize only the supplied task context according to the final compaction instruction.",
       "Return only the checkpoint summary that the next model needs to resume the task.",
       ]
     : mode.localTools
@@ -600,7 +600,6 @@ export function compileChatGptWebPrompt(
     const envelopeJson = withoutRetiredTurnHandles(JSON.stringify({ version: 3, system, messages }));
     const useMcpContextTransport = mode.localTools
       && !manualControl
-      && !parsed._compactionRequest
       && envelopeJson.length >= CHATGPT_WEB_MCP_CONTEXT_MIN_CHARS;
     if (useMcpContextTransport) {
       const contextTransport = createChatGptWebMcpContextTransport(envelopeJson);
@@ -638,7 +637,9 @@ export function compileChatGptWebPrompt(
         answerContract,
         ...mcpContextContract,
         "<codex_transport_resume>",
-        "The task context is complete only after the MCP context reader has returned every chunk. Execute the latest active user request only after that point.",
+        parsed._compactionRequest
+          ? "The task context is complete only after the MCP context reader has returned every chunk. Produce the requested checkpoint summary only after that point. Do not resume ordinary task work."
+          : "The task context is complete only after the MCP context reader has returned every chunk. Execute the latest active user request only after that point.",
         "</codex_transport_resume>",
       ].join("\n");
       return { text, images, contextTransport };
@@ -719,7 +720,7 @@ export function compileChatGptWebPrompt(
   // as ordinary multipart turns in browser-worker. Applying the legacy byte cap here silently
   // discarded context that the staged transport can carry; preserve it and let browser preflight
   // fail explicitly if any atomic record is genuinely too large for one stage.
-  if (compiled.multipart) return compiled;
+  if (compiled.multipart || compiled.contextTransport) return compiled;
 
   const exceedsCompactionBudget = (): boolean => (
     chatGptPromptJsonBytes(compiled.text) > CHATGPT_COMPACTION_PROMPT_JSON_BYTE_BUDGET

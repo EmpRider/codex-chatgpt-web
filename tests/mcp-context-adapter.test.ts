@@ -58,13 +58,15 @@ function requestWithLargeCurrentUser(sentinel: string): CodexParsedRequest {
   };
 }
 
-test("Full adapter installs large canonical context before exposing the compact browser bootstrap", async () => {
+for (const compaction of [false, true]) {
+test(`${compaction ? "Compaction" : "Full"} adapter installs large canonical context before exposing the compact browser bootstrap`, async () => {
   const socketPath = brokerEndpoint();
   const provider: CodexProviderConfig = {
     adapter: "chatgpt-web",
     baseUrl: `browser://mcp-context-adapter-${Date.now()}`,
     chatgptWeb: {
       brokerSocketPath: socketPath,
+      ...(compaction ? { browserHost: "launcher" as const, browserHostDescriptorPath: join(root, "launcher.json") } : {}),
       localToolsEnabled: true,
       solAvailable: true,
       proAvailable: true,
@@ -91,11 +93,13 @@ test("Full adapter installs large canonical context before exposing the compact 
       if (!token || !contextId) throw new Error("compact browser bootstrap is missing its context binding");
 
       const claimed = await callTurnBroker<{
+        environment: { tools: CodexTool[] };
         bindingId: string;
         activityId: string;
         contextTransport?: { contextId: string; sha256: string; chars: number; bytes: number; chunkChars: number };
       }>(socketPath, { method: "claim", token });
       expect(claimed.contextTransport?.contextId).toBe(contextId);
+      if (compaction) expect(claimed.environment.tools).toEqual([]);
 
       const chunks: string[] = [];
       let chunk = 0;
@@ -131,7 +135,7 @@ test("Full adapter installs large canonical context before exposing the compact 
   try {
     const events: AdapterEvent[] = [];
     await createChatGptWebAdapter(provider).runTurn!(
-      requestWithLargeCurrentUser(sentinel),
+      { ...requestWithLargeCurrentUser(sentinel), _compactionRequest: compaction },
       { headers: new Headers() },
       event => events.push(event),
     );
@@ -142,3 +146,5 @@ test("Full adapter installs large canonical context before exposing the compact 
     await TurnBroker.forSocket(socketPath).close();
   }
 }, 30_000);
+
+}
