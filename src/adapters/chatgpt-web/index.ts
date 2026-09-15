@@ -669,20 +669,37 @@ export function createChatGptWebAdapter(
       };
     }
     if (!mode.localTools) {
+      // Compaction may read its immutable context, but never receives work tools.
+      const mcpCompaction = parsed._compactionRequest && configuredCapabilities.localToolsEnabled;
+      const browserCapabilities = mcpCompaction ? configuredCapabilities : turnCapabilities;
       const browserTurn = cancellableBrowserTurn(finalizeCheckpoint(worker.run({
         traceId,
         modelId: parsed.modelId,
         reasoning: parsed.options.reasoning,
-        capabilities: turnCapabilities,
-        prepare: async () => ({
-          ...compileChatGptWebPrompt(
-            checkpointInput.parsed,
-            turnCapabilities,
-            undefined,
-            compileOptionsFor(checkpointInput.parsed),
-          ),
-          release: () => {},
-        }),
+        capabilities: browserCapabilities,
+        prepare: async () => {
+          const contextToken = mcpCompaction ? await broker.register({
+            cwd: process.cwd(), roots: [process.cwd()], writableRoots: [],
+            sandboxPolicy: { type: "readOnly", networkAccess: false },
+            tools: [],
+          }, timeoutMs === undefined ? undefined : timeoutMs + 60_000, traceId) : undefined;
+          try {
+            const compiled = compileChatGptWebPrompt(
+              checkpointInput.parsed, browserCapabilities, contextToken,
+              compileOptionsFor(checkpointInput.parsed),
+            );
+            if (contextToken && compiled.contextTransport) {
+              if (!broker.setContextTransport) throw new Error("The active Codex turn broker does not support MCP context transport");
+              await broker.setContextTransport(contextToken, compiled.contextTransport);
+            }
+            return { ...compiled, release: () => {
+              if (contextToken) void broker.revoke(contextToken);
+            } };
+          } catch (error) {
+            if (contextToken) await broker.revoke(contextToken);
+            throw error;
+          }
+        },
         abortSignal: browserAbort.signal,
         ...(parsed._compactionRequest ? { compaction: true } : {}),
         ...submissionLifecycle,

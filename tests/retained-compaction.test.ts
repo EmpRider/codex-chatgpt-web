@@ -1230,14 +1230,15 @@ test.each([false, true])("structured compact rebuilds canonical context when its
     expect(turn.conversationKey).toBeUndefined();
     expect(turn.compaction).toBeTrue();
     const prepared = await turn.prepare();
-    const contextText = prepared.multipart?.parts.join("\n") ?? prepared.text;
+    const contextText = prepared.contextTransport?.text ?? prepared.multipart?.parts.join("\n") ?? prepared.text;
     expect(contextText).toContain("Original task");
     expect(contextText).toContain("Continue with the next step");
     if (experimentalBiggerContext) {
-      expect(prepared.multipart!.parts).toHaveLength(3);
+      expect(prepared.contextTransport).toBeDefined();
+      expect(prepared.multipart).toBeUndefined();
       expect(prepared.trimmedCompactionMessages).toBeUndefined();
-      const lastRecord = prepared.multipart!.parts.flatMap(part => JSON.parse(part).records).at(-1);
-      expect(lastRecord.message.content).toBe(compact.context.messages.at(-1)!.content);
+      const lastMessage = JSON.parse(prepared.contextTransport!.text).messages.at(-1);
+      expect(lastMessage.content).toBe(compact.context.messages.at(-1)!.content);
     }
     prepared.release();
     return "Fallback checkpoint from canonical Codex context";

@@ -248,3 +248,19 @@ test("native MCP exposes the reserved reader through existing inventory/call too
     await broker.close();
   }
 }, 30_000);
+
+test("large compaction reads complete history over MCP before summarizing", () => {
+  const sentinel = "COMPACTION-HISTORY-".repeat(12_000);
+  const parsed = parsedRequest(sentinel);
+  parsed._compactionRequest = true;
+  const compiled = compileChatGptWebPrompt(parsed,
+    { localToolsEnabled: true, solAvailable: true, proAvailable: true },
+    "turn_12345678901234567890123456789012");
+  expect(compiled.contextTransport?.text).toContain(sentinel);
+  expect(compiled.text).not.toContain(sentinel);
+  expect(compiled.trimmedCompactionMessages).toBeUndefined();
+  expect(compiled.text).toContain("codex_tool_inventory");
+  expect(compiled.text).toContain("Produce the requested checkpoint summary");
+  expect(compiled.text).not.toContain("Execute the latest active user request");
+  expect(compiled.text).not.toContain("Do not call local or ChatGPT-native tools");
+});
