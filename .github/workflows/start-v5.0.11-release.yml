@@ -8,7 +8,8 @@ permissions:
   actions: write
 jobs:
   release:
-    if: github.event.head_commit.message == 'chore: release v5.0.11'
+    if: >-
+      github.event.head_commit.message == 'chore: release v5.0.11'
     runs-on: ubuntu-latest
     steps:
       - name: Tag release commit and dispatch release build
