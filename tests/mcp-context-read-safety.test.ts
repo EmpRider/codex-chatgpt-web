@@ -65,7 +65,7 @@ test("large Full-mode context loads through the read-only inventory channel", as
     token = await broker.register(environment(), 60_000, "context-read-safety");
     const compiled = compileChatGptWebPrompt(
       parsedRequest(`READ-SAFETY-${"x".repeat(CHATGPT_WEB_MCP_CONTEXT_MIN_CHARS + 4096)}`),
-      { localToolsEnabled: true, solAvailable: true, proAvailable: true },
+      { localToolsEnabled: true, solAvailable: true, extraHighAvailable: true, proAvailable: true },
       token,
     );
     expect(compiled.contextTransport).toBeDefined();
