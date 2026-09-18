@@ -37,6 +37,8 @@ export type CodexMessage =
 
 export interface CodexUserMessage {
   role: "user";
+  /** Native Responses metadata, never inferred from message text. */
+  origin?: "codex_skill";
   content: string | CodexContentPart[];
   timestamp: number;
 }
@@ -298,6 +300,7 @@ export interface CodexProviderConfig {
     /** Account capability proven by the authenticated browser probe. */
     solAvailable?: boolean;
     /** Account capability proven by the authenticated browser probe. */
+    extraHighAvailable?: boolean;
     proAvailable?: boolean;
     /** Authorize per-call "Allow once" confirmation clicks for this connector. */
     autoApproveToolCalls?: boolean;
@@ -305,5 +308,6 @@ export interface CodexProviderConfig {
     experimentalBiggerContext?: boolean;
     /** Prune completed launcher conversations to the latest three user/assistant exchanges. */
     chatCleanEnabled?: boolean;
+    experimentalSkillAttachments?: boolean;
   };
 }

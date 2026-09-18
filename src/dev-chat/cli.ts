@@ -351,6 +351,9 @@ export async function runDevCommand(args: string[]): Promise<void> {
     if (automaticBrowserInteraction && manualBrowserInteraction) {
       throw new Error("Choose at most one browser interaction mode");
     }
+    const skillAttachments = takeFlag(args, "--skill-attachments");
+    const inlineSkills = takeFlag(args, "--inline-skills");
+    if (skillAttachments && inlineSkills) throw new Error("Choose --skill-attachments or --inline-skills");
     const biggerContext = takeFlag(args, "--bigger-context");
     const standardContext = takeFlag(args, "--standard-context");
     if (biggerContext && standardContext) {
@@ -372,6 +375,7 @@ export async function runDevCommand(args: string[]): Promise<void> {
         : {}),
       ...(biggerContext || standardContext ? { experimentalBiggerContext: biggerContext } : {}),
       ...(chatClean || noChatClean ? { chatCleanEnabled: chatClean } : {}),
+      ...(skillAttachments || inlineSkills ? { experimentalSkillAttachments: skillAttachments } : {}),
       ...(tunnelId ? { tunnelId } : {}),
       ...(runtimeKeyFile ? { runtimeKeyFile } : {}),
     });

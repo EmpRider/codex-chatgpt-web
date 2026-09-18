@@ -78,6 +78,8 @@ Setup options:
   --login                      Refresh the stored ChatGPT login even if one exists
   --auto-approve-tool-calls    Opt in to per-call browser clicks on "Allow once" prompts
   --bigger-context             Enable experimental adaptive 1/2/3-message context
+  --skill-attachments         Experimental selected skills as text attachments
+  --inline-skills             Keep selected skills inline (default)
   --standard-context           Disable experimental multi-message context
   --chat-clean                 Keep only the latest 3 user/assistant exchanges (default)
   --no-chat-clean              Keep all rendered messages in retained chats
@@ -299,6 +301,9 @@ async function setupCommand(args: string[]): Promise<void> {
   if (runtimeKeyFile) options.runtimeKeyFile = runtimeKeyFile;
   options.forceLogin = takeFlag(args, "--login");
   options.autoApproveToolCalls = takeFlag(args, "--auto-approve-tool-calls");
+  const skillAttachments = takeFlag(args, "--skill-attachments");
+  const inlineSkills = takeFlag(args, "--inline-skills");
+  if (skillAttachments && inlineSkills) throw new Error("Choose --skill-attachments or --inline-skills");
   const biggerContext = takeFlag(args, "--bigger-context");
   const standardContext = takeFlag(args, "--standard-context");
   if (biggerContext && standardContext) {
@@ -311,6 +316,7 @@ async function setupCommand(args: string[]): Promise<void> {
     throw new Error("Choose at most one Chat Clean mode: --chat-clean or --no-chat-clean");
   }
   if (chatClean || noChatClean) options.chatCleanEnabled = chatClean;
+  if (skillAttachments || inlineSkills) options.experimentalSkillAttachments = skillAttachments;
   const zeroRiskPro = takeFlag(args, "--zero-risk-pro");
   const zeroRiskDefault = takeFlag(args, "--zero-risk-default");
   if (zeroRiskPro && zeroRiskDefault) {
