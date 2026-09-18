@@ -60,7 +60,7 @@ test("large Full-mode context leaves the visible composer and becomes an exact M
   const sentinel = `LARGE-CONTEXT-SENTINEL-${"x".repeat(CHATGPT_WEB_MCP_CONTEXT_MIN_CHARS + 4096)}`;
   const compiled = compileChatGptWebPrompt(
     parsedRequest(sentinel),
-    { localToolsEnabled: true, solAvailable: true, proAvailable: true },
+    { localToolsEnabled: true, solAvailable: true, extraHighAvailable: true, proAvailable: true },
     token,
   );
 
@@ -86,7 +86,7 @@ test("small Full-mode context keeps the proven inline transport", () => {
   const token = "turn_12345678901234567890123456789012";
   const compiled = compileChatGptWebPrompt(
     parsedRequest("small-task-sentinel"),
-    { localToolsEnabled: true, solAvailable: true, proAvailable: true },
+    { localToolsEnabled: true, solAvailable: true, extraHighAvailable: true, proAvailable: true },
     token,
   );
 
@@ -254,7 +254,7 @@ test("large compaction reads complete history over MCP before summarizing", () =
   const parsed = parsedRequest(sentinel);
   parsed._compactionRequest = true;
   const compiled = compileChatGptWebPrompt(parsed,
-    { localToolsEnabled: true, solAvailable: true, proAvailable: true },
+    { localToolsEnabled: true, solAvailable: true, extraHighAvailable: true, proAvailable: true },
     "turn_12345678901234567890123456789012");
   expect(compiled.contextTransport?.text).toContain(sentinel);
   expect(compiled.text).not.toContain(sentinel);
