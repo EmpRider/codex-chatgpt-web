@@ -96,29 +96,36 @@ test("small Full-mode context keeps the proven inline transport", () => {
 });
 
 
-test("Codex-generated pasted-text goals force MCP even when the serialized envelope is below the normal threshold", () => {
+test("a large final Full-mode browser prompt uses MCP even when its canonical context is below the old threshold", () => {
   const token = "turn_12345678901234567890123456789012";
-  const pastedGoal = [
-    '<codex_internal_context source="goal">',
-    "Continue working toward the active thread goal.",
-    "<objective>",
-    "Referenced pasted text files:",
-    "- pasted text file: C:\\Users\\Empire Rider\\.codex\\attachments\\19de19c8-c1ec-4d80-9010-b21f8ba68973\\pasted-text-1.txt. Read this file before continuing.",
-    "</objective>",
-    "</codex_internal_context>",
-  ].join("\n");
-  const compiled = compileChatGptWebPrompt(
-    parsedRequest(pastedGoal),
-    { localToolsEnabled: true, solAvailable: true, extraHighAvailable: true, proAvailable: true },
-    token,
-  );
+  let compiled: ReturnType<typeof compileChatGptWebPrompt> | undefined;
 
-  expect(compiled.contextTransport).toBeDefined();
-  expect(compiled.contextTransport!.chars).toBeLessThan(CHATGPT_WEB_MCP_CONTEXT_MIN_CHARS);
-  expect(compiled.contextTransport!.text).toContain("pasted-text-1.txt");
-  expect(compiled.text).not.toContain("<codex_context_json>");
-  expect(compiled.text).toContain(CHATGPT_WEB_MCP_CONTEXT_READ_WIRE_NAME);
-  expect(compiled.text).toContain("codex_tool_inventory");
+  // Find a normal typed user message whose canonical context is still below the historical
+  // 32,768-character cutoff but whose complete JSON-encoded browser prompt crosses that budget.
+  // This proves transport selection is based on what would actually be submitted to ChatGPT.
+  for (let userChars = 20_000; userChars < CHATGPT_WEB_MCP_CONTEXT_MIN_CHARS; userChars += 512) {
+    const candidate = compileChatGptWebPrompt(
+      parsedRequest(`ordinary-typed-user-message-${"x".repeat(userChars)}`),
+      { localToolsEnabled: true, solAvailable: true, extraHighAvailable: true, proAvailable: true },
+      token,
+    );
+    if (
+      candidate.contextTransport
+      && candidate.contextTransport.chars < CHATGPT_WEB_MCP_CONTEXT_MIN_CHARS
+    ) {
+      compiled = candidate;
+      break;
+    }
+  }
+
+  expect(compiled).toBeDefined();
+  expect(compiled!.contextTransport).toBeDefined();
+  expect(compiled!.contextTransport!.chars).toBeLessThan(CHATGPT_WEB_MCP_CONTEXT_MIN_CHARS);
+  expect(compiled!.contextTransport!.text).toContain("ordinary-typed-user-message-");
+  expect(compiled!.text).not.toContain("<codex_context_json>");
+  expect(compiled!.text).not.toContain("ordinary-typed-user-message-");
+  expect(compiled!.text).toContain(CHATGPT_WEB_MCP_CONTEXT_READ_WIRE_NAME);
+  expect(compiled!.text).toContain("codex_tool_inventory");
 });
 
 test("broker context chunks reconstruct exactly and become immutable after MCP binding", async () => {
