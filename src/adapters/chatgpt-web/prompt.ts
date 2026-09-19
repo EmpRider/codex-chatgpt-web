@@ -8,7 +8,7 @@ import {
 } from "../../chatgpt-web-models";
 import { ChatGptWebAdapterError } from "./adapter-error";
 import {
-  CHATGPT_WEB_MCP_CONTEXT_MIN_CHARS,
+  CHATGPT_WEB_MCP_PROMPT_JSON_BYTE_THRESHOLD,
   chatGptWebMcpContextChunks,
   chatGptWebMcpContextReadQuery,
   createChatGptWebMcpContextTransport,
@@ -621,9 +621,34 @@ export function compileChatGptWebPrompt(
       ? "Return the complete answer that the outer Codex task should receive, then the required private checkpoint tail."
       : "Return only the answer that the outer Codex task should receive.";
     const envelopeJson = withoutRetiredTurnHandles(JSON.stringify({ version: 3, system, messages }));
+    const inlineText = [
+      ...sharedContract,
+      ...skillContract,
+      ...transportContract,
+      ...outputControlContract,
+      ...manualControlContract,
+      ...checkpointContract,
+      answerContract,
+      "<codex_context_json>",
+      envelopeJson,
+      "</codex_context_json>",
+      ...(omittedMessages > 0 ? [
+        "<codex_transport_resume>",
+        `${omittedMessages} earlier history items were omitted to fit this compaction request; the supplied history is incomplete.`,
+        "Preserve still-relevant progress, constraints and pending work from any supplied cumulative checkpoint and the remaining evidence. Do not infer that omitted work was never done or invent missing details.",
+        manualControl
+          ? "Produce the requested checkpoint summary now."
+          : "Produce the requested checkpoint summary now without calling tools.",
+        "</codex_transport_resume>",
+      ] : transportResume),
+    ].join("\n");
+    // Route based on the complete message that would otherwise be submitted to ChatGPT, not only
+    // the inner Codex envelope. JSON encoding is the real browser-request cost: quotes, newlines,
+    // backslashes and other escaping can push a prompt over the safe inline threshold even when
+    // envelopeJson.length alone looks smaller.
     const useMcpContextTransport = mode.localTools
       && !manualControl
-      && envelopeJson.length >= CHATGPT_WEB_MCP_CONTEXT_MIN_CHARS;
+      && chatGptPromptJsonBytes(inlineText) >= CHATGPT_WEB_MCP_PROMPT_JSON_BYTE_THRESHOLD;
     if (useMcpContextTransport) {
       const contextTransport = createChatGptWebMcpContextTransport(envelopeJson);
       const totalChunks = chatGptWebMcpContextChunks(contextTransport).length;
@@ -719,28 +744,7 @@ export function compileChatGptWebPrompt(
       multipart.parts = partitionMultipartContext(records, multipartParts!, budgets);
       return { text: multipart.commit, images, ...attachments, multipart };
     }
-    const text = [
-      ...sharedContract,
-      ...skillContract,
-      ...transportContract,
-      ...outputControlContract,
-      ...manualControlContract,
-      ...checkpointContract,
-      answerContract,
-      "<codex_context_json>",
-      envelopeJson,
-      "</codex_context_json>",
-      ...(omittedMessages > 0 ? [
-        "<codex_transport_resume>",
-        `${omittedMessages} earlier history items were omitted to fit this compaction request; the supplied history is incomplete.`,
-        "Preserve still-relevant progress, constraints and pending work from any supplied cumulative checkpoint and the remaining evidence. Do not infer that omitted work was never done or invent missing details.",
-        manualControl
-          ? "Produce the requested checkpoint summary now."
-          : "Produce the requested checkpoint summary now without calling tools.",
-        "</codex_transport_resume>",
-      ] : transportResume),
-    ].join("\n");
-    return { text, images, ...attachments };
+    return { text: inlineText, images, ...attachments };
   };
 
   let sourceMessages = withoutSupersededModelSwitchContracts(parsed.context.messages);
