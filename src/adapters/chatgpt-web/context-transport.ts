@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
 
 export const CHATGPT_WEB_MCP_PROMPT_JSON_BYTE_THRESHOLD = 32_768;
+/** Backward-compatible name retained for older internal tests and callers. */
+export const CHATGPT_WEB_MCP_CONTEXT_MIN_CHARS = CHATGPT_WEB_MCP_PROMPT_JSON_BYTE_THRESHOLD;
 export const CHATGPT_WEB_MCP_CONTEXT_CHUNK_CHARS = 32_768;
 export const CHATGPT_WEB_MCP_CONTEXT_READ_WIRE_NAME = "codex_web_context_read";
 
