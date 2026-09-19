@@ -1,15 +1,15 @@
-name: Start v5.0.12 release
+name: Start v5.0.13 release
 on:
   push:
     branches: [main]
-    paths: [".github/workflows/start-v5.0.12-release.yml"]
+    paths: [".github/workflows/start-v5.0.13-release.yml"]
 permissions:
   contents: write
   actions: write
 jobs:
   release:
     if: >-
-      github.event.head_commit.message == 'chore: release v5.0.12'
+      github.event.head_commit.message == 'chore: release v5.0.13'
     runs-on: ubuntu-latest
     steps:
       - name: Tag release commit and dispatch release build
@@ -18,5 +18,5 @@ jobs:
           GH_REPO: ${{ github.repository }}
           RELEASE_SHA: ${{ github.sha }}
         run: |
-          gh api "repos/$GH_REPO/git/refs" -f ref=refs/tags/v5.0.12 -f sha="$RELEASE_SHA"
-          gh workflow run release.yml --repo "$GH_REPO" --ref v5.0.12
+          gh api "repos/$GH_REPO/git/refs" -f ref=refs/tags/v5.0.13 -f sha="$RELEASE_SHA"
+          gh workflow run release.yml --repo "$GH_REPO" --ref v5.0.13
