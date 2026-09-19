@@ -8,7 +8,7 @@ import {
 } from "../../chatgpt-web-models";
 import { ChatGptWebAdapterError } from "./adapter-error";
 import {
-  CHATGPT_WEB_MCP_CONTEXT_MIN_CHARS,
+  CHATGPT_WEB_MCP_PROMPT_JSON_BYTE_THRESHOLD,
   chatGptWebMcpContextChunks,
   chatGptWebMcpContextReadQuery,
   createChatGptWebMcpContextTransport,
@@ -648,7 +648,7 @@ export function compileChatGptWebPrompt(
     // envelopeJson.length alone looks smaller.
     const useMcpContextTransport = mode.localTools
       && !manualControl
-      && chatGptPromptJsonBytes(inlineText) >= CHATGPT_WEB_MCP_CONTEXT_MIN_CHARS;
+      && chatGptPromptJsonBytes(inlineText) >= CHATGPT_WEB_MCP_PROMPT_JSON_BYTE_THRESHOLD;
     if (useMcpContextTransport) {
       const contextTransport = createChatGptWebMcpContextTransport(envelopeJson);
       const totalChunks = chatGptWebMcpContextChunks(contextTransport).length;
