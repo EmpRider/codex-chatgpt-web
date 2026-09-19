@@ -262,6 +262,29 @@ function startsWithControlBlock(message: CodexMessage, tag: string): boolean {
 }
 
 /**
+ * Recent Codex builds externalize very large composer pastes into generated
+ * .codex/attachments/.../pasted-text-N.txt files and leave only this internal goal reference in
+ * Responses history. The serialized history can therefore fall below the normal MCP size threshold
+ * even though the human supplied a large paste that must be recovered through the local harness.
+ *
+ * Force the MCP bootstrap for that Codex-owned shape so ChatGPT first binds to the turn and loads
+ * canonical context through the read-only context channel instead of receiving a large inline
+ * bootstrap that misleadingly looks self-contained.
+ */
+function hasCodexGeneratedPastedTextReference(messages: readonly CodexMessage[]): boolean {
+  const goalTag = /<codex_internal_context\b[^>]*\bsource=["']goal["'][^>]*>/i;
+  const pastedTextLine = /(?:^|\r?\n)- pasted text file: [^\r\n]*[\\/]pasted-text-\d+\.txt\. Read this file before continuing\.(?=\r?\n|$)/m;
+  return messages.some(message => {
+    if (message.role !== "user" && message.role !== "developer") return false;
+    const text = plainMessageText(message);
+    return text !== undefined
+      && goalTag.test(text)
+      && text.includes("Referenced pasted text files:")
+      && pastedTextLine.test(text);
+  });
+}
+
+/**
  * Codex appends a complete replacement developer contract whenever the user changes models. On a
  * later switch the earlier model-switch contract and its adjacent skill catalog are obsolete, but
  * both remain in the Responses history. Replaying every obsolete copy can exceed ChatGPT's composer
@@ -623,7 +646,10 @@ export function compileChatGptWebPrompt(
     const envelopeJson = withoutRetiredTurnHandles(JSON.stringify({ version: 3, system, messages }));
     const useMcpContextTransport = mode.localTools
       && !manualControl
-      && envelopeJson.length >= CHATGPT_WEB_MCP_CONTEXT_MIN_CHARS;
+      && (
+        envelopeJson.length >= CHATGPT_WEB_MCP_CONTEXT_MIN_CHARS
+        || hasCodexGeneratedPastedTextReference(sourceMessages)
+      );
     if (useMcpContextTransport) {
       const contextTransport = createChatGptWebMcpContextTransport(envelopeJson);
       const totalChunks = chatGptWebMcpContextChunks(contextTransport).length;
