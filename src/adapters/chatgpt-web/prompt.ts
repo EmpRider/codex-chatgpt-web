@@ -262,29 +262,6 @@ function startsWithControlBlock(message: CodexMessage, tag: string): boolean {
 }
 
 /**
- * Recent Codex builds externalize very large composer pastes into generated
- * .codex/attachments/.../pasted-text-N.txt files and leave only this internal goal reference in
- * Responses history. The serialized history can therefore fall below the normal MCP size threshold
- * even though the human supplied a large paste that must be recovered through the local harness.
- *
- * Force the MCP bootstrap for that Codex-owned shape so ChatGPT first binds to the turn and loads
- * canonical context through the read-only context channel instead of receiving a large inline
- * bootstrap that misleadingly looks self-contained.
- */
-function hasCodexGeneratedPastedTextReference(messages: readonly CodexMessage[]): boolean {
-  const goalTag = /<codex_internal_context\b[^>]*\bsource=["']goal["'][^>]*>/i;
-  const pastedTextLine = /(?:^|\r?\n)- pasted text file: [^\r\n]*[\\/]pasted-text-\d+\.txt\. Read this file before continuing\.(?=\r?\n|$)/m;
-  return messages.some(message => {
-    if (message.role !== "user" && message.role !== "developer") return false;
-    const text = plainMessageText(message);
-    return text !== undefined
-      && goalTag.test(text)
-      && text.includes("Referenced pasted text files:")
-      && pastedTextLine.test(text);
-  });
-}
-
-/**
  * Codex appends a complete replacement developer contract whenever the user changes models. On a
  * later switch the earlier model-switch contract and its adjacent skill catalog are obsolete, but
  * both remain in the Responses history. Replaying every obsolete copy can exceed ChatGPT's composer
@@ -644,12 +621,34 @@ export function compileChatGptWebPrompt(
       ? "Return the complete answer that the outer Codex task should receive, then the required private checkpoint tail."
       : "Return only the answer that the outer Codex task should receive.";
     const envelopeJson = withoutRetiredTurnHandles(JSON.stringify({ version: 3, system, messages }));
+    const inlineText = [
+      ...sharedContract,
+      ...skillContract,
+      ...transportContract,
+      ...outputControlContract,
+      ...manualControlContract,
+      ...checkpointContract,
+      answerContract,
+      "<codex_context_json>",
+      envelopeJson,
+      "</codex_context_json>",
+      ...(omittedMessages > 0 ? [
+        "<codex_transport_resume>",
+        `${omittedMessages} earlier history items were omitted to fit this compaction request; the supplied history is incomplete.`,
+        "Preserve still-relevant progress, constraints and pending work from any supplied cumulative checkpoint and the remaining evidence. Do not infer that omitted work was never done or invent missing details.",
+        manualControl
+          ? "Produce the requested checkpoint summary now."
+          : "Produce the requested checkpoint summary now without calling tools.",
+        "</codex_transport_resume>",
+      ] : transportResume),
+    ].join("\n");
+    // Route based on the complete message that would otherwise be submitted to ChatGPT, not only
+    // the inner Codex envelope. JSON encoding is the real browser-request cost: quotes, newlines,
+    // backslashes and other escaping can push a prompt over the safe inline threshold even when
+    // envelopeJson.length alone looks smaller.
     const useMcpContextTransport = mode.localTools
       && !manualControl
-      && (
-        envelopeJson.length >= CHATGPT_WEB_MCP_CONTEXT_MIN_CHARS
-        || hasCodexGeneratedPastedTextReference(sourceMessages)
-      );
+      && chatGptPromptJsonBytes(inlineText) >= CHATGPT_WEB_MCP_CONTEXT_MIN_CHARS;
     if (useMcpContextTransport) {
       const contextTransport = createChatGptWebMcpContextTransport(envelopeJson);
       const totalChunks = chatGptWebMcpContextChunks(contextTransport).length;
@@ -745,28 +744,7 @@ export function compileChatGptWebPrompt(
       multipart.parts = partitionMultipartContext(records, multipartParts!, budgets);
       return { text: multipart.commit, images, ...attachments, multipart };
     }
-    const text = [
-      ...sharedContract,
-      ...skillContract,
-      ...transportContract,
-      ...outputControlContract,
-      ...manualControlContract,
-      ...checkpointContract,
-      answerContract,
-      "<codex_context_json>",
-      envelopeJson,
-      "</codex_context_json>",
-      ...(omittedMessages > 0 ? [
-        "<codex_transport_resume>",
-        `${omittedMessages} earlier history items were omitted to fit this compaction request; the supplied history is incomplete.`,
-        "Preserve still-relevant progress, constraints and pending work from any supplied cumulative checkpoint and the remaining evidence. Do not infer that omitted work was never done or invent missing details.",
-        manualControl
-          ? "Produce the requested checkpoint summary now."
-          : "Produce the requested checkpoint summary now without calling tools.",
-        "</codex_transport_resume>",
-      ] : transportResume),
-    ].join("\n");
-    return { text, images, ...attachments };
+    return { text: inlineText, images, ...attachments };
   };
 
   let sourceMessages = withoutSupersededModelSwitchContracts(parsed.context.messages);
