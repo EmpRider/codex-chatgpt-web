@@ -95,6 +95,32 @@ test("small Full-mode context keeps the proven inline transport", () => {
   expect(compiled.text).toContain("small-task-sentinel");
 });
 
+
+test("Codex-generated pasted-text goals force MCP even when the serialized envelope is below the normal threshold", () => {
+  const token = "turn_12345678901234567890123456789012";
+  const pastedGoal = [
+    '<codex_internal_context source="goal">',
+    "Continue working toward the active thread goal.",
+    "<objective>",
+    "Referenced pasted text files:",
+    "- pasted text file: C:\\Users\\Empire Rider\\.codex\\attachments\\19de19c8-c1ec-4d80-9010-b21f8ba68973\\pasted-text-1.txt. Read this file before continuing.",
+    "</objective>",
+    "</codex_internal_context>",
+  ].join("\n");
+  const compiled = compileChatGptWebPrompt(
+    parsedRequest(pastedGoal),
+    { localToolsEnabled: true, solAvailable: true, extraHighAvailable: true, proAvailable: true },
+    token,
+  );
+
+  expect(compiled.contextTransport).toBeDefined();
+  expect(compiled.contextTransport!.chars).toBeLessThan(CHATGPT_WEB_MCP_CONTEXT_MIN_CHARS);
+  expect(compiled.contextTransport!.text).toContain("pasted-text-1.txt");
+  expect(compiled.text).not.toContain("<codex_context_json>");
+  expect(compiled.text).toContain(CHATGPT_WEB_MCP_CONTEXT_READ_WIRE_NAME);
+  expect(compiled.text).toContain("codex_tool_inventory");
+});
+
 test("broker context chunks reconstruct exactly and become immutable after MCP binding", async () => {
   const socketPath = brokerEndpoint("context");
   const broker = TurnBroker.forSocket(socketPath);
