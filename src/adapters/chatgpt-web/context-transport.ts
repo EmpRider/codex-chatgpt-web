@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 
-export const CHATGPT_WEB_MCP_CONTEXT_MIN_CHARS = 32_768;
+export const CHATGPT_WEB_MCP_PROMPT_JSON_BYTE_THRESHOLD = 32_768;
 export const CHATGPT_WEB_MCP_CONTEXT_CHUNK_CHARS = 32_768;
 export const CHATGPT_WEB_MCP_CONTEXT_READ_WIRE_NAME = "codex_web_context_read";
 
