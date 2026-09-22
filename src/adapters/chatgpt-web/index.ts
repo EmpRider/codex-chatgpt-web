@@ -991,6 +991,9 @@ export function createChatGptWebAdapter(
                         sourceConversationKey,
                         operationSignal,
                       );
+                      // Waiting for the previous retained owner is its own bounded phase. Give the
+                      // actual checkpoint handoff a fresh liveness window once ownership is free.
+                      armHandoffDeadline();
                     }
                     source = sourceConversationKey
                       ? chatGptTurnSessions.findConversationHead(sourceConversationKey)
@@ -1031,6 +1034,7 @@ export function createChatGptWebAdapter(
                         operationSignal,
                       );
                       preserveFinalResponse = !settlement.compactionInstructionDelivered;
+                      armHandoffDeadline();
                       rawSummary = await requestRetainedCompactionHandoff(
                         worker,
                         parsed,
@@ -1040,6 +1044,7 @@ export function createChatGptWebAdapter(
                         handoffTraceId,
                         operationSignal,
                         handoffTimeoutMs,
+                        armHandoffDeadline,
                       );
                     } else {
                       if (source.isActive()) {
@@ -1048,6 +1053,7 @@ export function createChatGptWebAdapter(
                         await withAbort(source.physicalSettlement, operationSignal);
                         preserveFinalResponse = true;
                       }
+                      armHandoffDeadline();
                       rawSummary = await requestRetainedCompactionHandoff(
                         worker,
                         parsed,
@@ -1057,6 +1063,7 @@ export function createChatGptWebAdapter(
                         handoffTraceId,
                         operationSignal,
                         handoffTimeoutMs,
+                        armHandoffDeadline,
                       );
                     }
                     const summary = canonicalizeCompactionHandoff(parsed, rawSummary);
@@ -1102,7 +1109,16 @@ export function createChatGptWebAdapter(
                 },
               );
             }
+            // Structured compaction can legitimately spend minutes inside ChatGPT while the
+            // one shared handoff continues across HTTP reconnects. Keep each observer's adapter
+            // stream alive too; bridge-level SSE heartbeats alone do not count as upstream adapter
+            // progress and can otherwise trip the upstream stall budget before the handoff finishes.
             emit({ type: "heartbeat" });
+            const observerHeartbeat = setInterval(
+              () => emit({ type: "heartbeat" }),
+              10_000,
+            );
+            observerHeartbeat.unref?.();
             let summary: string;
             try {
               summary = await withAbort(sharedSummary, incoming.abortSignal);
@@ -1125,6 +1141,8 @@ export function createChatGptWebAdapter(
                 retryable: false,
               });
               return;
+            } finally {
+              clearInterval(observerHeartbeat);
             }
             emit({ type: "text_delta", text: summary, phase: "final_answer" });
             emitBrowserCompletion(

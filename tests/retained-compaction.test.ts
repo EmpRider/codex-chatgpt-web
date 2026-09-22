@@ -426,6 +426,60 @@ test("retained compaction deadline bounds browser settlement after the control h
   expect(transactionAborted).toBeTrue();
 });
 
+test("retained compaction heartbeats renew the handoff liveness deadline", async () => {
+  const sourceRequest = request(false);
+  const source = new ChatGptTurnSession({
+    mode: "read-only",
+    browser: Promise.resolve("source complete"),
+    physicalSettlement: Promise.resolve(),
+    trace: new ChatGptTraceFeed(),
+    text: new ChatGptTextFeed(),
+    usageInput: sourceRequest,
+    conversationKey: chatGptConversationKey(sourceRequest, "provider")!,
+    cancel() {},
+  });
+  let submitHandoff!: (summary: string) => void;
+  const handoff = new Promise<string>(resolve => { submitHandoff = resolve; });
+  let progress = 0;
+  const broker = {
+    beginCompactionTransaction: async () => ({
+      token: "control_11111111111111111111111111111111",
+      handoffId: "handoff_22222222222222222222222222222222",
+    }),
+    waitForCompactionHandoff: async () => await handoff,
+    abortCompactionTransaction() {},
+  } as unknown as TurnBroker;
+  const worker = {
+    run: async (turn: BrowserTurn): Promise<string> => {
+      const prepared = await turn.prepareResume!();
+      prepared.release();
+      await Bun.sleep(150);
+      turn.onHeartbeat?.();
+      await Bun.sleep(150);
+      turn.onHeartbeat?.();
+      submitHandoff("Heartbeat-renewed checkpoint");
+      return await new Promise<string>((_resolve, reject) => {
+        const onAbort = () => reject(new DOMException("retained handoff browser closed", "AbortError"));
+        if (turn.abortSignal?.aborted) onAbort();
+        else turn.abortSignal?.addEventListener("abort", onAbort, { once: true });
+      });
+    },
+  };
+
+  await expect(requestRetainedCompactionHandoff(
+    worker as never,
+    request(true),
+    source,
+    broker,
+    { localToolsEnabled: true, solAvailable: true, extraHighAvailable: true, proAvailable: true },
+    "trace_renewed_deadline",
+    undefined,
+    250,
+    () => { progress += 1; },
+  )).resolves.toBe("Heartbeat-renewed checkpoint");
+  expect(progress).toBeGreaterThanOrEqual(4);
+});
+
 test("a rejected exact compaction run is evicted while a successful run remains replayable", async () => {
   const key = `exact-retry-${Date.now()}-${Math.random()}`;
   const owner = { ownerKey: `owner-${key}`, traceIds: [`trace-${key}`] };
