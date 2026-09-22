@@ -9,14 +9,14 @@ permissions:
 jobs:
   release:
     if: >-
-      github.event.head_commit.message == 'chore: release v5.0.14'
+      startsWith(github.event.head_commit.message, 'chore: publish v5.0.14')
     runs-on: ubuntu-latest
     steps:
       - name: Tag release commit and dispatch release build
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          RELEASE_SHA: ${{ github.sha }}
+          RELEASE_SHA: b7b2e39254045a541df3ace60933283d68e96536
         run: |
           gh api "repos/$GH_REPO/git/refs" -f ref=refs/tags/v5.0.14 -f sha="$RELEASE_SHA"
           gh workflow run release.yml --repo "$GH_REPO" --ref v5.0.14
