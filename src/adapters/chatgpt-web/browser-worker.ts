@@ -54,6 +54,7 @@ import {
   CHATGPT_ASSISTANT_TURN_SELECTOR,
   CHATGPT_COMPLETION_ACTION_SELECTOR,
   CHATGPT_COMPOSER_SELECTOR,
+  CHATGPT_CONVERSATION_TURN_SELECTOR,
   CHATGPT_EFFORT_CONTROL_SELECTOR,
   CHATGPT_EFFORT_ITEM_SELECTOR,
   CHATGPT_EFFORT_SLIDER_CONTAINER_SELECTOR,
@@ -97,12 +98,17 @@ import {
   chatGptExternalProgressIsLive,
   chatGptExternalToolCallsAreInFlight,
 } from "./turn-progress";
+import {
+  cleanChatGptConversationDocument,
+  type ChatGptConversationCleanupResult,
+} from "./dom-cleanup";
 import type {
   ChatGptExternalTurnProgressSnapshot,
   ChatGptTurnProgressReader,
 } from "./turn-progress";
 
 export { MAX_CHATGPT_BROWSER_TABS } from "./concurrency";
+export { cleanChatGptConversationDocument } from "./dom-cleanup";
 
 const workers = new Map<string, ChatGptBrowserWorker>();
 
@@ -1165,6 +1171,7 @@ export function remainingStageBudgetMs(
 }
 
 export const CHATGPT_BROWSER_OBSERVATION_PROBE_TIMEOUT_MS = 5_000;
+export const CHATGPT_CHAT_CLEAN_TIMEOUT_MS = 1_000;
 export const MAX_CHATGPT_BROWSER_PAGE_REBINDS = 2;
 
 export class ChatGptBrowserObservationTimeoutError extends Error {
@@ -1188,6 +1195,30 @@ export async function withChatGptBrowserObservationTimeout<T>(
     ]);
   } finally {
     if (timer) clearTimeout(timer);
+  }
+}
+
+export async function runChatGptChatClean(
+  page: Pick<Page, "evaluate">,
+  timeoutMs = CHATGPT_CHAT_CLEAN_TIMEOUT_MS,
+  warn: (message: string) => void = message => console.warn(message),
+): Promise<ChatGptConversationCleanupResult | undefined> {
+  try {
+    return await withChatGptBrowserObservationTimeout(page.evaluate(
+      cleanChatGptConversationDocument,
+      {
+        keepExchanges: 3,
+        turnSelector: CHATGPT_CONVERSATION_TURN_SELECTOR,
+        userTurnSelector: CHATGPT_USER_TURN_SELECTOR,
+        assistantTurnSelector: CHATGPT_ASSISTANT_TURN_SELECTOR,
+      },
+    ), timeoutMs);
+  } catch (cleanupError) {
+    warn(
+      `[chatgpt-web] Chat Clean could not prune rendered history:`
+      + ` ${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`,
+    );
+    return undefined;
   }
 }
 
@@ -1333,6 +1364,7 @@ export interface ResolvedBrowserConfig {
   turnTimeoutMs?: number;
   headed: boolean;
   autoApproveToolCalls: boolean;
+  chatCleanEnabled?: boolean;
   useSavedChats: boolean;
 }
 
@@ -2080,6 +2112,7 @@ export function resolveBrowserConfig(provider: CodexProviderConfig): ResolvedBro
     ...(turnTimeoutMs !== undefined ? { turnTimeoutMs } : {}),
     headed: configured.headed !== false,
     autoApproveToolCalls: configured.autoApproveToolCalls === true,
+    chatCleanEnabled: configured.chatCleanEnabled !== false,
     useSavedChats: configured.useSavedChats === true,
   };
 }
@@ -5375,6 +5408,19 @@ export class ChatGptBrowserWorker {
         atomicWriteFile(this.config.storageStatePath, `${JSON.stringify(state)}\n`);
       }
       await diagnostics.capture(page, "turn-completed");
+      if (this.config.browserHost === "launcher"
+        && this.config.chatCleanEnabled
+        && turn.retainConversation) {
+        // A completed response is authoritative. DOM cleanup is bounded and best effort, so an
+        // unresponsive renderer cannot turn a successful model response into a failed request.
+        const cleaned = await runChatGptChatClean(page);
+        if (cleaned?.pruned) {
+          console.info(
+            `[chatgpt-web] Chat Clean pruned ${cleaned.pruned} old rendered messages`
+            + ` (retained=${cleaned.retained})`,
+          );
+        }
+      }
       console.info(
         `[chatgpt-web] browser turn ${turn.traceId} completed`
         + ` (markdownChars=${finalText.length}, domFullScans=${responseDomCache.fullScans ?? 0}, domCacheHits=${responseDomCache.cacheHits ?? 0})`,
