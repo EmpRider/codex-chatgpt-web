@@ -27,6 +27,7 @@ export const CHATGPT_EFFORT_SLIDER_SELECTOR = '[data-model-reasoning-effort-slid
 export const CHATGPT_EFFORT_SLIDER_MAX_OPTIONS = 5;
 export const CHATGPT_STOP_BUTTON_SELECTOR = '[data-testid="stop-button"]';
 export const CHATGPT_COMPLETION_ACTION_SELECTOR = 'button[data-testid="copy-turn-action-button"]';
+export const CHATGPT_CONVERSATION_TURN_SELECTOR = '[data-testid^="conversation-turn-"]';
 export const CHATGPT_ASSISTANT_TURN_SELECTOR = [
   '[data-testid^="conversation-turn-"][data-turn="assistant"]',
   '[data-testid^="conversation-turn-"][data-message-author-role="assistant"]',
