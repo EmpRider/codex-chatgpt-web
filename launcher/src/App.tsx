@@ -1656,6 +1656,17 @@ function SettingsSurface({
       setBusy(false);
     }
   };
+  const setChatClean = async (enabled: boolean) => {
+    setBusy(true);
+    setError(null);
+    try {
+      updateState(await api!.setChatClean(enabled));
+    } catch (cause) {
+      setError(messageOf(cause));
+    } finally {
+      setBusy(false);
+    }
+  };
   const setSkillAttachments = async (enabled: boolean) => {
     setBusy(true);
     setError(null);
@@ -1751,6 +1762,15 @@ function SettingsSurface({
             onChange={(checked) => void api!.setPreference("showBrowserDuringTurns", checked)
               .then(updateState)
               .catch((cause) => setError(messageOf(cause)))}
+          />
+        </SettingRow>
+        <SettingRow body={copy.chatCleanBody} label={copy.chatClean}>
+          <Switch
+            checked={snapshot.state.chatCleanEnabled}
+            disabled={busy
+              || snapshot.state.browserInteractionMode === "manual"
+              || snapshot.state.coreSetupComplete !== true}
+            onChange={(checked) => void setChatClean(checked)}
           />
         </SettingRow>
         <SettingRow
