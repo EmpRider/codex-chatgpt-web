@@ -85,6 +85,8 @@ export interface AppConfig {
   extraHighAvailable?: boolean;
   proAvailable: boolean;
   experimentalBiggerContext: boolean;
+  /** Keep only the latest three rendered user/assistant exchanges in retained launcher chats. */
+  chatCleanEnabled: boolean;
   experimentalSkillAttachments: boolean;
   experimentalFreshConversationPerTurn: boolean;
   useSavedChats: boolean;
@@ -217,6 +219,7 @@ export function defaultConfig(mode: RuntimeMode = "browser-only"): AppConfig {
     extraHighAvailable: false,
     proAvailable: false,
     experimentalBiggerContext: false,
+    chatCleanEnabled: true,
     experimentalSkillAttachments: false,
     experimentalFreshConversationPerTurn: false,
     useSavedChats: false,
@@ -501,6 +504,9 @@ function parseConfig(value: unknown, path: string): AppConfig {
     && typeof parsed.experimentalBiggerContext !== "boolean") {
     throw new Error(`Invalid experimentalBiggerContext in ${path}`);
   }
+  if (parsed.chatCleanEnabled !== undefined && typeof parsed.chatCleanEnabled !== "boolean") {
+    throw new Error(`Invalid chatCleanEnabled in ${path}`);
+  }
   if (parsed.zeroRiskProEnabled !== undefined && typeof parsed.zeroRiskProEnabled !== "boolean") {
     throw new Error(`Invalid zeroRiskProEnabled in ${path}`);
   }
@@ -527,6 +533,7 @@ function parseConfig(value: unknown, path: string): AppConfig {
     throw new Error(`Zero Risk does not support Skills as files in ${path}`);
   }
   const experimentalBiggerContext = parsed.experimentalBiggerContext === true;
+  const chatCleanEnabled = parsed.chatCleanEnabled !== false;
   const zeroRiskProEnabled = parsed.zeroRiskProEnabled === true;
   if (browserInteractionMode === "manual" && experimentalBiggerContext) {
     throw new Error(`Zero Risk does not support Bigger Context in ${path}`);
@@ -547,6 +554,7 @@ function parseConfig(value: unknown, path: string): AppConfig {
     solAvailable,
     proAvailable,
     experimentalBiggerContext,
+    chatCleanEnabled,
     experimentalSkillAttachments,
     experimentalFreshConversationPerTurn,
     useSavedChats,
@@ -605,6 +613,7 @@ export function providerConfig(config: AppConfig): CodexProviderConfig {
       extraHighAvailable: !manual && config.extraHighAvailable === true,
       proAvailable: manual ? false : config.proAvailable,
       experimentalBiggerContext: manual ? false : config.experimentalBiggerContext,
+      chatCleanEnabled: manual ? false : config.chatCleanEnabled,
       experimentalSkillAttachments: manual ? false : config.experimentalSkillAttachments,
       experimentalFreshConversationPerTurn: !manual && config.experimentalFreshConversationPerTurn === true,
       useSavedChats: config.useSavedChats === true,
