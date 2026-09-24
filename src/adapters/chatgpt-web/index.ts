@@ -687,21 +687,40 @@ export function createChatGptWebAdapter(
       };
     }
     if (!mode.localTools) {
+      // Compaction may read its immutable context over MCP, but never receives work tools.
+      const mcpCompaction = parsed._compactionRequest && configuredCapabilities.localToolsEnabled;
+      const browserCapabilities = mcpCompaction ? configuredCapabilities : turnCapabilities;
       const browserTurn = cancellableBrowserTurn(finalizeCheckpoint(worker.run({
         traceId,
         modelId: parsed.modelId,
         reasoning: parsed.options.reasoning,
         ...(parsed._chatgptModelFamily ? { modelFamily: parsed._chatgptModelFamily } : {}),
-        capabilities: turnCapabilities,
-        prepare: async () => ({
-          ...compileChatGptWebPrompt(
-            checkpointInput.parsed,
-            turnCapabilities,
-            undefined,
-            compileOptionsFor(checkpointInput.parsed),
-          ),
-          release: () => {},
-        }),
+        capabilities: browserCapabilities,
+        prepare: async () => {
+          const contextToken = mcpCompaction ? await broker.register({
+            cwd: process.cwd(), roots: [process.cwd()], writableRoots: [],
+            sandboxPolicy: { type: "readOnly", networkAccess: false },
+            tools: [],
+          }, timeoutMs === undefined ? undefined : timeoutMs + 60_000, traceId) : undefined;
+          try {
+            const compiled = compileChatGptWebPrompt(
+              checkpointInput.parsed,
+              browserCapabilities,
+              contextToken,
+              compileOptionsFor(checkpointInput.parsed),
+            );
+            if (contextToken && compiled.contextTransport) {
+              if (!broker.setContextTransport) throw new Error("The active Codex turn broker does not support MCP context transport");
+              await broker.setContextTransport(contextToken, compiled.contextTransport);
+            }
+            return { ...compiled, release: () => {
+              if (contextToken) void broker.revoke(contextToken);
+            } };
+          } catch (error) {
+            if (contextToken) await broker.revoke(contextToken);
+            throw error;
+          }
+        },
         abortSignal: browserAbort.signal,
         ...(parsed._compactionRequest ? { compaction: true } : {}),
         ...submissionLifecycle,
@@ -744,6 +763,11 @@ export function createChatGptWebAdapter(
           turnToken,
           compileOptionsFor(input),
         );
+        if (broker.setContextTransport) {
+          await Promise.resolve(broker.setContextTransport(turnToken, compiled.contextTransport));
+        } else if (compiled.contextTransport) {
+          throw new Error("The active Codex turn broker does not support MCP context transport");
+        }
         // Publish only after preparation succeeds: otherwise its failure revokes the token
         // before the response observer uses it and masks the cause as an expired capability.
         observeCapabilityRetirement(turnToken, externalProgress);
@@ -994,6 +1018,9 @@ export function createChatGptWebAdapter(
                         sourceConversationKey,
                         operationSignal,
                       );
+                      // Waiting for the previous retained owner is its own bounded phase. Give the
+                      // actual checkpoint handoff a fresh liveness window once ownership is free.
+                      armHandoffDeadline();
                     }
                     source = sourceConversationKey
                       ? chatGptTurnSessions.findConversationHead(sourceConversationKey)
@@ -1034,6 +1061,7 @@ export function createChatGptWebAdapter(
                         operationSignal,
                       );
                       preserveFinalResponse = !settlement.compactionInstructionDelivered;
+                      armHandoffDeadline();
                       rawSummary = await requestRetainedCompactionHandoff(
                         worker,
                         parsed,
@@ -1043,6 +1071,7 @@ export function createChatGptWebAdapter(
                         handoffTraceId,
                         operationSignal,
                         handoffTimeoutMs,
+                        armHandoffDeadline,
                       );
                     } else {
                       if (source.isActive()) {
@@ -1051,6 +1080,7 @@ export function createChatGptWebAdapter(
                         await withAbort(source.physicalSettlement, operationSignal);
                         preserveFinalResponse = true;
                       }
+                      armHandoffDeadline();
                       rawSummary = await requestRetainedCompactionHandoff(
                         worker,
                         parsed,
@@ -1060,6 +1090,7 @@ export function createChatGptWebAdapter(
                         handoffTraceId,
                         operationSignal,
                         handoffTimeoutMs,
+                        armHandoffDeadline,
                       );
                     }
                     const summary = canonicalizeCompactionHandoff(parsed, rawSummary);
@@ -1105,7 +1136,16 @@ export function createChatGptWebAdapter(
                 },
               );
             }
+            // Structured compaction can legitimately spend minutes inside ChatGPT while the
+            // one shared handoff continues across HTTP reconnects. Keep each observer's adapter
+            // stream alive too; bridge-level SSE heartbeats alone do not count as upstream adapter
+            // progress and can otherwise trip the upstream stall budget before the handoff finishes.
             emit({ type: "heartbeat" });
+            const observerHeartbeat = setInterval(
+              () => emit({ type: "heartbeat" }),
+              10_000,
+            );
+            observerHeartbeat.unref?.();
             let summary: string;
             try {
               summary = await withAbort(sharedSummary, incoming.abortSignal);
@@ -1131,6 +1171,8 @@ export function createChatGptWebAdapter(
                 retryable: false,
               });
               return;
+            } finally {
+              clearInterval(observerHeartbeat);
             }
             emit({ type: "text_delta", text: summary, phase: "final_answer" });
             emitBrowserCompletion(
