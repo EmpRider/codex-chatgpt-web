@@ -7,6 +7,13 @@ import {
   resolveChatGptWebTransportLimits,
 } from "../../chatgpt-web-models";
 import { ChatGptWebAdapterError } from "./adapter-error";
+import {
+  CHATGPT_WEB_MCP_PROMPT_JSON_BYTE_THRESHOLD,
+  chatGptWebMcpContextChunks,
+  chatGptWebMcpContextReadQuery,
+  createChatGptWebMcpContextTransport,
+  type ChatGptWebMcpContextTransport,
+} from "./context-transport";
 import { estimateTokens } from "../../lib/token-estimate";
 import type { CodexAssistantContentPart, CodexContentPart, CodexMessage, CodexParsedRequest } from "../../types";
 import { isOnePixelPngDataUrl, isReadableCompactionSummaryText } from "../../responses/compaction";
@@ -25,6 +32,8 @@ export interface ChatGptWebPromptImage {
 export interface CompiledChatGptWebPrompt {
   text: string;
   images: ChatGptWebPromptImage[];
+  /** Exact canonical context held locally when a large Full-mode turn uses MCP context transport. */
+  contextTransport?: ChatGptWebMcpContextTransport;
   skillFiles?: ChatGptSkillFile[];
   /** Transactional transport when Bigger Context is explicitly enabled. */
   multipart?: ChatGptWebMultipartPrompt;
@@ -502,7 +511,7 @@ export function compileChatGptWebPrompt(
       ]
       : [
       "This is a Codex history-compaction checkpoint, not a normal task turn.",
-      "Do not call local or ChatGPT-native tools. Summarize only the supplied task context according to the final compaction instruction.",
+      "Do not call work tools or ChatGPT-native tools. Read context through codex_tool_inventory when an MCP context manifest is supplied, then summarize only the supplied task context according to the final compaction instruction.",
       "Return only the checkpoint summary that the next model needs to resume the task.",
       ]
     : mode.localTools
@@ -612,6 +621,78 @@ export function compileChatGptWebPrompt(
     const answerContract = captureLunaCheckpoint
       ? "Return the complete answer that the outer Codex task should receive, then the required private checkpoint tail."
       : "Return only the answer that the outer Codex task should receive.";
+    const envelopeJson = withoutRetiredTurnHandles(JSON.stringify({ version: 3, system, messages }));
+    const inlineText = [
+      ...sharedContract,
+      ...skillContract,
+      ...transportContract,
+      ...outputControlContract,
+      ...manualControlContract,
+      ...checkpointContract,
+      answerContract,
+      "<codex_context_json>",
+      envelopeJson,
+      "</codex_context_json>",
+      ...(omittedMessages > 0 ? [
+        "<codex_transport_resume>",
+        `${omittedMessages} earlier history items were omitted to fit this compaction request; the supplied history is incomplete.`,
+        "Preserve still-relevant progress, constraints and pending work from any supplied cumulative checkpoint and the remaining evidence. Do not infer that omitted work was never done or invent missing details.",
+        manualControl
+          ? "Produce the requested checkpoint summary now."
+          : "Produce the requested checkpoint summary now without calling tools.",
+        "</codex_transport_resume>",
+      ] : transportResume),
+    ].join("\n");
+    // Route based on the complete message that would otherwise be submitted to ChatGPT, not only
+    // the inner Codex envelope. JSON encoding is the real browser-request cost: quotes, newlines,
+    // backslashes and other escaping can push a prompt over the safe inline threshold even when
+    // envelopeJson.length alone looks smaller.
+    const useMcpContextTransport = mode.localTools
+      && !manualControl
+      && chatGptPromptJsonBytes(inlineText) >= CHATGPT_WEB_MCP_PROMPT_JSON_BYTE_THRESHOLD;
+    if (useMcpContextTransport) {
+      const contextTransport = createChatGptWebMcpContextTransport(envelopeJson);
+      const totalChunks = chatGptWebMcpContextChunks(contextTransport).length;
+      const contextReadQuery = chatGptWebMcpContextReadQuery(contextTransport.contextId);
+      const mcpSharedContract = sharedContract.map(line => line
+        .replace("The staged JSON task context", "The MCP-delivered JSON task context")
+        .replace("The inline JSON task context", "The MCP-delivered JSON task context")
+        .replace("Read and reconstruct every acknowledged staged JSON record before acting.", "Read and reconstruct every MCP context chunk before acting.")
+        .replace("Read the complete inline JSON task context before acting.", "Read the complete MCP-delivered JSON task context before acting.")
+        .replace("Each image_attachment in the staged context", "Each image_attachment in the MCP-delivered context")
+        .replace("Each image_attachment in the context", "Each image_attachment in the MCP-delivered context"));
+      const mcpContextContract = [
+        "<codex_mcp_context_manifest>",
+        `context_id: ${contextTransport.contextId}`,
+        `context_sha256: ${contextTransport.sha256}`,
+        `context_chars: ${contextTransport.chars}`,
+        `context_bytes: ${contextTransport.bytes}`,
+        `context_chunks: ${totalChunks}`,
+        `chunk_chars_max: ${contextTransport.chunkChars}`,
+        `Use turn_token ${turnToken} unchanged for every Codex Native call in this response.`,
+        "The canonical Codex task context is local and is not rendered in this ChatGPT message. Load every context chunk before executing the task or calling any other work tool.",
+        `Load chunk 0 by calling codex_tool_inventory with the turn_token above, query ${JSON.stringify(contextReadQuery)}, offset 0, limit 1, and include_schema false.`,
+        "For every result, append its text field in chunk order. If next_chunk is a number, call codex_tool_inventory again with the same turn_token and query, offset equal to next_chunk, limit 1, and include_schema false. Continue until next_chunk is null.",
+        "Do not route these context reads through codex_tool_call; codex_tool_inventory is the read-only transport for context chunks.",
+        `Require every result to report context_id ${contextTransport.contextId} and sha256 ${contextTransport.sha256}. If the reader is missing, any chunk fails, metadata conflicts, or the sequence is incomplete, stop and report the transport failure instead of executing from partial context.`,
+        "After all chunks are loaded, parse their concatenation as the single canonical Codex context JSON envelope and apply the role semantics above.",
+        "</codex_mcp_context_manifest>",
+      ];
+      const text = [
+        ...mcpSharedContract,
+        ...transportContract,
+        ...outputControlContract,
+        ...checkpointContract,
+        answerContract,
+        ...mcpContextContract,
+        "<codex_transport_resume>",
+        parsed._compactionRequest
+          ? "The task context is complete only after the MCP context reader has returned every chunk. Produce the requested checkpoint summary only after that point. Do not resume ordinary task work."
+          : "The task context is complete only after the MCP context reader has returned every chunk. Execute the latest active user request only after that point.",
+        "</codex_transport_resume>",
+      ].join("\n");
+      return { text, images, contextTransport };
+    }
     if (multipartEnabled) {
       const records: MultipartContextRecord[] = [
         ...system.map((content, system_index) => ({ kind: "system" as const, system_index, content })),
@@ -662,29 +743,7 @@ export function compileChatGptWebPrompt(
       multipart.parts = partitionMultipartContext(records, multipartParts!, budgets);
       return { text: multipart.commit, images, ...attachments, multipart };
     }
-    const envelopeJson = withoutRetiredTurnHandles(JSON.stringify({ version: 3, system, messages }));
-    const text = [
-      ...sharedContract,
-      ...skillContract,
-      ...transportContract,
-      ...outputControlContract,
-      ...manualControlContract,
-      ...checkpointContract,
-      answerContract,
-      "<codex_context_json>",
-      envelopeJson,
-      "</codex_context_json>",
-      ...(omittedMessages > 0 ? [
-        "<codex_transport_resume>",
-        `${omittedMessages} earlier history items were omitted to fit this compaction request; the supplied history is incomplete.`,
-        "Preserve still-relevant progress, constraints and pending work from any supplied cumulative checkpoint and the remaining evidence. Do not infer that omitted work was never done or invent missing details.",
-        manualControl
-          ? "Produce the requested checkpoint summary now."
-          : "Produce the requested checkpoint summary now without calling tools.",
-        "</codex_transport_resume>",
-      ] : transportResume),
-    ].join("\n");
-    return { text, images, ...attachments };
+    return { text: inlineText, images, ...attachments };
   };
 
   let sourceMessages = withoutSupersededModelSwitchContracts(parsed.context.messages);
@@ -697,7 +756,7 @@ export function compileChatGptWebPrompt(
   // as ordinary multipart turns in browser-worker. Applying the legacy byte cap here silently
   // discarded context that the staged transport can carry; preserve it and let browser preflight
   // fail explicitly if any atomic record is genuinely too large for one stage.
-  if (compiled.multipart) return compiled;
+  if (compiled.multipart || compiled.contextTransport) return compiled;
 
   const exceedsCompactionBudget = (): boolean => (
     chatGptPromptJsonBytes(compiled.text) > CHATGPT_COMPACTION_PROMPT_JSON_BYTE_BUDGET
