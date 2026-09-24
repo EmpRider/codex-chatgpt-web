@@ -192,6 +192,28 @@ test("Bigger Context uses the setup transaction and refreshes the production Cod
   });
 });
 
+test("Chat Clean uses the setup transaction without changing the Codex model catalog", async () => {
+  const fixture = hostFor({ mode: "full", appName: "Codex Native2" });
+  assert.equal(typeof fixture.host.setChatClean, "function");
+  if (typeof fixture.host.setChatClean !== "function") return;
+  const result = await fixture.host.setChatClean(false);
+  assert.equal(result.enabled, false);
+  assert.deepEqual(fixture.invocation(), {
+    name: "chat-clean",
+    args: [
+      "setup",
+      "--full",
+      "--browser-host-descriptor",
+      "/runtime/launcher-browser.json",
+      "--automatic-browser-interaction",
+      "--replace-codex-route",
+      "--acknowledge-unofficial",
+      "--restart-service",
+      "--no-chat-clean",
+    ],
+  });
+});
+
 test("Bigger Context updates the isolated DEV config without installing a Codex route", async () => {
   const fixture = devHostFor({ mode: "browser-only" });
   const result = await fixture.host.setBiggerContext(false);
