@@ -20,6 +20,7 @@ interface RunMessage {
     browserDiagnosticsPath?: string;
     turnTimeoutMs: number;
     autoApproveToolCalls: boolean;
+    chatCleanEnabled?: boolean;
     useSavedChats?: boolean;
   };
   turn: {
@@ -196,6 +197,7 @@ async function run(message: RunMessage): Promise<void> {
       browserDiagnosticsPath: message.config.browserDiagnosticsPath,
       turnTimeoutMs: message.config.turnTimeoutMs,
       autoApproveToolCalls: message.config.autoApproveToolCalls,
+      chatCleanEnabled: message.config.chatCleanEnabled !== false,
       useSavedChats: message.config.useSavedChats === true,
     },
   };
