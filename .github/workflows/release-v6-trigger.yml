@@ -31,3 +31,5 @@ jobs:
             git push origin refs/tags/v6.0.0
           fi
           gh workflow run release.yml --repo "$GITHUB_REPOSITORY" --ref v6.0.0
+
+# trigger
