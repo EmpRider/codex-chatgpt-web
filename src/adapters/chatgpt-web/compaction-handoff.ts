@@ -283,16 +283,24 @@ export async function requestRetainedCompactionHandoff(
   traceId: string,
   signal?: AbortSignal,
   timeoutMs = MAX_COMPACTION_HANDOFF_TIMEOUT_MS,
+  onProgress?: () => void,
 ): Promise<string> {
   const conversationKey = source.conversationKey();
   if (!conversationKey) throw new Error("The completed ChatGPT source has no retained conversation identity");
   const operationTimeoutMs = boundedCompactionTimeout(timeoutMs);
   const deadline = new AbortController();
-  const deadlineTimer = setTimeout(
-    () => deadline.abort(new Error(`ChatGPT compaction handoff timed out after ${operationTimeoutMs}ms`)),
-    operationTimeoutMs,
-  );
-  deadlineTimer.unref?.();
+  let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
+  const reportProgress = (): void => {
+    if (deadline.signal.aborted) return;
+    if (deadlineTimer) clearTimeout(deadlineTimer);
+    deadlineTimer = setTimeout(
+      () => deadline.abort(new Error(`ChatGPT compaction handoff timed out after ${operationTimeoutMs}ms without progress`)),
+      operationTimeoutMs,
+    );
+    deadlineTimer.unref?.();
+    onProgress?.();
+  };
+  reportProgress();
   const operationSignal = signal
     ? AbortSignal.any([signal, deadline.signal])
     : deadline.signal;
@@ -310,6 +318,7 @@ export async function requestRetainedCompactionHandoff(
       }
     }, () => {});
     transaction = await withCompactionAbort(transactionPromise, operationSignal);
+    reportProgress();
     const instruction = structuredCompactionHandoffInstruction(transaction);
     const prepare = async () => ({ text: instruction, images: [], release: () => {} });
     browser = worker.run({
@@ -325,6 +334,8 @@ export async function requestRetainedCompactionHandoff(
       conversationKey,
       requireRetainedConversation: true,
       abortSignal: browserAbort.signal,
+      onSubmitted: reportProgress,
+      onHeartbeat: reportProgress,
       onTextDelta: () => {},
     });
     const browserFailure = browser.then<never>(
@@ -360,7 +371,7 @@ export async function requestRetainedCompactionHandoff(
       ).catch(() => {});
     }
     operationSignal.removeEventListener("abort", abortBrowser);
-    clearTimeout(deadlineTimer);
+    if (deadlineTimer) clearTimeout(deadlineTimer);
   }
 }
 
