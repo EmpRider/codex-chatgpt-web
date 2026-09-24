@@ -261,6 +261,9 @@ function validateConfig(config, descriptorPath, platform = process.platform, lau
     && typeof config.experimentalBiggerContext !== "boolean") {
     throw new Error("Runtime configuration has an invalid experimentalBiggerContext");
   }
+  if (config.chatCleanEnabled !== undefined && typeof config.chatCleanEnabled !== "boolean") {
+    throw new Error("Runtime configuration has an invalid chatCleanEnabled");
+  }
   if (config.experimentalFreshConversationPerTurn !== undefined
     && typeof config.experimentalFreshConversationPerTurn !== "boolean") {
     throw new Error("Runtime configuration has an invalid experimentalFreshConversationPerTurn");
