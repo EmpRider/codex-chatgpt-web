@@ -85,6 +85,8 @@ Setup options:
   --skill-attachments         Experimental selected skills as text attachments
   --inline-skills             Keep selected skills inline (default)
   --standard-context           Disable experimental multi-message context
+  --chat-clean                 Keep only the latest 3 user/assistant exchanges (default)
+  --no-chat-clean              Keep all rendered messages in retained chats
   --acknowledge-unofficial     Accept the one-time unofficial-browser-automation notice
 
 Global:
@@ -322,6 +324,12 @@ async function setupCommand(args: string[]): Promise<void> {
     throw new Error("Choose at most one context mode: --bigger-context or --standard-context");
   }
   if (biggerContext || standardContext) options.experimentalBiggerContext = biggerContext;
+  const chatClean = takeFlag(args, "--chat-clean");
+  const noChatClean = takeFlag(args, "--no-chat-clean");
+  if (chatClean && noChatClean) {
+    throw new Error("Choose at most one Chat Clean mode: --chat-clean or --no-chat-clean");
+  }
+  if (chatClean || noChatClean) options.chatCleanEnabled = chatClean;
   if (skillAttachments || inlineSkills) options.experimentalSkillAttachments = skillAttachments;
   const zeroRiskPro = takeFlag(args, "--zero-risk-pro");
   const zeroRiskDefault = takeFlag(args, "--zero-risk-default");
