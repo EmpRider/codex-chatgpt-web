@@ -1096,6 +1096,36 @@ class RuntimeHost {
     return { ...result, mode, enabled: enabled === true };
   }
 
+  async setChatClean(enabled) {
+    const current = this.runtimeConfigSnapshot();
+    if (!current.configured) {
+      throw new Error("Initialize the runtime before changing Chat Clean");
+    }
+    const mode = current.mode;
+    const cleanFlag = enabled === true ? "--chat-clean" : "--no-chat-clean";
+    const args = [
+      ...(this.launcherProfile === "development" ? ["dev", "setup"] : ["setup"]),
+      mode === "full" ? "--full" : "--browser-only",
+      "--browser-host-descriptor",
+      this.browserDescriptorPath,
+      ...this.browserInteractionArgs(),
+      ...(this.launcherProfile === "production" ? ["--replace-codex-route"] : []),
+      "--acknowledge-unofficial",
+      ...(this.launcherProfile === "production" ? ["--restart-service"] : []),
+      cleanFlag,
+    ];
+    if (current.config?.autoApproveToolCalls === true) args.push("--auto-approve-tool-calls");
+    const options = {
+      message: enabled ? "Enabling Chat Clean" : "Disabling Chat Clean",
+      successMessage: enabled ? "Chat Clean enabled" : "Chat Clean disabled",
+      timeoutMs: CORE_SETUP_TIMEOUT_MS,
+    };
+    const result = this.launcherProfile === "development"
+      ? await this.runDevSetup("chat-clean", args, options)
+      : await this.runSetup("chat-clean", args, options);
+    return { ...result, mode, enabled: enabled === true };
+  }
+
   async setSkillAttachments(enabled) {
     const current = this.runtimeConfigSnapshot();
     if (!current.configured) throw new Error("Initialize the runtime before changing Skills as files");
