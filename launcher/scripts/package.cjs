@@ -3,6 +3,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const { validateRuntimeBundle } = require("../electron/runtime-install.cjs");
+const { shouldVerifyMacCodeSignature } = require("./mac-signing.cjs");
 const { requireLibnotifySymbol } = require("./prepare-linux-appimage-tools.cjs");
 
 const root = path.resolve(__dirname, "..");
@@ -89,7 +90,9 @@ function verifySignedMacArchive() {
   try {
     runChecked("ditto", ["-x", "-k", path.join(staging, archives[0]), verificationRoot]);
     const appBundle = path.join(verificationRoot, `${launcherManifest.build.productName}.app`);
-    runChecked("codesign", ["--verify", "--deep", "--strict", appBundle]);
+    if (shouldVerifyMacCodeSignature(env)) {
+      runChecked("codesign", ["--verify", "--deep", "--strict", appBundle]);
+    }
     validateRuntimeBundle(path.join(appBundle, "Contents", "Resources", "runtime"), {
       version: launcherManifest.version,
       platform: "darwin",
