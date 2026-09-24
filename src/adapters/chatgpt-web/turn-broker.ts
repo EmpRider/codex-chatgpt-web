@@ -7,6 +7,12 @@ import {
   CompactionTransactionStore,
   type CompactionTransactionHandle,
 } from "./compaction-transaction";
+import {
+  assertChatGptWebMcpContextTransport,
+  chatGptWebMcpContextChunk,
+  chatGptWebMcpContextManifest,
+  type ChatGptWebMcpContextTransport,
+} from "./context-transport";
 import type { ChatGptTurnEnvironment } from "./environment";
 
 interface PendingTurn extends ChatGptTurnEnvironment {
@@ -65,6 +71,7 @@ interface TurnChannel {
   traceId: string;
   externalOwner: boolean;
   environment: PendingTurn;
+  contextTransport?: ChatGptWebMcpContextTransport;
   bindingId?: string;
   queuedCallIds: string[];
   deliveredCallIds: Set<string>;
@@ -93,10 +100,12 @@ interface BrokerRequest {
     | "resolve"
     | "release"
     | "invoke"
+    | "context_read"
     | "owner_status"
     | "owner_register"
     | "owner_register_safe"
     | "owner_update"
+    | "owner_set_context"
     | "owner_safe_sent"
     | "owner_next"
     | "owner_complete"
@@ -119,6 +128,9 @@ interface BrokerRequest {
   arguments?: Record<string, unknown>;
   input?: string;
   environment?: ChatGptTurnEnvironment;
+  contextTransport?: ChatGptWebMcpContextTransport | null;
+  contextId?: string;
+  chunk?: number;
   ttlMs?: number;
   traceId?: string;
   callId?: string;
@@ -215,6 +227,7 @@ export interface TurnBrokerOwner {
     traceId?: string,
   ): Promise<string>;
   updateEnvironment(token: string, environment: ChatGptTurnEnvironment): void | Promise<void>;
+  setContextTransport?(token: string, context?: ChatGptWebMcpContextTransport): void | Promise<void>;
   confirmSafeTurnSent(
     token: string,
     surfaceNonce: string,
@@ -374,6 +387,18 @@ export class TurnBroker implements TurnBrokerOwner {
         ? { expiresAt: channel.environment.expiresAt }
         : {}),
     };
+  }
+
+  async setContextTransport(token: string, context?: ChatGptWebMcpContextTransport): Promise<void> {
+    this.prune();
+    const channel = this.channels.get(token);
+    if (!channel) throw new Error("turn token is invalid or expired");
+    if (channel.bindingId) throw new Error("Codex MCP context transport cannot change after the turn is already bound");
+    if (context === undefined) {
+      delete channel.contextTransport;
+      return;
+    }
+    channel.contextTransport = assertChatGptWebMcpContextTransport(context);
   }
 
   async nextToolBatch(token: string, signal?: AbortSignal): Promise<BrokerToolRequest[]> {
@@ -892,7 +917,7 @@ export class TurnBroker implements TurnBrokerOwner {
     if (!request || typeof request !== "object" || typeof request.id !== "string" || request.id.length === 0 || request.id.length > 256) {
       throw new Error("turn broker request id is invalid");
     }
-    if (!["claim", "resolve", "release", "invoke", "owner_status", "owner_register", "owner_register_safe", "owner_update", "owner_safe_sent", "owner_next", "owner_complete", "owner_completion_fence_begin", "owner_completion_fence_commit", "owner_wait_retirement", "owner_revoke", "owner_safe_wait_start", "owner_safe_wait_completion", "owner_request_compaction", "owner_compaction_delivery_count", "safe_start", "safe_complete", "activity_complete", "submit_compaction_handoff"].includes(request.method)) {
+    if (!["claim", "resolve", "release", "invoke", "context_read", "owner_status", "owner_register", "owner_register_safe", "owner_update", "owner_set_context", "owner_safe_sent", "owner_next", "owner_complete", "owner_completion_fence_begin", "owner_completion_fence_commit", "owner_wait_retirement", "owner_revoke", "owner_safe_wait_start", "owner_safe_wait_completion", "owner_request_compaction", "owner_compaction_delivery_count", "safe_start", "safe_complete", "activity_complete", "submit_compaction_handoff"].includes(request.method)) {
       throw new Error("turn broker method is invalid");
     }
   }
@@ -928,7 +953,7 @@ export class TurnBroker implements TurnBrokerOwner {
       return { submitted: true };
     }
     if (request.method === "owner_status") {
-      return { protocolVersion: 5, acceptingExternalOwners: this.acceptingExternalOwners };
+      return { protocolVersion: 6, acceptingExternalOwners: this.acceptingExternalOwners };
     }
     if (request.method === "owner_register") {
       const environment = ownerEnvironment(request.environment);
@@ -954,6 +979,15 @@ export class TurnBroker implements TurnBrokerOwner {
     if (request.method === "owner_update") {
       if (!request.token) throw new Error("turn owner token is required");
       this.updateEnvironment(request.token, ownerEnvironment(request.environment));
+      return { updated: true };
+    }
+    if (request.method === "owner_set_context") {
+      if (!request.token) throw new Error("turn owner token is required");
+      const context = request.contextTransport;
+      if (context !== null && context !== undefined && (typeof context !== "object" || Array.isArray(context))) {
+        throw new Error("turn owner context transport is invalid");
+      }
+      await this.setContextTransport(request.token, context ?? undefined);
       return { updated: true };
     }
     if (request.method === "owner_safe_sent") {
@@ -1065,13 +1099,27 @@ export class TurnBroker implements TurnBrokerOwner {
         if (!existing || existing.token !== token || existing.channel !== activeChannel) {
           throw new Error("turn token binding state is inconsistent");
         }
-        return { bindingId: activeChannel.bindingId, activityId, environment: activeChannel.environment };
+        return {
+          bindingId: activeChannel.bindingId,
+          activityId,
+          environment: activeChannel.environment,
+          ...(activeChannel.contextTransport
+            ? { contextTransport: chatGptWebMcpContextManifest(activeChannel.contextTransport) }
+            : {}),
+        };
       }
       this.pending.delete(token);
       const bindingId = opaqueId("binding");
       activeChannel.bindingId = bindingId;
       this.bindings.set(bindingId, { token, channel: activeChannel });
-      return { bindingId, activityId, environment: activeChannel.environment };
+      return {
+        bindingId,
+        activityId,
+        environment: activeChannel.environment,
+        ...(activeChannel.contextTransport
+          ? { contextTransport: chatGptWebMcpContextManifest(activeChannel.contextTransport) }
+          : {}),
+      };
     }
 
     const bindingId = request.bindingId;
@@ -1116,6 +1164,18 @@ export class TurnBroker implements TurnBrokerOwner {
       return { released: true };
     }
     if (request.method === "resolve") return { environment: binding.channel.environment };
+    if (request.method === "context_read") {
+      this.assertSafeHarnessRunning(binding.channel);
+      const context = binding.channel.contextTransport;
+      if (!context) throw new Error("Codex MCP context is unavailable for this turn");
+      if (typeof request.contextId !== "string" || request.contextId.length === 0) {
+        throw new Error("Codex MCP context id is required");
+      }
+      if (!Number.isSafeInteger(request.chunk) || request.chunk! < 0) {
+        throw new Error("Codex MCP context chunk is invalid");
+      }
+      return chatGptWebMcpContextChunk(context, request.contextId, request.chunk!);
+    }
     this.assertSafeHarnessRunning(binding.channel);
     if (binding.channel.compactionRequested) {
       const result = binding.channel.compactionResult;
@@ -1328,7 +1388,7 @@ export class RemoteTurnBroker implements TurnBrokerOwner {
         + ` (${error instanceof Error ? error.message : String(error)})`,
       );
     }
-    if (status.protocolVersion !== 5) {
+    if (status.protocolVersion !== 6) {
       throw new Error(`Unsupported DEV turn-owner protocol version: ${String(status.protocolVersion)}`);
     }
     if (status.acceptingExternalOwners !== true) {
@@ -1371,6 +1431,14 @@ export class RemoteTurnBroker implements TurnBrokerOwner {
 
   async updateEnvironment(token: string, environment: ChatGptTurnEnvironment): Promise<void> {
     await callTurnBroker(this.socketPath, { method: "owner_update", token, environment });
+  }
+
+  async setContextTransport(token: string, context?: ChatGptWebMcpContextTransport): Promise<void> {
+    await callTurnBroker(this.socketPath, {
+      method: "owner_set_context",
+      token,
+      contextTransport: context ?? null,
+    }, null);
   }
 
   async confirmSafeTurnSent(
