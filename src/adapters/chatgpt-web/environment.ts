@@ -256,6 +256,16 @@ function isAcceptedAbortedTurnRetry(
 
   const body = record(parsed._rawBody);
   const input = Array.isArray(body?.input) ? body.input : [];
+
+  // Compaction continuation has its own checkpoint authority. Never let a later abort marker
+  // widen that authority or turn an altered compacted continuation into a provider retry.
+  if (input.some(value => {
+    const item = record(value);
+    return item !== undefined
+      && (["compaction", "compaction_summary", "context_compaction"].includes(String(item.type))
+        || compactionSummaryMessage(item));
+  })) return false;
+
   const metadata = clientTurnMetadata(parsed);
   const sourceIndex = input.findIndex(value => {
     const item = record(value);
