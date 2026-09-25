@@ -80,6 +80,43 @@ function currentWire(
 }
 
 describe("trusted current Codex environment envelope", () => {
+  test("reuses the original user instruction when Codex retries an aborted provider turn with a fresh turn id", () => {
+    const request = currentWire();
+    const body = request._rawBody as { input: Array<Record<string, unknown>> };
+    for (const item of body.input) {
+      item.internal_chat_message_metadata_passthrough = { turn_id: "turn_capacity_attempt" };
+    }
+    body.input.push({
+      type: "message",
+      id: "msg_capacity_abort",
+      role: "user",
+      content: [{ type: "input_text", text: "<turn_aborted>provider retry</turn_aborted>" }],
+      internal_chat_message_metadata_passthrough: { turn_id: "turn_capacity_attempt" },
+    });
+
+    expect(extractChatGptTurnUserRevision(request)).toEqual([
+      { type: "input_text", text: "Inspect the workspace" },
+    ]);
+
+    const withAssistantWork = structuredClone(request);
+    const work = (withAssistantWork._rawBody as { input: Array<Record<string, unknown>> }).input;
+    work.splice(work.length - 1, 0, {
+      type: "message",
+      id: "msg_partial_answer",
+      role: "assistant",
+      content: [{ type: "output_text", text: "Started working" }],
+      internal_chat_message_metadata_passthrough: { turn_id: "turn_capacity_attempt" },
+    });
+    expect(() => extractChatGptTurnUserRevision(withAssistantWork))
+      .toThrow("conflicts with native Codex turn_id");
+
+    const wrongAbort = structuredClone(request);
+    const wrongInput = (wrongAbort._rawBody as { input: Array<Record<string, unknown>> }).input;
+    wrongInput[wrongInput.length - 1]!.internal_chat_message_metadata_passthrough = { turn_id: "turn_other" };
+    expect(() => extractChatGptTurnUserRevision(wrongAbort))
+      .toThrow("conflicts with native Codex turn_id");
+  });
+
   test("native cross-task messages keep their instruction, environment and compaction source", () => {
     const request = currentWire({ threadId: "thread_delegation" });
     const body = request._rawBody as { input: Array<Record<string, unknown>> };
