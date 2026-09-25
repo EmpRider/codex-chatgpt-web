@@ -61,6 +61,20 @@ export class CompactionTransactionStore {
     if (transaction.waiter) this.consume(transaction);
   }
 
+  renew(token: string, ttlMs: number): void {
+    const transaction = this.transactions.get(token);
+    if (!transaction) throw new Error("compaction control token is invalid, expired, or consumed");
+    if (!Number.isFinite(ttlMs) || ttlMs <= 0) {
+      throw new Error("compaction transaction TTL must be a positive finite number");
+    }
+    if (transaction.summary !== undefined) return;
+    if (transaction.timer) clearTimeout(transaction.timer);
+    transaction.timer = setTimeout(() => {
+      this.finishError(transaction, new Error("compaction transaction timed out"));
+    }, ttlMs);
+    transaction.timer.unref?.();
+  }
+
   wait(token: string, signal?: AbortSignal): Promise<string> {
     const transaction = this.transactions.get(token);
     if (!transaction) return Promise.reject(new Error("compaction control token is invalid, expired, or consumed"));
