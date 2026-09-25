@@ -1,0 +1,35 @@
+name: Create v6.1.1 release tag
+
+on:
+  push:
+    branches:
+      - release/v6.1.1-trigger
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  tag-and-release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Create v6.1.1 tag at merged integration
+        env:
+          TARGET_SHA: 7ebeb50ea3a98a7b33b24f72e735fa794c7dd5c3
+        run: |
+          set -euo pipefail
+          if git ls-remote --exit-code --tags origin refs/tags/v6.1.1 >/dev/null 2>&1; then
+            echo "v6.1.1 already exists"
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git tag v6.1.1 "$TARGET_SHA"
+            git push origin refs/tags/v6.1.1
+          fi
+      - name: Dispatch release workflow
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run release.yml --repo "$GITHUB_REPOSITORY" --ref v6.1.1
