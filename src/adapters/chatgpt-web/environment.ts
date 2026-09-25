@@ -239,6 +239,52 @@ export function priorChatGptAbortedTurnIds(parsed: CodexParsedRequest): string[]
 }
 
 /**
+ * Native Codex can retry a provider failure under a fresh turn_id without appending a second
+ * human message. Accept the previous instruction only when Codex also emitted an authoritative
+ * turn-aborted marker for that exact source turn and nothing after the instruction proves that
+ * assistant/tool work or a newer instruction occurred.
+ */
+function isAcceptedAbortedTurnRetry(
+  parsed: CodexParsedRequest,
+  identity: ChatGptTurnIdentity,
+  revision: ChatGptTurnUserRevision,
+): boolean {
+  const currentTurnId = identity.turnId;
+  const sourceTurnId = revision.turnId;
+  if (!currentTurnId || !sourceTurnId || sourceTurnId === currentTurnId || !revision.itemId) return false;
+  if (!priorChatGptAbortedTurnIds(parsed).includes(sourceTurnId)) return false;
+
+  const body = record(parsed._rawBody);
+  const input = Array.isArray(body?.input) ? body.input : [];
+  const metadata = clientTurnMetadata(parsed);
+  const sourceIndex = input.findIndex(value => {
+    const item = record(value);
+    return item?.id === revision.itemId
+      && itemTurnId(item) === sourceTurnId
+      && isNativeInstruction(item, metadata);
+  });
+  if (sourceIndex < 0) return false;
+
+  let sawSourceAbort = false;
+  for (let index = sourceIndex + 1; index < input.length; index += 1) {
+    const item = record(input[index]);
+    if (!item) continue;
+
+    if (item.type === "message" && item.role === "user" && isTurnAbortedNotice(item)) {
+      if (itemTurnId(item) === sourceTurnId) sawSourceAbort = true;
+      continue;
+    }
+    if (hasEnvironmentContextFragment(item)) continue;
+    if (item.type === "message" && item.role === "developer") continue;
+
+    // Anything else after the source instruction means this is no longer a clean provider retry.
+    // In particular, reject assistant/reasoning/tool output and any newer user/delegated instruction.
+    return false;
+  }
+  return sawSourceAbort;
+}
+
+/**
  * Return the latest instruction owned by the current native Codex turn.
  *
  * Provider rounds replay the same instruction and steering appends a newer one. Remote
@@ -256,8 +302,8 @@ export function extractChatGptTurnUserRevision(parsed: CodexParsedRequest): unkn
   // under its new turn id without adding a new human message. Accept only our exact completed
   // checkpoint; an arbitrary older prompt is still not a new instruction or a valid handoff.
   if (revision.turnId !== undefined && revision.turnId !== turnId
-    && (priorChatGptAbortedTurnIds(parsed).includes(revision.turnId)
-      || !isAcceptedCompactionContinuation(parsed, identity, revision))) {
+    && !isAcceptedCompactionContinuation(parsed, identity, revision)
+    && !isAcceptedAbortedTurnRetry(parsed, identity, revision)) {
     throw new Error(CHATGPT_TURN_REVISION_CONFLICT_MESSAGE);
   }
   return revision.content;
