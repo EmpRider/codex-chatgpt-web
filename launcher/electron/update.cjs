@@ -6,7 +6,7 @@ const path = require("node:path");
 const { spawn, spawnSync } = require("node:child_process");
 const { pipeline } = require("node:stream/promises");
 
-const REPOSITORY = "miuuyy/codex-chatgpt-web";
+const REPOSITORY = "EmpRider/codex-chatgpt-web";
 const RELEASE_API_URL = `https://api.github.com/repos/${REPOSITORY}/releases/latest`;
 const USER_AGENT = "codex-web-gpt-launcher-updater";
 const MAX_REDIRECTS = 5;
@@ -157,6 +157,20 @@ function findMacApplication(root) {
   return application;
 }
 
+function linuxUpdateInstallation() {
+  const guidance = "Quit Codex Web GPT, run install-launcher.sh from the README once, then reopen the installed app. Your settings and browser profile are preserved.";
+  const target = process.env.CODEX_WEB_GPT_APPIMAGE?.trim()
+    || process.env.APPIMAGE?.trim();
+  if (!target || !path.isAbsolute(target)) {
+    throw new Error(`The running Linux AppImage path is unavailable. ${guidance}`);
+  }
+  const wrapper = process.env.CODEX_WEB_GPT_LAUNCHER_EXECUTABLE?.trim();
+  if (!wrapper || !path.isAbsolute(wrapper)) {
+    throw new Error(`Linux auto-update requires the stable install-launcher.sh wrapper. ${guidance}`);
+  }
+  return { target, wrapper };
+}
+
 function buildJob({ version, platform, executablePath, assetPath, stagingRoot, tempRoot, logPath }) {
   if (platform === "darwin") {
     return {
@@ -181,15 +195,7 @@ function buildJob({ version, platform, executablePath, assetPath, stagingRoot, t
     };
   }
   if (platform === "linux") {
-    const target = process.env.CODEX_WEB_GPT_APPIMAGE?.trim()
-      || process.env.APPIMAGE?.trim();
-    if (!target || !path.isAbsolute(target)) {
-      throw new Error("The running Linux AppImage path is unavailable; reinstall with install-launcher.sh");
-    }
-    const wrapper = process.env.CODEX_WEB_GPT_LAUNCHER_EXECUTABLE?.trim();
-    if (!wrapper || !path.isAbsolute(wrapper)) {
-      throw new Error("Linux auto-update requires the stable install-launcher.sh wrapper; reinstall once");
-    }
+    const { target, wrapper } = linuxUpdateInstallation();
     return {
       version,
       platform,
@@ -311,6 +317,7 @@ function createUpdateController({
   async function beginInstall() {
     if (pending) throw new Error("An update is already being prepared");
     if (state.status !== "available" || !candidate) throw new Error("No launcher update is available");
+    if (platform === "linux") linuxUpdateInstallation();
     const available = candidate;
     pending = (async () => {
       transition({ status: "downloading", version: available.version });
