@@ -155,6 +155,17 @@ test("compaction capability is one-shot and structurally bound to its handoff id
   store.close();
 });
 
+test("compaction transaction TTL renews while a live handoff is making progress", async () => {
+  const store = new CompactionTransactionStore();
+  const transaction = store.begin("trace_compaction_renew", 40);
+  await Bun.sleep(25);
+  store.renew(transaction.token, 60);
+  await Bun.sleep(35);
+  store.submit(transaction.token, transaction.handoffId, "renewed checkpoint");
+  await expect(store.wait(transaction.token)).resolves.toBe("renewed checkpoint");
+  store.close();
+});
+
 test("retained compaction provides one exact same-agent control binding", () => {
   const prompt = structuredCompactionHandoffInstruction({
     token: "control_11111111111111111111111111111111",
@@ -315,6 +326,7 @@ test("a completed retained agent returns an exact checkpoint and its browser is 
       };
     },
     waitForCompactionHandoff: async () => "Retained agent checkpoint",
+    renewCompactionTransaction: (_token: string, ttlMs: number) => { transactionTtl = ttlMs; },
     abortCompactionTransaction: () => { transactionAborted = true; },
   } as unknown as TurnBroker;
   const worker = {
@@ -372,6 +384,7 @@ test("completed retained compaction never treats ordinary assistant text as a ha
       handoffId: "handoff_22222222222222222222222222222222",
     }),
     waitForCompactionHandoff: async () => { throw new Error("structured handoff missing"); },
+    renewCompactionTransaction() {},
     abortCompactionTransaction() {},
   } as unknown as TurnBroker;
   const worker = {
@@ -407,6 +420,7 @@ test("retained compaction deadline bounds browser settlement after the control h
       handoffId: "handoff_22222222222222222222222222222222",
     }),
     waitForCompactionHandoff: async () => "Already submitted checkpoint",
+    renewCompactionTransaction() {},
     abortCompactionTransaction: () => { transactionAborted = true; },
   } as unknown as TurnBroker;
   const worker = {
@@ -441,12 +455,14 @@ test("retained compaction heartbeats renew the handoff liveness deadline", async
   let submitHandoff!: (summary: string) => void;
   const handoff = new Promise<string>(resolve => { submitHandoff = resolve; });
   let progress = 0;
+  let renewals = 0;
   const broker = {
     beginCompactionTransaction: async () => ({
       token: "control_11111111111111111111111111111111",
       handoffId: "handoff_22222222222222222222222222222222",
     }),
     waitForCompactionHandoff: async () => await handoff,
+    renewCompactionTransaction() { renewals += 1; },
     abortCompactionTransaction() {},
   } as unknown as TurnBroker;
   const worker = {
@@ -478,6 +494,7 @@ test("retained compaction heartbeats renew the handoff liveness deadline", async
     () => { progress += 1; },
   )).resolves.toBe("Heartbeat-renewed checkpoint");
   expect(progress).toBeGreaterThanOrEqual(4);
+  expect(renewals).toBeGreaterThanOrEqual(3);
 });
 
 test("a rejected exact compaction run is evicted while a successful run remains replayable", async () => {
@@ -1399,6 +1416,12 @@ test.each([false, true])("fresh multipart compaction preserves phase budgets wit
     mock.timers.tick(25);
     expect(turn.abortSignal?.aborted).toBeFalse();
     turn.onSubmitted!();
+    expect(turn.onHeartbeat).toBeDefined();
+    for (let heartbeat = 0; heartbeat < 4; heartbeat += 1) {
+      mock.timers.tick(25);
+      expect(turn.abortSignal?.aborted).toBeFalse();
+      turn.onHeartbeat!();
+    }
     mock.timers.tick(25);
     expect(turn.abortSignal?.aborted).toBeFalse();
     return "Fallback checkpoint after separately bounded phases";

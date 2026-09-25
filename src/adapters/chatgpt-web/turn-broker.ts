@@ -362,6 +362,10 @@ export class TurnBroker implements TurnBrokerOwner {
     return this.compactionTransactions.wait(token, signal);
   }
 
+  renewCompactionTransaction(token: string, ttlMs: number): void {
+    this.compactionTransactions.renew(token, ttlMs);
+  }
+
   abortCompactionTransaction(token: string): void {
     this.compactionTransactions.abort(token);
   }
