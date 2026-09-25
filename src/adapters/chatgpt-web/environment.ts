@@ -311,10 +311,17 @@ export function extractChatGptTurnUserRevision(parsed: CodexParsedRequest): unkn
   // A pre-turn compact may summarize an earlier user message before native Codex continues
   // under its new turn id without adding a new human message. Accept only our exact completed
   // checkpoint; an arbitrary older prompt is still not a new instruction or a valid handoff.
-  if (revision.turnId !== undefined && revision.turnId !== turnId
-    && !isAcceptedCompactionContinuation(parsed, identity, revision)
-    && !isAcceptedAbortedTurnRetry(parsed, identity, revision)) {
-    throw new Error(CHATGPT_TURN_REVISION_CONFLICT_MESSAGE);
+  if (revision.turnId !== undefined && revision.turnId !== turnId) {
+    const acceptedCompaction = isAcceptedCompactionContinuation(parsed, identity, revision);
+    const sourceWasAborted = priorChatGptAbortedTurnIds(parsed).includes(revision.turnId);
+    const acceptedProviderRetry = !acceptedCompaction
+      && isAcceptedAbortedTurnRetry(parsed, identity, revision);
+    // Preserve the original fail-closed compaction rule: an abort invalidates a checkpoint
+    // continuation. The narrow exception applies only to a non-compaction provider retry.
+    if ((acceptedCompaction && sourceWasAborted)
+      || (!acceptedCompaction && !acceptedProviderRetry)) {
+      throw new Error(CHATGPT_TURN_REVISION_CONFLICT_MESSAGE);
+    }
   }
   return revision.content;
 }
