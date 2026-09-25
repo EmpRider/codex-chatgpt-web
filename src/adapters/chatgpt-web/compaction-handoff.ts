@@ -290,6 +290,7 @@ export async function requestRetainedCompactionHandoff(
   const operationTimeoutMs = boundedCompactionTimeout(timeoutMs);
   const deadline = new AbortController();
   let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
+  let transaction: CompactionTransactionHandle | undefined;
   const reportProgress = (): void => {
     if (deadline.signal.aborted) return;
     if (deadlineTimer) clearTimeout(deadlineTimer);
@@ -298,6 +299,7 @@ export async function requestRetainedCompactionHandoff(
       operationTimeoutMs,
     );
     deadlineTimer.unref?.();
+    if (transaction) broker.renewCompactionTransaction(transaction.token, operationTimeoutMs);
     onProgress?.();
   };
   reportProgress();
@@ -306,7 +308,6 @@ export async function requestRetainedCompactionHandoff(
     : deadline.signal;
   const browserAbort = new AbortController();
   const abortBrowser = () => browserAbort.abort(operationSignal.reason);
-  let transaction: CompactionTransactionHandle | undefined;
   let browser: Promise<string> | undefined;
   if (operationSignal.aborted) abortBrowser();
   else operationSignal.addEventListener("abort", abortBrowser, { once: true });
