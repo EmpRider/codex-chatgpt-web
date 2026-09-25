@@ -41,6 +41,16 @@ export function cleanChatGptConversationDocument(
   const turnsToPrune = turns.filter(turn => !retainedTurns.has(turn));
 
   for (const turn of turnsToPrune) {
+    // New ChatGPT renderer: data-turn-key is the stable logical shell for the exchange.
+    // Keep that shell while removing its heavy rendered children so the worker's baseline
+    // cannot mistake an old remounted turn for a newly submitted user message.
+    if (turn.hasAttribute?.("data-turn-key")) {
+      turn.replaceChildren();
+      turn.setAttribute("aria-hidden", "true");
+      turn.setAttribute("data-chat-cleaned", "true");
+      continue;
+    }
+
     const identityContainer = turn.closest<HTMLElement>("[data-turn-id-container]");
     if (identityContainer !== turn) {
       turn.remove();
