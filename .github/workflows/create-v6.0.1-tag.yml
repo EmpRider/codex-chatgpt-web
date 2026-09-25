@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: write
+  actions: write
 
 jobs:
   tag:
@@ -22,9 +23,13 @@ jobs:
           set -euo pipefail
           if git ls-remote --exit-code --tags origin refs/tags/v6.0.1 >/dev/null 2>&1; then
             echo "v6.0.1 already exists"
-            exit 0
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git tag v6.0.1 "$TARGET_SHA"
+            git push origin refs/tags/v6.0.1
           fi
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag v6.0.1 "$TARGET_SHA"
-          git push origin refs/tags/v6.0.1
+      - name: Dispatch release workflow
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run release.yml --repo "$GITHUB_REPOSITORY" --ref v6.0.1
