@@ -274,8 +274,8 @@ function isAcceptedAbortedTurnRetry(
       if (itemTurnId(item) === sourceTurnId) sawSourceAbort = true;
       continue;
     }
-    if (hasEnvironmentContextFragment(item)) continue;
     if (item.type === "message" && item.role === "developer") continue;
+    if (hasEnvironmentContextFragment(item)) continue;
 
     // Anything else after the source instruction means this is no longer a clean provider retry.
     // In particular, reject assistant/reasoning/tool output and any newer user/delegated instruction.
