@@ -1070,6 +1070,7 @@ export function createChatGptWebAdapter(
                         source,
                         broker,
                         operationSignal,
+                        armHandoffDeadline,
                       );
                       if (zeroRiskSummary === undefined) {
                         preserveFinalResponse = true;
@@ -1091,6 +1092,7 @@ export function createChatGptWebAdapter(
                         source,
                         structuredBroker!,
                         operationSignal,
+                        armHandoffDeadline,
                       );
                       preserveFinalResponse = !settlement.compactionInstructionDelivered;
                       armHandoffDeadline();
