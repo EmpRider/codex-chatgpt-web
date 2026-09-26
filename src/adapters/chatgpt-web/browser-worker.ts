@@ -1631,10 +1631,10 @@ export class ChatGptTurnDomHealthTracker {
     externalProgressLive?: boolean;
   }, now = Date.now()): string | undefined {
     if (state.responsePresent) this.sawResponse = true;
-    if (state.externalProgressLive) {
-      // Every conclusion below asserts that ChatGPT stopped producing this turn. A tool call that
-      // is still completing disproves all of them, whatever the renderer is currently exposing, so
-      // no window may accrue while the model is provably working.
+    if (state.externalProgressLive || state.running) {
+      // Every conclusion below asserts that ChatGPT stopped producing this turn. A current Stop
+      // control or a tool call that is still completing disproves all of them, whatever the
+      // renderer is currently exposing, so no window may accrue while the model is provably working.
       this.missingResponseSince = undefined;
       this.emptyCompletionSince = undefined;
       this.missingCompletionAction = undefined;
@@ -3120,7 +3120,8 @@ export class ChatGptBrowserWorker {
       } catch (error) {
         const latestProgress = externalProgress?.snapshot();
         if (error instanceof ChatGptBrowserObservationTimeoutError && recoverObservation) {
-          recoveryAttempts += 1;
+          const progressLive = chatGptExternalProgressIsLive(latestProgress, Date.now(), graceMs);
+          recoveryAttempts = progressLive ? 0 : recoveryAttempts + 1;
           if (recoveryAttempts > MAX_CHATGPT_BROWSER_PAGE_REBINDS) {
             throw new Error(
               `ChatGPT accepted the message, but its DOM remained unresponsive after ${MAX_CHATGPT_BROWSER_PAGE_REBINDS} same-page rebinds`,
@@ -3128,7 +3129,7 @@ export class ChatGptBrowserWorker {
             );
           }
           const recovered = await recoverObservation(
-            recoveryAttempts,
+            Math.max(1, recoveryAttempts),
             error,
             observationBaseline,
             signal,
@@ -5288,7 +5289,9 @@ export class ChatGptBrowserWorker {
           continue;
         }
 
-        let snapshot = await this.responseDomSnapshot(responseTurn.locator, responseDomCache);
+        let snapshot = await withChatGptBrowserObservationTimeout(
+          this.responseDomSnapshot(responseTurn.locator, responseDomCache),
+        );
         if (!snapshot.responsePresent) {
           try {
             const rebound = await withChatGptBrowserObservationTimeout(
@@ -5307,14 +5310,18 @@ export class ChatGptBrowserWorker {
             }
           } catch (error) {
             if (!(error instanceof ChatGptBrowserObservationTimeoutError) || !launcherSurfaceId) throw error;
-            consecutiveObservationRebinds += 1;
+            const liveProgress = chatGptExternalProgressSuppressesDomHealth(
+              turn.externalProgress?.snapshot(),
+              Date.now(),
+            );
+            consecutiveObservationRebinds = liveProgress ? 0 : consecutiveObservationRebinds + 1;
             if (consecutiveObservationRebinds > MAX_CHATGPT_BROWSER_PAGE_REBINDS) {
               throw new Error(
                 `ChatGPT browser DOM remained unresponsive after ${MAX_CHATGPT_BROWSER_PAGE_REBINDS} same-page rebinds`,
                 { cause: error },
               );
             }
-            await rebindLauncherPage(consecutiveObservationRebinds, error, turn.abortSignal);
+            await rebindLauncherPage(Math.max(1, consecutiveObservationRebinds), error, turn.abortSignal);
             submissionBaseline = {
               ...submissionBaseline,
               userTurns: page.locator(CHATGPT_USER_TURN_SELECTOR),
