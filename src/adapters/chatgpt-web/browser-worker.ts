@@ -1205,6 +1205,17 @@ export class ChatGptBrowserObservationTimeoutError extends Error {
   }
 }
 
+/**
+ * The browser rendered an accepted ChatGPT turn into an internally inconsistent/transient DOM
+ * state. On launcher-owned surfaces this is observation failure, not proof the model stopped.
+ */
+export class ChatGptDomHealthObservationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ChatGptDomHealthObservationError";
+  }
+}
+
 export async function withChatGptBrowserObservationTimeout<T>(
   operation: Promise<T>,
   timeoutMs = CHATGPT_BROWSER_OBSERVATION_PROBE_TIMEOUT_MS,
@@ -3819,7 +3830,7 @@ export class ChatGptBrowserWorker {
         completionActionVisible: snapshot.completionActionVisible,
         externalProgressLive,
       });
-      if (domError) throw new Error(domError);
+      if (domError) throw new ChatGptDomHealthObservationError(domError);
       if (completionTracker.update({
         responsePresent: snapshot.responsePresent,
         running,
@@ -5250,7 +5261,7 @@ export class ChatGptBrowserWorker {
           retryable: false,
         });
       };
-      const domHealthTracker = new ChatGptTurnDomHealthTracker();
+      let domHealthTracker = new ChatGptTurnDomHealthTracker();
       const responseDomCache: ChatGptResponseDomCache = {};
       let consecutiveObservationRebinds = 0;
       let internalObservationFaults = 0;
@@ -5401,7 +5412,7 @@ export class ChatGptBrowserWorker {
             completionActionVisible: snapshot.completionActionVisible,
             externalProgressLive,
           });
-          if (domError) throw new Error(domError);
+          if (domError) throw new ChatGptDomHealthObservationError(domError);
           const completionReady = completionTracker.update({
             responsePresent: snapshot.responsePresent,
             running,
@@ -5479,7 +5490,7 @@ export class ChatGptBrowserWorker {
             completionActionVisible: false,
             externalProgressLive,
           });
-          if (domError) throw new Error(domError);
+          if (domError) throw new ChatGptDomHealthObservationError(domError);
         }
         await new Promise(resolveSleep => setTimeout(resolveSleep, 250));
        } catch (error) {
@@ -5487,7 +5498,8 @@ export class ChatGptBrowserWorker {
         // launcher-owned page rather than converting an accepted task into a terminal disconnect.
         // Proven MCP activity resets the consecutive rebind budget because it demonstrates that
         // the upstream turn is still alive even while its renderer is temporarily unobservable.
-        if (error instanceof ChatGptBrowserObservationTimeoutError && launcherSurfaceId) {
+        if ((error instanceof ChatGptBrowserObservationTimeoutError
+          || error instanceof ChatGptDomHealthObservationError) && launcherSurfaceId) {
           const liveProgress = chatGptExternalProgressSuppressesDomHealth(
             turn.externalProgress?.snapshot(),
             Date.now(),
@@ -5512,7 +5524,16 @@ export class ChatGptBrowserWorker {
           };
           responseDomCache.key = undefined;
           responseDomCache.snapshot = undefined;
-          await diagnostics.capture(page, "response-page-rebound");
+          // A freshly rebound launcher page gets a fresh DOM-health grace window. The previous
+          // timestamps described the old renderer projection and must not immediately fail the
+          // recovered page before it has a chance to expose the same live turn.
+          domHealthTracker = new ChatGptTurnDomHealthTracker();
+          await diagnostics.capture(
+            page,
+            error instanceof ChatGptDomHealthObservationError
+              ? "response-dom-health-rebound"
+              : "response-page-rebound",
+          );
           continue;
         }
 
