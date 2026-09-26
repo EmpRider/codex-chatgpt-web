@@ -3924,7 +3924,7 @@ test("browser DOM health keeps a visibly running turn alive and fails closed aft
 
   const empty = new ChatGptTurnDomHealthTracker(1_000, 500);
   const terminal = {
-    ...absent,
+    ...absentStopped,
     responsePresent: true,
     running: false,
     completionActionVisible: true,
