@@ -1,0 +1,50 @@
+name: Publish Release Tag
+
+on:
+  push:
+    branches:
+      - "publish/v*"
+
+permissions:
+  contents: write
+
+jobs:
+  tag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Validate publish branch and create release tag
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          branch="$GITHUB_REF_NAME"
+          version="${branch#publish/v}"
+          expected_version="$(jq -r .version package.json)"
+
+          if [[ -z "$version" || "$version" == "$branch" ]]; then
+            echo "Publish branch must be named publish/v<version>; got: $branch" >&2
+            exit 1
+          fi
+
+          if [[ "$version" != "$expected_version" ]]; then
+            echo "Publish branch version $version does not match package.json $expected_version" >&2
+            exit 1
+          fi
+
+          git fetch origin main --depth=1
+          if [[ "$(git rev-parse HEAD)" != "$(git rev-parse origin/main)" ]]; then
+            echo "Publish branch must point exactly at the current main HEAD" >&2
+            exit 1
+          fi
+
+          tag="v$version"
+          if git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null 2>&1; then
+            echo "Release tag already exists: $tag" >&2
+            exit 1
+          fi
+
+          git tag "$tag" HEAD
+          git push origin "refs/tags/$tag"
