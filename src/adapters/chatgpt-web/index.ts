@@ -28,7 +28,7 @@ import { chatGptReadOnlyContextWarning, compileChatGptWebPrompt } from "./prompt
 import { createChatGptStructuredOutputValidator } from "./output-validation";
 import { chatGptWebTurnRetryPolicy } from "./retry-policy";
 import { TurnBroker, type BrokerToolRequest, type BrokerToolResult, type TurnBrokerOwner } from "./turn-broker";
-import { ChatGptTextFeed, ChatGptTraceFeed, chatGptCompactionSourceExecutionKey, chatGptInstructionLineage, chatGptThreadOwnershipKey, chatGptTurnExecutionKey, chatGptTurnRetryKey, chatGptTurnRoundKey, chatGptTurnSessions, type ChatGptBrowserOutcome, type ChatGptTraceEvent, type ChatGptTurnRuntime, type ChatGptTurnSession } from "./turn-execution";
+import { ChatGptTextFeed, ChatGptTraceFeed, ChatGptTurnActivity, chatGptCompactionSourceExecutionKey, chatGptInstructionLineage, chatGptThreadOwnershipKey, chatGptTurnExecutionKey, chatGptTurnRetryKey, chatGptTurnRoundKey, chatGptTurnSessions, type ChatGptBrowserOutcome, type ChatGptTraceEvent, type ChatGptTurnRuntime, type ChatGptTurnSession } from "./turn-execution";
 import { estimateChatGptWebUsage, resolveBiggerContextMultipartParts } from "./usage";
 import { ChatGptThreadEnvironmentStore } from "./thread-environment";
 import {
@@ -484,6 +484,11 @@ export function createChatGptWebAdapter(
     });
     const trace = new ChatGptTraceFeed();
     const text = new ChatGptTextFeed();
+    const activity = new ChatGptTurnActivity();
+    const recordBrowserProgress = (visibleTrace?: ChatGptTraceEvent): void => {
+      activity.touch(visibleTrace);
+      hooks.onCompactionProgress?.();
+    };
     const observedCapabilityTokens = new Set<string>();
     const observeCapabilityRetirement = (
       turnToken: string,
@@ -515,12 +520,12 @@ export function createChatGptWebAdapter(
       } : {}),
       onSubmitted: () => {
         if (!parsed._compactionRequest) submission.phase = "accepted";
-        hooks.onCompactionProgress?.();
+        recordBrowserProgress();
       },
     };
-    const multipartProgressLifecycle = hooks.onCompactionProgress
-      ? { onMultipartStageAcknowledged: hooks.onCompactionProgress }
-      : {};
+    const multipartProgressLifecycle = {
+      onMultipartStageAcknowledged: () => recordBrowserProgress(),
+    };
     if (manualRequest) {
       if (!environment) throw new Error("ChatGPT Zero Risk requires a trusted Codex environment");
       if (!retainedLauncherDescriptor) throw new Error("ChatGPT Zero Risk requires the Launcher browser host");
@@ -666,6 +671,7 @@ export function createChatGptWebAdapter(
         externalProgress,
         browser: browserTurn.browser,
         physicalSettlement: browserTurn.physicalSettlement,
+        activity,
         trace,
         text,
         usageInput: checkpointInput.parsed,
@@ -725,10 +731,21 @@ export function createChatGptWebAdapter(
         ...(parsed._compactionRequest ? { compaction: true } : {}),
         ...submissionLifecycle,
         ...multipartProgressLifecycle,
-        ...(hooks.onCompactionProgress ? { onHeartbeat: hooks.onCompactionProgress } : {}),
-        onReasoningSummary: (text, continuation) => trace.push({ kind: "reasoning", text, ...(continuation ? { continuation: true } : {}) }),
-        onCommentary: (text, continuation) => trace.push({ kind: "commentary", text, ...(continuation ? { continuation: true } : {}) }),
-        onTextDelta: delta => text.push(delta),
+        onHeartbeat: () => recordBrowserProgress(),
+        onReasoningSummary: (text, continuation) => {
+          const event: ChatGptTraceEvent = { kind: "reasoning", text, ...(continuation ? { continuation: true } : {}) };
+          trace.push(event);
+          recordBrowserProgress(event);
+        },
+        onCommentary: (text, continuation) => {
+          const event: ChatGptTraceEvent = { kind: "commentary", text, ...(continuation ? { continuation: true } : {}) };
+          trace.push(event);
+          recordBrowserProgress(event);
+        },
+        onTextDelta: delta => {
+          text.push(delta);
+          recordBrowserProgress();
+        },
         ...(captureLunaCheckpoint ? {
           captureLunaCheckpoint: true,
           onLunaCheckpoint: captureCheckpoint,
@@ -738,6 +755,7 @@ export function createChatGptWebAdapter(
         mode: "read-only",
         browser: browserTurn.browser,
         physicalSettlement: browserTurn.physicalSettlement,
+        activity,
         trace,
         text,
         usageInput: checkpointInput.parsed,
@@ -796,10 +814,21 @@ export function createChatGptWebAdapter(
       ...(parsed._compactionRequest ? { compaction: true } : {}),
       ...submissionLifecycle,
       ...multipartProgressLifecycle,
-      ...(hooks.onCompactionProgress ? { onHeartbeat: hooks.onCompactionProgress } : {}),
-      onReasoningSummary: (text, continuation) => trace.push({ kind: "reasoning", text, ...(continuation ? { continuation: true } : {}) }),
-      onCommentary: (text, continuation) => trace.push({ kind: "commentary", text, ...(continuation ? { continuation: true } : {}) }),
-      onTextDelta: delta => text.push(delta),
+      onHeartbeat: () => recordBrowserProgress(),
+      onReasoningSummary: (text, continuation) => {
+          const event: ChatGptTraceEvent = { kind: "reasoning", text, ...(continuation ? { continuation: true } : {}) };
+          trace.push(event);
+          recordBrowserProgress(event);
+        },
+      onCommentary: (text, continuation) => {
+          const event: ChatGptTraceEvent = { kind: "commentary", text, ...(continuation ? { continuation: true } : {}) };
+          trace.push(event);
+          recordBrowserProgress(event);
+        },
+      onTextDelta: delta => {
+          text.push(delta);
+          recordBrowserProgress();
+        },
       externalProgress,
       completionFence: {
         begin: async () => broker.beginCompletionFence(await token.promise),
@@ -822,6 +851,7 @@ export function createChatGptWebAdapter(
       externalProgress,
       browser: browserTurn.browser,
       physicalSettlement: browserTurn.physicalSettlement,
+      activity,
       trace,
       text,
       usageInput: checkpointInput.parsed,
@@ -1040,6 +1070,7 @@ export function createChatGptWebAdapter(
                         source,
                         broker,
                         operationSignal,
+                        armHandoffDeadline,
                       );
                       if (zeroRiskSummary === undefined) {
                         preserveFinalResponse = true;
@@ -1061,6 +1092,7 @@ export function createChatGptWebAdapter(
                         source,
                         structuredBroker!,
                         operationSignal,
+                        armHandoffDeadline,
                       );
                       preserveFinalResponse = !settlement.compactionInstructionDelivered;
                       armHandoffDeadline();

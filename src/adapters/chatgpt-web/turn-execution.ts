@@ -98,6 +98,91 @@ interface TextWaiter {
 }
 
 /** Append-only browser Markdown feed. Waiters are notifications; `drain` owns consumption. */
+export interface ChatGptTurnActivitySnapshot {
+  revision: number;
+  visibleRevision: number;
+  visibleTrace?: ChatGptTraceEvent;
+}
+
+interface ActivityWaiter {
+  afterRevision: number;
+  resolve: (snapshot: ChatGptTurnActivitySnapshot) => void;
+  reject: (error: Error) => void;
+  signal?: AbortSignal;
+  onAbort?: () => void;
+}
+
+/**
+ * Non-consuming liveness channel for one browser turn.
+ *
+ * Normal Responses observers own the trace/text drain queues. Compaction therefore cannot safely
+ * consume those queues just to prove that an already-running ChatGPT turn is still alive. This
+ * feed mirrors browser progress by revision so a later compaction observer can subscribe without
+ * stealing any user-visible output from the original turn.
+ */
+export class ChatGptTurnActivity {
+  private revision = 0;
+  private visibleRevision = 0;
+  private visibleTrace?: ChatGptTraceEvent;
+  private readonly waiters = new Set<ActivityWaiter>();
+
+  snapshot(): ChatGptTurnActivitySnapshot {
+    return {
+      revision: this.revision,
+      visibleRevision: this.visibleRevision,
+      ...(this.visibleTrace ? { visibleTrace: { ...this.visibleTrace } } : {}),
+    };
+  }
+
+  touch(visibleTrace?: ChatGptTraceEvent): ChatGptTurnActivitySnapshot {
+    this.revision += 1;
+    if (visibleTrace) {
+      this.visibleRevision = this.revision;
+      this.visibleTrace = { ...visibleTrace };
+    }
+    const snapshot = this.snapshot();
+    for (const waiter of [...this.waiters]) {
+      if (snapshot.revision <= waiter.afterRevision) continue;
+      this.waiters.delete(waiter);
+      if (waiter.signal && waiter.onAbort) {
+        waiter.signal.removeEventListener("abort", waiter.onAbort);
+      }
+      waiter.resolve(snapshot);
+    }
+    return snapshot;
+  }
+
+  waitForChange(
+    afterRevision: number,
+    signal?: AbortSignal,
+  ): Promise<ChatGptTurnActivitySnapshot> {
+    if (!Number.isSafeInteger(afterRevision) || afterRevision < 0) {
+      throw new Error("ChatGPT turn activity revision must be a non-negative safe integer");
+    }
+    const current = this.snapshot();
+    if (current.revision > afterRevision) return Promise.resolve(current);
+    if (signal?.aborted) {
+      return Promise.reject(new DOMException("ChatGPT turn activity wait aborted", "AbortError"));
+    }
+    return new Promise((resolve, reject) => {
+      const waiter: ActivityWaiter = {
+        afterRevision,
+        resolve,
+        reject,
+        ...(signal ? { signal } : {}),
+      };
+      if (signal) {
+        waiter.onAbort = () => {
+          this.waiters.delete(waiter);
+          reject(new DOMException("ChatGPT turn activity wait aborted", "AbortError"));
+        };
+        signal.addEventListener("abort", waiter.onAbort, { once: true });
+      }
+      this.waiters.add(waiter);
+    });
+  }
+}
+
 export class ChatGptTextFeed {
   private readonly queued: string[] = [];
   private readonly waiters = new Set<TextWaiter>();
@@ -141,6 +226,8 @@ export class ChatGptTextFeed {
 
 interface ChatGptTurnRuntimeBase {
   browser: Promise<string>;
+  /** Non-consuming browser liveness observable used by late compaction handoffs. */
+  activity?: ChatGptTurnActivity;
   /** Physical helper/Playwright settlement, including the launcher end/release acknowledgement. */
   physicalSettlement: Promise<void>;
   trace: ChatGptTraceFeed;

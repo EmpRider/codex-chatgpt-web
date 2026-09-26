@@ -9,7 +9,8 @@ import {
 } from "./compaction-transaction";
 import {
   assertChatGptWebMcpContextTransport,
-  chatGptWebMcpContextChunk,
+  CHATGPT_WEB_MCP_CONTEXT_BATCH_CHUNKS,
+  chatGptWebMcpContextChunkBatch,
   chatGptWebMcpContextManifest,
   type ChatGptWebMcpContextTransport,
 } from "./context-transport";
@@ -131,6 +132,7 @@ interface BrokerRequest {
   contextTransport?: ChatGptWebMcpContextTransport | null;
   contextId?: string;
   chunk?: number;
+  limit?: number;
   ttlMs?: number;
   traceId?: string;
   callId?: string;
@@ -1178,7 +1180,13 @@ export class TurnBroker implements TurnBrokerOwner {
       if (!Number.isSafeInteger(request.chunk) || request.chunk! < 0) {
         throw new Error("Codex MCP context chunk is invalid");
       }
-      return chatGptWebMcpContextChunk(context, request.contextId, request.chunk!);
+      const limit = request.limit ?? 1;
+      if (!Number.isSafeInteger(limit) || limit < 1 || limit > CHATGPT_WEB_MCP_CONTEXT_BATCH_CHUNKS) {
+        throw new Error(
+          `Codex MCP context batch size must be between 1 and ${CHATGPT_WEB_MCP_CONTEXT_BATCH_CHUNKS}`,
+        );
+      }
+      return chatGptWebMcpContextChunkBatch(context, request.contextId, request.chunk!, limit);
     }
     this.assertSafeHarnessRunning(binding.channel);
     if (binding.channel.compactionRequested) {
