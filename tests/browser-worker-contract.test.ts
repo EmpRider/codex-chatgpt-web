@@ -440,6 +440,8 @@ test("a retained MCP conversation reuses its proven connector binding", () => {
 test("browser turns queue beyond the five-tab limit instead of disconnecting", async () => {
   expect(MAX_CHATGPT_BROWSER_TABS).toBe(5);
   const releases = new Map<string, () => void>();
+  let resolveFirstFiveStarted!: () => void;
+  const firstFiveStarted = new Promise<void>(resolve => { resolveFirstFiveStarted = resolve; });
   let resolveSixthStarted!: () => void;
   const sixthStarted = new Promise<void>(resolve => { resolveSixthStarted = resolve; });
   const worker = Object.assign(Object.create(ChatGptBrowserWorker.prototype), {
@@ -448,6 +450,7 @@ test("browser turns queue beyond the five-tab limit instead of disconnecting", a
     scheduledRuns: new Map(),
     runExclusive: (turn: { traceId: string }) => new Promise<string>(resolve => {
       releases.set(turn.traceId, () => resolve(turn.traceId));
+      if (releases.size === 5 && !releases.has("trace_6")) resolveFirstFiveStarted();
       if (turn.traceId === "trace_6") resolveSixthStarted();
     }),
   }) as ChatGptBrowserWorker;
@@ -460,7 +463,10 @@ test("browser turns queue beyond the five-tab limit instead of disconnecting", a
   });
 
   const active = Array.from({ length: 5 }, (_unused, index) => worker.run(browserTurn(`trace_${index + 1}`)));
-  await Promise.resolve();
+  await Promise.race([
+    firstFiveStarted,
+    Bun.sleep(250).then(() => { throw new Error("initial five browser turns did not start"); }),
+  ]);
   expect(releases.size).toBe(5);
 
   const sixth = worker.run(browserTurn("trace_6"));
