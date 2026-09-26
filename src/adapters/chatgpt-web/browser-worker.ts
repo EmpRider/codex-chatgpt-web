@@ -5005,6 +5005,7 @@ export class ChatGptBrowserWorker {
                   return recovered;
                 }
                 : undefined,
+              submissionRejection,
             ),
           );
           console.info(
@@ -5171,6 +5172,7 @@ export class ChatGptBrowserWorker {
               return recovered;
             }
             : undefined,
+          submissionRejection,
         ),
       );
       console.info(`[chatgpt-web] browser turn ${turn.traceId} submission accepted evidence=${finalSubmissionEvidence}`);
