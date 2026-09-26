@@ -873,8 +873,8 @@ export class ChatGptSubmissionRejectionObserver {
     return this.acceptedResponse;
   }
 
-  waitForAcceptance(signal?: AbortSignal): Promise<void> {
-    return withBrowserTurnAbort(this.acceptance, signal);
+  waitForAcceptance(): Promise<void> {
+    return this.acceptance;
   }
 
   async failure(): Promise<ChatGptWebAdapterError | undefined> {
@@ -2826,7 +2826,7 @@ export class ChatGptBrowserWorker {
   ): Promise<void> {
     const domMutation = this.waitForTurnDomMutation(page);
     const acceptance = submissionObserver
-      ? submissionObserver.waitForAcceptance(signal)
+      ? submissionObserver.waitForAcceptance()
       : undefined;
     if (!externalProgress) {
       await withBrowserTurnAbort(Promise.race([
