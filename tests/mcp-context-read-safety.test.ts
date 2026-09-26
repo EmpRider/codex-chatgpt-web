@@ -5,7 +5,8 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  CHATGPT_WEB_MCP_CONTEXT_MIN_CHARS,
+  CHATGPT_WEB_MCP_CONTEXT_BATCH_CHUNKS,
+  CHATGPT_WEB_MCP_CONTEXT_CHUNK_CHARS,
   CHATGPT_WEB_MCP_CONTEXT_READ_WIRE_NAME,
 } from "../src/adapters/chatgpt-web/context-transport";
 import type { ChatGptTurnEnvironment } from "../src/adapters/chatgpt-web/environment";
@@ -64,7 +65,7 @@ test("large Full-mode context loads through the read-only inventory channel", as
   try {
     token = await broker.register(environment(), 60_000, "context-read-safety");
     const compiled = compileChatGptWebPrompt(
-      parsedRequest(`READ-SAFETY-${"x".repeat(CHATGPT_WEB_MCP_CONTEXT_MIN_CHARS + 4096)}`),
+      parsedRequest(`READ-SAFETY-${"x".repeat(CHATGPT_WEB_MCP_CONTEXT_CHUNK_CHARS * 10)}`),
       { localToolsEnabled: true, solAvailable: true, extraHighAvailable: true, proAvailable: true },
       token,
     );
@@ -80,27 +81,49 @@ test("large Full-mode context loads through the read-only inventory channel", as
 
     const context = compiled.contextTransport!;
     const reservedQuery = `${CHATGPT_WEB_MCP_CONTEXT_READ_WIRE_NAME}:${context.contextId}`;
-    const read = await client.callTool({
-      name: "codex_tool_inventory",
-      arguments: {
-        turn_token: token,
-        query: reservedQuery,
-        offset: 0,
-        limit: 1,
-        include_schema: false,
-      },
-    });
+    let offset = 0;
+    let toolCalls = 0;
+    let reconstructed = "";
+    let totalChunks = 0;
+    for (;;) {
+      const read = await client.callTool({
+        name: "codex_tool_inventory",
+        arguments: {
+          turn_token: token,
+          query: reservedQuery,
+          offset,
+          limit: CHATGPT_WEB_MCP_CONTEXT_BATCH_CHUNKS,
+          include_schema: false,
+        },
+      });
 
-    expect(read.isError).not.toBe(true);
-    expect(read.structuredContent).toMatchObject({
-      context_id: context.contextId,
-      sha256: context.sha256,
-      chunk: 0,
-      total_chunks: 2,
-      text: context.text.slice(0, context.chunkChars),
-      next_chunk: 1,
-    });
+      expect(read.isError).not.toBe(true);
+      const body = read.structuredContent as {
+        context_id: string;
+        sha256: string;
+        chunk: number;
+        chunk_count: number;
+        total_chunks: number;
+        text: string;
+        next_chunk: number | null;
+      };
+      expect(body.context_id).toBe(context.contextId);
+      expect(body.sha256).toBe(context.sha256);
+      expect(body.chunk).toBe(offset);
+      expect(body.chunk_count).toBeGreaterThanOrEqual(1);
+      expect(body.chunk_count).toBeLessThanOrEqual(CHATGPT_WEB_MCP_CONTEXT_BATCH_CHUNKS);
+      reconstructed += body.text;
+      totalChunks = body.total_chunks;
+      toolCalls += 1;
+      if (body.next_chunk === null) break;
+      expect(body.next_chunk).toBe(offset + body.chunk_count);
+      offset = body.next_chunk;
+    }
+
+    expect(reconstructed).toBe(context.text);
+    expect(toolCalls).toBe(Math.ceil(totalChunks / CHATGPT_WEB_MCP_CONTEXT_BATCH_CHUNKS));
     expect(compiled.text).toContain(`query ${JSON.stringify(reservedQuery)}`);
+    expect(compiled.text).toContain(`limit ${CHATGPT_WEB_MCP_CONTEXT_BATCH_CHUNKS}`);
     expect(compiled.text).not.toContain("Then call codex_tool_call with the same turn_token");
   } finally {
     if (token) broker.revoke(token);
