@@ -4,6 +4,7 @@ export const CHATGPT_WEB_MCP_PROMPT_JSON_BYTE_THRESHOLD = 32_768;
 /** Backward-compatible name retained for older internal tests and callers. */
 export const CHATGPT_WEB_MCP_CONTEXT_MIN_CHARS = CHATGPT_WEB_MCP_PROMPT_JSON_BYTE_THRESHOLD;
 export const CHATGPT_WEB_MCP_CONTEXT_CHUNK_CHARS = 32_768;
+export const CHATGPT_WEB_MCP_CONTEXT_BATCH_CHUNKS = 5;
 export const CHATGPT_WEB_MCP_CONTEXT_READ_WIRE_NAME = "codex_web_context_read";
 
 export function chatGptWebMcpContextReadQuery(contextId: string): string {
@@ -28,6 +29,7 @@ export interface ChatGptWebMcpContextChunk {
   chars: number;
   bytes: number;
   chunk: number;
+  chunk_count: number;
   total_chunks: number;
   text: string;
   next_chunk: number | null;
@@ -109,25 +111,39 @@ export function chatGptWebMcpContextChunks(
   return chunks.length > 0 ? chunks : [""];
 }
 
-export function chatGptWebMcpContextChunk(
+export function chatGptWebMcpContextChunkBatch(
   context: ChatGptWebMcpContextTransport,
   requestedContextId: string,
   chunk: number,
+  limit = 1,
 ): ChatGptWebMcpContextChunk {
   if (requestedContextId !== context.contextId) {
     throw new Error("Codex MCP context id does not match this turn");
   }
   if (!Number.isSafeInteger(chunk) || chunk < 0) throw new Error("Codex MCP context chunk is invalid");
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > CHATGPT_WEB_MCP_CONTEXT_BATCH_CHUNKS) {
+    throw new Error(`Codex MCP context batch size must be between 1 and ${CHATGPT_WEB_MCP_CONTEXT_BATCH_CHUNKS}`);
+  }
   const chunks = chatGptWebMcpContextChunks(context);
   if (chunk >= chunks.length) throw new Error("Codex MCP context chunk is out of range");
+  const next = Math.min(chunks.length, chunk + limit);
   return {
     context_id: context.contextId,
     sha256: context.sha256,
     chars: context.chars,
     bytes: context.bytes,
     chunk,
+    chunk_count: next - chunk,
     total_chunks: chunks.length,
-    text: chunks[chunk]!,
-    next_chunk: chunk + 1 < chunks.length ? chunk + 1 : null,
+    text: chunks.slice(chunk, next).join(""),
+    next_chunk: next < chunks.length ? next : null,
   };
+}
+
+export function chatGptWebMcpContextChunk(
+  context: ChatGptWebMcpContextTransport,
+  requestedContextId: string,
+  chunk: number,
+): ChatGptWebMcpContextChunk {
+  return chatGptWebMcpContextChunkBatch(context, requestedContextId, chunk, 1);
 }
