@@ -2950,6 +2950,8 @@ test("only a size rejection of the current owned browser submission is non-retry
   }
   expect(bodyReads).toBe(0);
   const successful = makeRequest(); page.emit("request", successful); respond(successful, "message_length_exceeds_limit", 200);
+  expect(observer.accepted()).toBeTrue();
+  await expect(observer.waitForAcceptance()).resolves.toBeUndefined();
   const unfamiliar = makeRequest(); page.emit("request", unfamiliar); respond(unfamiliar, "unknown_error");
   expect(await observer.failure()).toBeUndefined();
   const current = makeRequest(); page.emit("request", current); respond(current);
