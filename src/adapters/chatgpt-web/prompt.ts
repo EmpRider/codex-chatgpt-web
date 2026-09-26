@@ -8,6 +8,7 @@ import {
 } from "../../chatgpt-web-models";
 import { ChatGptWebAdapterError } from "./adapter-error";
 import {
+  CHATGPT_WEB_MCP_CONTEXT_BATCH_CHUNKS,
   CHATGPT_WEB_MCP_PROMPT_JSON_BYTE_THRESHOLD,
   chatGptWebMcpContextChunks,
   chatGptWebMcpContextReadQuery,
@@ -672,8 +673,8 @@ export function compileChatGptWebPrompt(
         `chunk_chars_max: ${contextTransport.chunkChars}`,
         `Use turn_token ${turnToken} unchanged for every Codex Native call in this response.`,
         "The canonical Codex task context is local and is not rendered in this ChatGPT message. Load every context chunk before executing the task or calling any other work tool.",
-        `Load chunk 0 by calling codex_tool_inventory with the turn_token above, query ${JSON.stringify(contextReadQuery)}, offset 0, limit 1, and include_schema false.`,
-        "For every result, append its text field in chunk order. If next_chunk is a number, call codex_tool_inventory again with the same turn_token and query, offset equal to next_chunk, limit 1, and include_schema false. Continue until next_chunk is null.",
+        `Load the first context batch by calling codex_tool_inventory with the turn_token above, query ${JSON.stringify(contextReadQuery)}, offset 0, limit ${CHATGPT_WEB_MCP_CONTEXT_BATCH_CHUNKS}, and include_schema false.`,
+        `Each result's text field contains up to ${CHATGPT_WEB_MCP_CONTEXT_BATCH_CHUNKS} consecutive underlying chunks concatenated in exact order. Append that text directly. If next_chunk is a number, call codex_tool_inventory again with the same turn_token and query, offset equal to next_chunk, limit ${CHATGPT_WEB_MCP_CONTEXT_BATCH_CHUNKS}, and include_schema false. Continue until next_chunk is null.`,
         "Do not route these context reads through codex_tool_call; codex_tool_inventory is the read-only transport for context chunks.",
         `Require every result to report context_id ${contextTransport.contextId} and sha256 ${contextTransport.sha256}. If the reader is missing, any chunk fails, metadata conflicts, or the sequence is incomplete, stop and report the transport failure instead of executing from partial context.`,
         "After all chunks are loaded, parse their concatenation as the single canonical Codex context JSON envelope and apply the role semantics above.",
