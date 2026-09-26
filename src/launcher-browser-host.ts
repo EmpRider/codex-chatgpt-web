@@ -395,7 +395,7 @@ export type LauncherTurnActivity =
     };
 
 // Startup must outlast the launcher's ten-second idle bootstrap. This is not a model-turn budget.
-export const LAUNCHER_TURN_START_TIMEOUT_MS = 30_000;
+export const LAUNCHER_TURN_START_TIMEOUT_MS = 5 * 60_000;
 export const LAUNCHER_TURN_HEARTBEAT_INTERVAL_MS = 10_000;
 export const LAUNCHER_TURN_HEARTBEAT_TIMEOUT_MS = 5_000;
 export const LAUNCHER_TURN_END_TIMEOUT_MS = 15_000;
@@ -639,66 +639,98 @@ export async function notifyLauncherTurn(
   trackUsage?: boolean;
 }> {
   const descriptor = readLauncherBrowserHostDescriptor(descriptorPath);
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const response = await fetch(`${descriptor.control.endpoint}/v1/turn/${activity.phase}`, {
-      method: "POST",
-      headers: {
-        authorization: `Bearer ${descriptor.control.token}`,
-        "content-type": "application/json",
-      },
-      body: JSON.stringify(activity),
-      signal: signal ? AbortSignal.any([controller.signal, signal]) : controller.signal,
-    });
-    if (!response.ok) {
-      const body = await response.json().catch(() => ({})) as Record<string, unknown>;
-      if (response.status === 409 && body.code === "turn_cancelled") {
-        throw new LauncherBrowserTurnCancelledError(
-          typeof body.error === "string" ? body.error : `Browser turn ${activity.traceId} was cancelled by the user`,
-        );
-      }
-      if (response.status === 409 && body.code === "retained_conversation_unavailable") {
-        throw new LauncherRetainedConversationUnavailableError(
-          typeof body.error === "string" ? body.error : "The retained ChatGPT conversation is no longer available",
-        );
-      }
-      const detail = typeof body.error === "string" ? body.error : "";
-      throw new Error(`HTTP ${response.status}${detail ? `: ${detail}` : ""}`);
-    }
-    const body = await response.json().catch(() => ({})) as Record<string, unknown>;
-    if (activity.phase === "start") {
-      if (typeof body.surfaceId !== "string" || !/^[A-Za-z0-9_-]{32}$/.test(body.surfaceId)) {
-        throw new Error("Launcher browser control channel returned an invalid turn surface id");
-      }
-      if (typeof body.reused !== "boolean") {
-        throw new Error("Launcher browser control channel returned an invalid reuse state");
-      }
-      if (typeof body.connectorBound !== "boolean") {
-        throw new Error("Launcher browser control channel returned an invalid connector state");
-      }
-      return {
-        surfaceId: body.surfaceId,
-        reused: body.reused,
-        connectorBound: body.connectorBound,
-        trackUsage: body.trackUsage === true,
-      };
-    }
-    if (activity.phase === "end") {
-      if (typeof body.cancelledByUser !== "boolean") {
-        throw new Error("Launcher browser control channel returned an invalid turn release result");
-      }
-      return { cancelledByUser: body.cancelledByUser };
-    }
-    return {};
-  } catch (error) {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
     if (signal?.aborted) throw new DOMException("Launcher browser acquisition cancelled", "AbortError");
-    if (controller.signal.aborted) throw new Error(`Launcher browser control ${activity.phase} timed out after ${timeoutMs}ms`);
-    if (error instanceof LauncherBrowserTurnCancelledError
-      || error instanceof LauncherRetainedConversationUnavailableError) throw error;
-    throw new Error(`Launcher browser control channel failed: ${error instanceof Error ? error.message : String(error)}`);
-  } finally {
-    clearTimeout(timer);
+    const remainingMs = Math.max(1, deadline - Date.now());
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), remainingMs);
+    try {
+      const response = await fetch(`${descriptor.control.endpoint}/v1/turn/${activity.phase}`, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${descriptor.control.token}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify(activity),
+        signal: signal ? AbortSignal.any([controller.signal, signal]) : controller.signal,
+      });
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({})) as Record<string, unknown>;
+        if (response.status === 429
+          && activity.phase === "start"
+          && body.code === "browser_capacity_exhausted") {
+          if (Date.now() >= deadline) {
+            throw new Error(`Launcher browser control start timed out after ${timeoutMs}ms waiting for a browser slot`);
+          }
+          const requestedDelay = Number(body.retryAfterMs);
+          const retryDelayMs = Number.isFinite(requestedDelay)
+            ? Math.min(2_000, Math.max(100, requestedDelay))
+            : 500;
+          await new Promise<void>((resolve, reject) => {
+            const retryTimer = setTimeout(resolve, Math.min(retryDelayMs, Math.max(1, deadline - Date.now())));
+            const abort = () => {
+              clearTimeout(retryTimer);
+              reject(new DOMException("Launcher browser acquisition cancelled", "AbortError"));
+            };
+            signal?.addEventListener("abort", abort, { once: true });
+            if (signal?.aborted) abort();
+            else retryTimer.unref?.();
+          });
+          continue;
+        }
+        if (response.status === 409 && body.code === "turn_cancelled") {
+          throw new LauncherBrowserTurnCancelledError(
+            typeof body.error === "string" ? body.error : `Browser turn ${activity.traceId} was cancelled by the user`,
+          );
+        }
+        if (response.status === 409 && body.code === "retained_conversation_unavailable") {
+          throw new LauncherRetainedConversationUnavailableError(
+            typeof body.error === "string" ? body.error : "The retained ChatGPT conversation is no longer available",
+          );
+        }
+        const detail = typeof body.error === "string" ? body.error : "";
+        throw new Error(`HTTP ${response.status}${detail ? `: ${detail}` : ""}`);
+      }
+      const body = await response.json().catch(() => ({})) as Record<string, unknown>;
+      if (activity.phase === "start") {
+        if (typeof body.surfaceId !== "string" || !/^[A-Za-z0-9_-]{32}$/.test(body.surfaceId)) {
+          throw new Error("Launcher browser control channel returned an invalid turn surface id");
+        }
+        if (typeof body.reused !== "boolean") {
+          throw new Error("Launcher browser control channel returned an invalid reuse state");
+        }
+        if (typeof body.connectorBound !== "boolean") {
+          throw new Error("Launcher browser control channel returned an invalid connector state");
+        }
+        return {
+          surfaceId: body.surfaceId,
+          reused: body.reused,
+          connectorBound: body.connectorBound,
+          trackUsage: body.trackUsage === true,
+        };
+      }
+      if (activity.phase === "end") {
+        if (typeof body.cancelledByUser !== "boolean") {
+          throw new Error("Launcher browser control channel returned an invalid turn release result");
+        }
+        return { cancelledByUser: body.cancelledByUser };
+      }
+      return {};
+    } catch (error) {
+      if (signal?.aborted) throw new DOMException("Launcher browser acquisition cancelled", "AbortError");
+      if (controller.signal.aborted) {
+        throw new Error(`Launcher browser control ${activity.phase} timed out after ${timeoutMs}ms`);
+      }
+      if (error instanceof LauncherBrowserTurnCancelledError
+        || error instanceof LauncherRetainedConversationUnavailableError) throw error;
+      if (activity.phase === "start"
+        && error instanceof Error
+        && error.message.startsWith("Launcher browser control start timed out")) throw error;
+      throw new Error(`Launcher browser control channel failed: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      clearTimeout(timer);
+    }
   }
 }
 
