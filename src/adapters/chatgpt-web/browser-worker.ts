@@ -1542,6 +1542,27 @@ export function chatGptReboundTurnIdentity(
   return chatGptNewTurnIdentity(initial, current);
 }
 
+export class ChatGptPostToolFinalAnswerMissingError extends Error {
+  constructor() {
+    super("ChatGPT completed without producing a final answer after its last Codex tool call");
+    this.name = "ChatGptPostToolFinalAnswerMissingError";
+  }
+}
+
+/**
+ * One bounded, tool-less continuation used only after the broker has atomically sealed tool access.
+ * The original conversation already contains the user's request and every settled tool result.
+ */
+export const CHATGPT_POST_TOOL_FINALIZATION_PROMPT = [
+  "<codex_post_tool_finalization>",
+  "The previous assistant turn finished its last Codex Native tool call but ended before writing the required user-facing final answer.",
+  "All Codex Native activity for that turn is now sealed. Do not call any tool or connector in this recovery message.",
+  "Using the original request and the tool results already present in this conversation, write the complete final user-facing answer now.",
+  "Preserve the original requested output format and any private checkpoint/output requirements. Do not repeat completed side effects or claim new tool work.",
+  "Do not mention this recovery message, the bridge, or the transport. Return only the answer the original user should receive.",
+  "</codex_post_tool_finalization>",
+].join("\n");
+
 export class ChatGptCompletionTracker {
   private candidate?: { signature: string; since: number };
   private lastToolBatchRevision = 0;
@@ -1571,6 +1592,11 @@ export class ChatGptCompletionTracker {
     return true;
   }
 
+  resetMissingPostToolAnswerGrace(): void {
+    this.missingPostToolAnswerSince = undefined;
+    this.candidate = undefined;
+  }
+
   update(
     state: Parameters<typeof chatGptTurnIsComplete>[0] & {
       externalToolCallsInFlight?: boolean;
@@ -1594,7 +1620,7 @@ export class ChatGptCompletionTracker {
       }
       this.missingPostToolAnswerSince ??= now;
       if (now - this.missingPostToolAnswerSince >= this.missingPostToolAnswerMs) {
-        throw new Error("ChatGPT completed without producing a final answer after its last Codex tool call");
+        throw new ChatGptPostToolFinalAnswerMissingError();
       }
       return false;
     }
@@ -5180,7 +5206,8 @@ export class ChatGptBrowserWorker {
         this.attachFiles(page, prepared)
       ));
       await diagnostics.capture(page, "file-attachment-complete");
-      const completionTracker = new ChatGptCompletionTracker();
+      let completionTracker = new ChatGptCompletionTracker();
+      let activeExternalProgress = turn.externalProgress;
       const recordFinalUsage = await usageSubmission();
       const finalSubmissionEvidence = await this.runStage(
         turn.traceId,
@@ -5219,7 +5246,7 @@ export class ChatGptBrowserWorker {
         submissionBaseline,
         deadline,
         turn.abortSignal,
-        turn.externalProgress,
+        activeExternalProgress,
         CHATGPT_RESPONSE_DOM_GRACE_MS,
         completionTracker,
         launcherObservationRecovery
@@ -5237,12 +5264,14 @@ export class ChatGptBrowserWorker {
       let sawRunning = false;
       let loggedCompletionWait = false;
       let capturedResponse = false;
-      const sentAt = Date.now();
-      const visibleTrace = new ChatGptVisibleTraceTracker();
-      const markdownBuffer = new ChatGptMarkdownBuffer();
-      const checkpointStream = turn.captureLunaCheckpoint
+      let sentAt = Date.now();
+      let visibleTrace = new ChatGptVisibleTraceTracker();
+      let markdownBuffer = new ChatGptMarkdownBuffer();
+      let checkpointStream = turn.captureLunaCheckpoint
         ? new ChatGptLunaCheckpointStream()
         : undefined;
+      let localToolsActive = mode.localTools;
+      let postToolFinalizationAttempted = false;
       const emitMarkdownDelta = (delta: string): void => {
         const visible = checkpointStream ? checkpointStream.push(delta) : delta;
         if (visible) turn.onTextDelta(visible);
@@ -5290,7 +5319,7 @@ export class ChatGptBrowserWorker {
         await throwIfChatGptSessionFailureAlert(page);
         await throwIfChatGptTerminalErrorAlert(responseTurn.locator);
 
-        if (mode.localTools && await resolveChatGptToolConfirmation(
+        if (localToolsActive && await resolveChatGptToolConfirmation(
           page,
           this.config.appName,
           this.config.autoApproveToolCalls,
@@ -5327,7 +5356,7 @@ export class ChatGptBrowserWorker {
           } catch (error) {
             if (!(error instanceof ChatGptBrowserObservationTimeoutError) || !launcherSurfaceId) throw error;
             const liveProgress = chatGptExternalProgressSuppressesDomHealth(
-              turn.externalProgress?.snapshot(),
+              activeExternalProgress?.snapshot(),
               Date.now(),
             );
             consecutiveObservationRebinds = liveProgress ? 0 : consecutiveObservationRebinds + 1;
@@ -5362,15 +5391,15 @@ export class ChatGptBrowserWorker {
         observedThisIteration = true;
         // Liveness may postpone a verdict, never waive it: once activity goes stale the DOM alone
         // decides, so a tool call that never returns cannot hold a turn with no explicit deadline open forever.
-        const externalProgressSnapshot = turn.externalProgress?.snapshot();
-        if (turn.externalProgress
+        const externalProgressSnapshot = activeExternalProgress?.snapshot();
+        if (activeExternalProgress
           && externalProgressSnapshot
           && completionTracker.needsToolBatchObservation(externalProgressSnapshot.lastToolBatchRevision)) {
           completionTracker.observeToolBatch(
             externalProgressSnapshot.lastToolBatchRevision,
             snapshot.visibleText,
           );
-          await turn.externalProgress.acknowledgeToolBatch(externalProgressSnapshot.lastToolBatchRevision);
+          await activeExternalProgress.acknowledgeToolBatch(externalProgressSnapshot.lastToolBatchRevision);
         }
         const externalProgressLive = chatGptExternalProgressSuppressesDomHealth(
           externalProgressSnapshot,
@@ -5494,6 +5523,127 @@ export class ChatGptBrowserWorker {
         }
         await new Promise(resolveSleep => setTimeout(resolveSleep, 250));
        } catch (error) {
+        if (error instanceof ChatGptPostToolFinalAnswerMissingError
+          && localToolsActive
+          && turn.completionFence
+          && !postToolFinalizationAttempted) {
+          // The previous assistant projection is terminal but still byte-for-byte equal to the
+          // pre-tool boundary. Never return that stale text. First seal the broker atomically so a
+          // late MCP claim cannot race the recovery continuation.
+          const revision = await turn.completionFence.begin();
+          if (revision === undefined || !await turn.completionFence.commit(revision)) {
+            completionTracker.resetMissingPostToolAnswerGrace();
+            responseDomCache.key = undefined;
+            responseDomCache.snapshot = undefined;
+            await new Promise(resolveSleep => setTimeout(resolveSleep, 250));
+            continue;
+          }
+
+          postToolFinalizationAttempted = true;
+          localToolsActive = false;
+          activeExternalProgress = undefined;
+          completionFenceRevision = undefined;
+          await diagnostics.capture(page, "post-tool-finalization-recovery-started");
+
+          const earlierRejection = await submissionRejection.failure();
+          if (earlierRejection) throw earlierRejection;
+
+          // Tool access is now terminal at the broker. Clear any retained connector pill before
+          // sending one ordinary continuation whose only job is to turn settled results into the
+          // final user-facing answer.
+          await this.clearChatGptComposerState(page);
+          submissionBaseline = await this.captureSubmissionBaseline(page);
+          await this.runStage(
+            turn.traceId,
+            "post_tool_finalization_attachment",
+            browserStageTimeouts.promptAttachment,
+            (stageSignal) => this.attachPrompt(
+              page,
+              CHATGPT_POST_TOOL_FINALIZATION_PROMPT,
+              false,
+              checkpoint => diagnostics.capture(page, `post-tool-finalization-${checkpoint}`),
+              turn.abortSignal ? AbortSignal.any([stageSignal, turn.abortSignal]) : stageSignal,
+              false,
+              undefined,
+              false,
+              mode.thinkEnabled,
+            ),
+            chatGptSuspensionClock,
+            true,
+          );
+          await diagnostics.capture(page, "post-tool-finalization-prompt-attached");
+
+          completionTracker = new ChatGptCompletionTracker();
+          const recordRecoveryUsage = await usageSubmission();
+          const recoveryEvidence = await this.runStage(
+            turn.traceId,
+            "post_tool_finalization_send",
+            browserStageTimeouts.send,
+            (stageSignal) => this.sendAttachedPrompt(
+              page,
+              submissionBaseline,
+              checkpoint => diagnostics.capture(page, `post-tool-finalization-${checkpoint}`),
+              turn.abortSignal ? AbortSignal.any([stageSignal, turn.abortSignal]) : stageSignal,
+              undefined,
+              {
+                onSubmitted: recordRecoveryUsage,
+                onSendActivated: async () => {
+                  await this.assertSelectedEffort(page, mode);
+                  submissionRejection.begin(page);
+                },
+              },
+              completionTracker,
+              launcherObservationRecovery
+                ? async (...args) => {
+                  const recovered = await recoverSubmissionObservation(...args);
+                  submissionBaseline = recovered.baseline;
+                  return recovered;
+                }
+                : undefined,
+              submissionRejection,
+            ),
+          );
+          console.info(
+            `[chatgpt-web] browser turn ${turn.traceId} post-tool finalization accepted evidence=${recoveryEvidence}`,
+          );
+
+          responseTurn = await this.waitForNewAssistantTurn(
+            page,
+            submissionBaseline,
+            deadline,
+            turn.abortSignal,
+            undefined,
+            CHATGPT_RESPONSE_DOM_GRACE_MS,
+            completionTracker,
+            launcherObservationRecovery
+              ? async (...args) => {
+                const recovered = await recoverAssistantObservation(...args);
+                submissionBaseline = recovered.baseline;
+                return recovered;
+              }
+              : undefined,
+          );
+
+          // A follow-up user message creates a distinct assistant DOM projection. Stream it with
+          // fresh per-message trackers while leaving already-emitted text as an append-only prefix.
+          visibleTrace = new ChatGptVisibleTraceTracker();
+          markdownBuffer = new ChatGptMarkdownBuffer();
+          checkpointStream = turn.captureLunaCheckpoint
+            ? new ChatGptLunaCheckpointStream()
+            : undefined;
+          domHealthTracker = new ChatGptTurnDomHealthTracker();
+          responseDomCache.key = undefined;
+          responseDomCache.snapshot = undefined;
+          consecutiveObservationRebinds = 0;
+          internalObservationFaults = 0;
+          sawRunning = false;
+          loggedCompletionWait = false;
+          capturedResponse = false;
+          sentAt = Date.now();
+          await diagnostics.capture(page, "post-tool-finalization-send-accepted");
+          continue;
+        }
+
         // A renderer probe can stall while ChatGPT itself continues working. Rebind the exact
         // launcher-owned page rather than converting an accepted task into a terminal disconnect.
         // Proven MCP activity resets the consecutive rebind budget because it demonstrates that
@@ -5501,7 +5651,7 @@ export class ChatGptBrowserWorker {
         if ((error instanceof ChatGptBrowserObservationTimeoutError
           || error instanceof ChatGptDomHealthObservationError) && launcherSurfaceId) {
           const liveProgress = chatGptExternalProgressSuppressesDomHealth(
-            turn.externalProgress?.snapshot(),
+            activeExternalProgress?.snapshot(),
             Date.now(),
           );
           consecutiveObservationRebinds = liveProgress ? 0 : consecutiveObservationRebinds + 1;
