@@ -437,14 +437,21 @@ test("a retained MCP conversation reuses its proven connector binding", () => {
   expect(chatGptConnectorAttachmentMode(false, false)).toBe("none");
 });
 
-test("browser turns run concurrently up to the five-tab limit", async () => {
+test("browser turns queue beyond the five-tab limit instead of disconnecting", async () => {
   expect(MAX_CHATGPT_BROWSER_TABS).toBe(5);
   const releases = new Map<string, () => void>();
+  let resolveFirstFiveStarted!: () => void;
+  const firstFiveStarted = new Promise<void>(resolve => { resolveFirstFiveStarted = resolve; });
+  let resolveSixthStarted!: () => void;
+  const sixthStarted = new Promise<void>(resolve => { resolveSixthStarted = resolve; });
   const worker = Object.assign(Object.create(ChatGptBrowserWorker.prototype), {
     config: { browserHost: "managed-chrome" },
     activeRuns: new Map(),
+    scheduledRuns: new Map(),
     runExclusive: (turn: { traceId: string }) => new Promise<string>(resolve => {
       releases.set(turn.traceId, () => resolve(turn.traceId));
+      if (releases.size === 5 && !releases.has("trace_6")) resolveFirstFiveStarted();
+      if (turn.traceId === "trace_6") resolveSixthStarted();
     }),
   }) as ChatGptBrowserWorker;
   const browserTurn = (traceId: string) => ({
@@ -456,15 +463,24 @@ test("browser turns run concurrently up to the five-tab limit", async () => {
   });
 
   const active = Array.from({ length: 5 }, (_unused, index) => worker.run(browserTurn(`trace_${index + 1}`)));
-  await Promise.resolve();
+  await Promise.race([
+    firstFiveStarted,
+    Bun.sleep(250).then(() => { throw new Error("initial five browser turns did not start"); }),
+  ]);
   expect(releases.size).toBe(5);
-  await expect(worker.run(browserTurn("trace_6"))).rejects.toThrow("at most 5 simultaneous browser turns");
+
+  const sixth = worker.run(browserTurn("trace_6"));
+  await Promise.resolve();
+  expect(releases.has("trace_6")).toBeFalse();
 
   releases.get("trace_1")?.();
   await active[0];
-  const sixth = worker.run(browserTurn("trace_6"));
-  await Promise.resolve();
+  await Promise.race([
+    sixthStarted,
+    Bun.sleep(250).then(() => { throw new Error("queued sixth browser turn did not start after a slot was released"); }),
+  ]);
   expect(releases.has("trace_6")).toBeTrue();
+
   for (const traceId of ["trace_2", "trace_3", "trace_4", "trace_5", "trace_6"]) {
     releases.get(traceId)?.();
   }
@@ -3903,20 +3919,23 @@ test("trace parsing removes an Answer now control appended to live reasoning", (
   });
 });
 
-test("browser DOM health fails closed on a vanished or empty ChatGPT response", () => {
+test("browser DOM health keeps a visibly running turn alive and fails closed after it stops", () => {
   const missing = new ChatGptTurnDomHealthTracker(1_000, 500);
-  const absent = {
+  const absentRunning = {
     responsePresent: false,
     running: true,
     currentText: "",
     completionActionVisible: false,
   };
-  expect(missing.update(absent, 1_000)).toBeUndefined();
-  expect(missing.update(absent, 2_000)).toContain("did not create a response DOM");
+  expect(missing.update(absentRunning, 1_000)).toBeUndefined();
+  expect(missing.update(absentRunning, 10_000)).toBeUndefined();
+  const absentStopped = { ...absentRunning, running: false };
+  expect(missing.update(absentStopped, 10_100)).toBeUndefined();
+  expect(missing.update(absentStopped, 11_100)).toContain("did not create a response DOM");
 
   const empty = new ChatGptTurnDomHealthTracker(1_000, 500);
   const terminal = {
-    ...absent,
+    ...absentStopped,
     responsePresent: true,
     running: false,
     completionActionVisible: true,
@@ -3979,7 +3998,7 @@ test("suspending DOM health for proven MCP progress restarts the missing-respons
   const tracker = new ChatGptTurnDomHealthTracker(1_000, 500);
   const absent = {
     responsePresent: false,
-    running: true,
+    running: false,
     currentText: "",
     completionActionVisible: false,
   };
@@ -4004,7 +4023,7 @@ test("clearing the missing-response window preserves whether a response was ever
     currentText: "partial",
     completionActionVisible: false,
   };
-  const absent = { ...present, responsePresent: false, currentText: "" };
+  const absent = { ...present, responsePresent: false, running: false, currentText: "" };
 
   expect(tracker.update(present, 1_000)).toBeUndefined();
   expect(tracker.update(absent, 1_500)).toBeUndefined();
@@ -4075,7 +4094,7 @@ test("live external progress still records that a response DOM was observed", ()
   const tracker = new ChatGptTurnDomHealthTracker(1_000, 500);
   const absent = {
     responsePresent: false,
-    running: true,
+    running: false,
     currentText: "",
     completionActionVisible: false,
   };

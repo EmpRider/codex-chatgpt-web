@@ -1631,10 +1631,10 @@ export class ChatGptTurnDomHealthTracker {
     externalProgressLive?: boolean;
   }, now = Date.now()): string | undefined {
     if (state.responsePresent) this.sawResponse = true;
-    if (state.externalProgressLive) {
-      // Every conclusion below asserts that ChatGPT stopped producing this turn. A tool call that
-      // is still completing disproves all of them, whatever the renderer is currently exposing, so
-      // no window may accrue while the model is provably working.
+    if (state.externalProgressLive || state.running) {
+      // Every conclusion below asserts that ChatGPT stopped producing this turn. A current Stop
+      // control or a tool call that is still completing disproves all of them, whatever the
+      // renderer is currently exposing, so no window may accrue while the model is provably working.
       this.missingResponseSince = undefined;
       this.emptyCompletionSince = undefined;
       this.missingCompletionAction = undefined;
@@ -2249,6 +2249,7 @@ export class ChatGptBrowserWorker {
   private launcherHelper?: LauncherBrowserHelperClient;
   private maintenanceTail: Promise<void> = Promise.resolve();
   private readonly activeRuns = new Map<string, Promise<string>>();
+  private readonly scheduledRuns = new Map<string, Promise<string>>();
 
   private constructor(private readonly config: ResolvedBrowserConfig) {}
 
@@ -2305,24 +2306,49 @@ export class ChatGptBrowserWorker {
   }
 
   run(turn: BrowserTurn): Promise<string> {
-    if (this.activeRuns.has(turn.traceId)) {
+    if (this.scheduledRuns.has(turn.traceId) || this.activeRuns.has(turn.traceId)) {
       return Promise.reject(new Error(`Duplicate ChatGPT web browser turn: ${turn.traceId}`));
     }
-    if (this.activeRuns.size >= MAX_CHATGPT_BROWSER_TABS) {
-      return Promise.reject(new Error(
-        `ChatGPT Web supports at most ${MAX_CHATGPT_BROWSER_TABS} simultaneous browser turns; close or finish a browser tab before starting another`,
-      ));
-    }
-    const useHelper = this.config.browserHost === "launcher" && process.env.CODEX_CHATGPT_WEB_BROWSER_HELPER_PROCESS !== "1";
-    if (useHelper) {
-      this.launcherHelper ??= new LauncherBrowserHelperClient(this.config);
-    }
-    const run = Promise.resolve().then(() => useHelper ? this.launcherHelper!.run(turn) : this.runExclusive(turn));
-    this.activeRuns.set(turn.traceId, run);
-    void run.finally(() => {
-      if (this.activeRuns.get(turn.traceId) === run) this.activeRuns.delete(turn.traceId);
-    }).catch(() => {});
-    return run;
+
+    // Defer the scheduler body by one microtask so the trace is registered in scheduledRuns
+    // before any fast start/failure can reach the cleanup path. This also makes duplicate detection
+    // authoritative for queued and immediately-admitted turns alike.
+    const scheduled = Promise.resolve().then(async () => {
+      try {
+        while (this.activeRuns.size >= MAX_CHATGPT_BROWSER_TABS) {
+          if (turn.abortSignal?.aborted) {
+            throw new DOMException("ChatGPT web turn aborted while waiting for a browser slot", "AbortError");
+          }
+          const slot = Promise.race(
+            [...this.activeRuns.values()].map(active => active.then(() => undefined, () => undefined)),
+          );
+          await withBrowserTurnAbort(slot, turn.abortSignal);
+        }
+        if (turn.abortSignal?.aborted) {
+          throw new DOMException("ChatGPT web turn aborted while waiting for a browser slot", "AbortError");
+        }
+
+        const useHelper = this.config.browserHost === "launcher"
+          && process.env.CODEX_CHATGPT_WEB_BROWSER_HELPER_PROCESS !== "1";
+        if (useHelper) {
+          this.launcherHelper ??= new LauncherBrowserHelperClient(this.config);
+        }
+        const active = Promise.resolve().then(
+          () => useHelper ? this.launcherHelper!.run(turn) : this.runExclusive(turn),
+        );
+        this.activeRuns.set(turn.traceId, active);
+        try {
+          return await active;
+        } finally {
+          if (this.activeRuns.get(turn.traceId) === active) this.activeRuns.delete(turn.traceId);
+        }
+      } finally {
+        this.scheduledRuns.delete(turn.traceId);
+      }
+    });
+
+    this.scheduledRuns.set(turn.traceId, scheduled);
+    return scheduled;
   }
 
   verifyConnector(traceId = `verify_${randomUUID().replaceAll("-", "")}`): Promise<string> {
@@ -2357,7 +2383,7 @@ export class ChatGptBrowserWorker {
 
   private enqueueMaintenance<T>(name: string, action: () => Promise<T>): Promise<T> {
     const operation = this.maintenanceTail.then(() => {
-      if (this.activeRuns.size > 0) {
+      if (this.scheduledRuns.size > 0 || this.activeRuns.size > 0) {
         throw new Error(`ChatGPT ${name} requires all browser turns to finish`);
       }
       return action();
@@ -2372,7 +2398,7 @@ export class ChatGptBrowserWorker {
       this.launcherHelper = undefined;
       await helper.close();
     }
-    await Promise.allSettled([...this.activeRuns.values()]);
+    await Promise.allSettled([...this.scheduledRuns.values()]);
     await this.maintenanceTail;
     const browser = this.browser;
     this.browser = undefined;
@@ -3097,7 +3123,8 @@ export class ChatGptBrowserWorker {
       } catch (error) {
         const latestProgress = externalProgress?.snapshot();
         if (error instanceof ChatGptBrowserObservationTimeoutError && recoverObservation) {
-          recoveryAttempts += 1;
+          const progressLive = chatGptExternalProgressIsLive(latestProgress, Date.now(), graceMs);
+          recoveryAttempts = progressLive ? 0 : recoveryAttempts + 1;
           if (recoveryAttempts > MAX_CHATGPT_BROWSER_PAGE_REBINDS) {
             throw new Error(
               `ChatGPT accepted the message, but its DOM remained unresponsive after ${MAX_CHATGPT_BROWSER_PAGE_REBINDS} same-page rebinds`,
@@ -3105,7 +3132,7 @@ export class ChatGptBrowserWorker {
             );
           }
           const recovered = await recoverObservation(
-            recoveryAttempts,
+            Math.max(1, recoveryAttempts),
             error,
             observationBaseline,
             signal,
@@ -5265,7 +5292,9 @@ export class ChatGptBrowserWorker {
           continue;
         }
 
-        let snapshot = await this.responseDomSnapshot(responseTurn.locator, responseDomCache);
+        let snapshot = await withChatGptBrowserObservationTimeout(
+          this.responseDomSnapshot(responseTurn.locator, responseDomCache),
+        );
         if (!snapshot.responsePresent) {
           try {
             const rebound = await withChatGptBrowserObservationTimeout(
@@ -5280,18 +5309,24 @@ export class ChatGptBrowserWorker {
               responseTurn = rebound;
               responseDomCache.key = undefined;
               responseDomCache.snapshot = undefined;
-              snapshot = await this.responseDomSnapshot(responseTurn.locator, responseDomCache);
+              snapshot = await withChatGptBrowserObservationTimeout(
+                this.responseDomSnapshot(responseTurn.locator, responseDomCache),
+              );
             }
           } catch (error) {
             if (!(error instanceof ChatGptBrowserObservationTimeoutError) || !launcherSurfaceId) throw error;
-            consecutiveObservationRebinds += 1;
+            const liveProgress = chatGptExternalProgressSuppressesDomHealth(
+              turn.externalProgress?.snapshot(),
+              Date.now(),
+            );
+            consecutiveObservationRebinds = liveProgress ? 0 : consecutiveObservationRebinds + 1;
             if (consecutiveObservationRebinds > MAX_CHATGPT_BROWSER_PAGE_REBINDS) {
               throw new Error(
                 `ChatGPT browser DOM remained unresponsive after ${MAX_CHATGPT_BROWSER_PAGE_REBINDS} same-page rebinds`,
                 { cause: error },
               );
             }
-            await rebindLauncherPage(consecutiveObservationRebinds, error, turn.abortSignal);
+            await rebindLauncherPage(Math.max(1, consecutiveObservationRebinds), error, turn.abortSignal);
             submissionBaseline = {
               ...submissionBaseline,
               userTurns: page.locator(CHATGPT_USER_TURN_SELECTOR),
@@ -5448,6 +5483,39 @@ export class ChatGptBrowserWorker {
         }
         await new Promise(resolveSleep => setTimeout(resolveSleep, 250));
        } catch (error) {
+        // A renderer probe can stall while ChatGPT itself continues working. Rebind the exact
+        // launcher-owned page rather than converting an accepted task into a terminal disconnect.
+        // Proven MCP activity resets the consecutive rebind budget because it demonstrates that
+        // the upstream turn is still alive even while its renderer is temporarily unobservable.
+        if (error instanceof ChatGptBrowserObservationTimeoutError && launcherSurfaceId) {
+          const liveProgress = chatGptExternalProgressSuppressesDomHealth(
+            turn.externalProgress?.snapshot(),
+            Date.now(),
+          );
+          consecutiveObservationRebinds = liveProgress ? 0 : consecutiveObservationRebinds + 1;
+          if (consecutiveObservationRebinds > MAX_CHATGPT_BROWSER_PAGE_REBINDS) {
+            throw new Error(
+              `ChatGPT browser DOM remained unresponsive after ${MAX_CHATGPT_BROWSER_PAGE_REBINDS} same-page rebinds`,
+              { cause: error },
+            );
+          }
+          await rebindLauncherPage(Math.max(1, consecutiveObservationRebinds), error, turn.abortSignal);
+          submissionBaseline = {
+            ...submissionBaseline,
+            userTurns: page.locator(CHATGPT_USER_TURN_SELECTOR),
+            responseTurns: page.locator(CHATGPT_ASSISTANT_TURN_SELECTOR),
+            domCache: {},
+          };
+          responseTurn = {
+            ...responseTurn,
+            locator: page.locator(chatGptAssistantTurnSelector(responseTurn.identity)),
+          };
+          responseDomCache.key = undefined;
+          responseDomCache.snapshot = undefined;
+          await diagnostics.capture(page, "response-page-rebound");
+          continue;
+        }
+
         // Only a defect in this worker is retried here. Every deliberate signal — adapter errors,
         // aborts, closed tabs, DOM-health verdicts — still fails the turn immediately.
         // Retry only faults raised while reading the page. Once observation succeeded, a

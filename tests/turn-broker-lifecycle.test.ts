@@ -168,6 +168,67 @@ test("five active turns coexist and a sixth fails closed", () => {
   expect(cancelled).toBe(5);
 });
 
+test("async session creation waits for physical browser cleanup instead of failing at capacity", async () => {
+  const sessions = new ChatGptTurnSessions();
+  const resolveBrowser = new Map<string, (value: string) => void>();
+  const resolvePhysical = new Map<string, () => void>();
+  let starts = 0;
+
+  const runtime = (name: string) => {
+    starts += 1;
+    const browser = new Promise<string>(resolve => resolveBrowser.set(name, resolve));
+    const physicalSettlement = new Promise<void>(resolve => resolvePhysical.set(name, resolve));
+    return {
+      mode: "read-only" as const,
+      browser,
+      physicalSettlement,
+      trace: new ChatGptTraceFeed(),
+      text: new ChatGptTextFeed(),
+      cancel: () => {
+        resolveBrowser.get(name)?.("cancelled");
+        resolvePhysical.get(name)?.();
+      },
+    };
+  };
+
+  for (let index = 1; index <= 5; index += 1) {
+    sessions.getOrCreate(
+      `turn-${index}`,
+      () => runtime(`turn-${index}`),
+      `trace-${index}`,
+      `owner-${index}`,
+    );
+  }
+  expect(starts).toBe(5);
+
+  let sixthStarted = false;
+  const sixth = sessions.getOrCreateAfterOwnerRetirement(
+    "turn-6",
+    "owner-6",
+    () => {
+      sixthStarted = true;
+      return runtime("turn-6");
+    },
+    "trace-6",
+  );
+
+  await Bun.sleep(5);
+  expect(sixthStarted).toBeFalse();
+
+  // A semantic answer alone is not enough: the worker still owns the browser tab until its
+  // physical cleanup settles.
+  resolveBrowser.get("turn-1")?.("done");
+  await Bun.sleep(5);
+  expect(sixthStarted).toBeFalse();
+
+  resolvePhysical.get("turn-1")?.();
+  await sixth;
+  expect(sixthStarted).toBeTrue();
+  expect(starts).toBe(6);
+
+  sessions.clear();
+});
+
 test("settled replay sessions expire from their last use instead of their creation time", async () => {
   const sessions = new ChatGptTurnSessions(50);
   let starts = 0;

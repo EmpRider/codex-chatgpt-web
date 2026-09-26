@@ -455,6 +455,19 @@ export class ChatGptTurnSession {
     return this.settledPhysical;
   }
 
+  /**
+   * A browser slot remains occupied until both the semantic browser outcome and physical helper
+   * cleanup have settled. Counting only the semantic outcome creates a race where a completed
+   * answer frees the registry slot before the worker has actually released its tab.
+   */
+  occupiesBrowserSlot(): boolean {
+    return this.isActive() || !this.isPhysicallySettled();
+  }
+
+  async waitForBrowserSlotRelease(): Promise<void> {
+    await Promise.allSettled([this.browserOutcome, this.physicalSettlement]);
+  }
+
   setOutstanding(requests: BrokerToolRequest[], reasoning: string[] = [], prelude: AdapterEvent[] = []): void {
     if (this.outstandingById.size > 0) throw new Error("cannot emit a new ChatGPT tool batch while the previous batch is unresolved");
     for (const request of requests) {
@@ -617,10 +630,10 @@ export class ChatGptTurnSessions {
       existing.touch();
       return existing;
     }
-    const active = [...this.entries.values()].filter(session => session.isActive()).length;
-    if (active >= MAX_CHATGPT_BROWSER_TABS) {
+    const occupied = [...this.entries.values()].filter(session => session.occupiesBrowserSlot()).length;
+    if (occupied >= MAX_CHATGPT_BROWSER_TABS) {
       throw new Error(
-        `ChatGPT Web supports at most ${MAX_CHATGPT_BROWSER_TABS} simultaneous browser turns; close or finish a browser tab before starting another`,
+        `ChatGPT Web supports at most ${MAX_CHATGPT_BROWSER_TABS} simultaneous browser turns; wait for an existing browser turn to finish before starting another`,
       );
     }
     if (this.entries.size >= this.maxEntries) throw new Error(`ChatGPT web session registry is full (${this.maxEntries} entries)`);
@@ -675,6 +688,14 @@ export class ChatGptTurnSessions {
         // A completed response may still be releasing its browser surface. Sequential work
         // waits for that cleanup; preemption requires a proven newer canonical instruction.
         await awaitWithAbort(ownedSession.physicalSettlement, signal);
+        continue;
+      }
+      const occupied = [...this.entries.values()].filter(session => session.occupiesBrowserSlot());
+      if (occupied.length >= MAX_CHATGPT_BROWSER_TABS) {
+        await awaitWithAbort(
+          Promise.race(occupied.map(session => session.waitForBrowserSlotRelease())),
+          signal,
+        );
         continue;
       }
       if (signal?.aborted) throw new DOMException("ChatGPT web turn aborted", "AbortError");
