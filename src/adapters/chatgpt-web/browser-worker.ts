@@ -5306,7 +5306,9 @@ export class ChatGptBrowserWorker {
               responseTurn = rebound;
               responseDomCache.key = undefined;
               responseDomCache.snapshot = undefined;
-              snapshot = await this.responseDomSnapshot(responseTurn.locator, responseDomCache);
+              snapshot = await withChatGptBrowserObservationTimeout(
+                this.responseDomSnapshot(responseTurn.locator, responseDomCache),
+              );
             }
           } catch (error) {
             if (!(error instanceof ChatGptBrowserObservationTimeoutError) || !launcherSurfaceId) throw error;
@@ -5478,6 +5480,39 @@ export class ChatGptBrowserWorker {
         }
         await new Promise(resolveSleep => setTimeout(resolveSleep, 250));
        } catch (error) {
+        // A renderer probe can stall while ChatGPT itself continues working. Rebind the exact
+        // launcher-owned page rather than converting an accepted task into a terminal disconnect.
+        // Proven MCP activity resets the consecutive rebind budget because it demonstrates that
+        // the upstream turn is still alive even while its renderer is temporarily unobservable.
+        if (error instanceof ChatGptBrowserObservationTimeoutError && launcherSurfaceId) {
+          const liveProgress = chatGptExternalProgressSuppressesDomHealth(
+            turn.externalProgress?.snapshot(),
+            Date.now(),
+          );
+          consecutiveObservationRebinds = liveProgress ? 0 : consecutiveObservationRebinds + 1;
+          if (consecutiveObservationRebinds > MAX_CHATGPT_BROWSER_PAGE_REBINDS) {
+            throw new Error(
+              `ChatGPT browser DOM remained unresponsive after ${MAX_CHATGPT_BROWSER_PAGE_REBINDS} same-page rebinds`,
+              { cause: error },
+            );
+          }
+          await rebindLauncherPage(Math.max(1, consecutiveObservationRebinds), error, turn.abortSignal);
+          submissionBaseline = {
+            ...submissionBaseline,
+            userTurns: page.locator(CHATGPT_USER_TURN_SELECTOR),
+            responseTurns: page.locator(CHATGPT_ASSISTANT_TURN_SELECTOR),
+            domCache: {},
+          };
+          responseTurn = {
+            ...responseTurn,
+            locator: page.locator(chatGptAssistantTurnSelector(responseTurn.identity)),
+          };
+          responseDomCache.key = undefined;
+          responseDomCache.snapshot = undefined;
+          await diagnostics.capture(page, "response-page-rebound");
+          continue;
+        }
+
         // Only a defect in this worker is retried here. Every deliberate signal — adapter errors,
         // aborts, closed tabs, DOM-health verdicts — still fails the turn immediately.
         // Retry only faults raised while reading the page. Once observation succeeded, a
