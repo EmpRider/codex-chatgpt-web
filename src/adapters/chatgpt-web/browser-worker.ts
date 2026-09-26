@@ -2249,6 +2249,7 @@ export class ChatGptBrowserWorker {
   private launcherHelper?: LauncherBrowserHelperClient;
   private maintenanceTail: Promise<void> = Promise.resolve();
   private readonly activeRuns = new Map<string, Promise<string>>();
+  private readonly scheduledRuns = new Map<string, Promise<string>>();
 
   private constructor(private readonly config: ResolvedBrowserConfig) {}
 
@@ -2305,24 +2306,46 @@ export class ChatGptBrowserWorker {
   }
 
   run(turn: BrowserTurn): Promise<string> {
-    if (this.activeRuns.has(turn.traceId)) {
+    if (this.scheduledRuns.has(turn.traceId) || this.activeRuns.has(turn.traceId)) {
       return Promise.reject(new Error(`Duplicate ChatGPT web browser turn: ${turn.traceId}`));
     }
-    if (this.activeRuns.size >= MAX_CHATGPT_BROWSER_TABS) {
-      return Promise.reject(new Error(
-        `ChatGPT Web supports at most ${MAX_CHATGPT_BROWSER_TABS} simultaneous browser turns; close or finish a browser tab before starting another`,
-      ));
-    }
-    const useHelper = this.config.browserHost === "launcher" && process.env.CODEX_CHATGPT_WEB_BROWSER_HELPER_PROCESS !== "1";
-    if (useHelper) {
-      this.launcherHelper ??= new LauncherBrowserHelperClient(this.config);
-    }
-    const run = Promise.resolve().then(() => useHelper ? this.launcherHelper!.run(turn) : this.runExclusive(turn));
-    this.activeRuns.set(turn.traceId, run);
-    void run.finally(() => {
-      if (this.activeRuns.get(turn.traceId) === run) this.activeRuns.delete(turn.traceId);
-    }).catch(() => {});
-    return run;
+
+    const scheduled = (async () => {
+      try {
+        while (this.activeRuns.size >= MAX_CHATGPT_BROWSER_TABS) {
+          if (turn.abortSignal?.aborted) {
+            throw new DOMException("ChatGPT web turn aborted while waiting for a browser slot", "AbortError");
+          }
+          const slot = Promise.race(
+            [...this.activeRuns.values()].map(active => active.then(() => undefined, () => undefined)),
+          );
+          await withBrowserTurnAbort(slot, turn.abortSignal);
+        }
+        if (turn.abortSignal?.aborted) {
+          throw new DOMException("ChatGPT web turn aborted while waiting for a browser slot", "AbortError");
+        }
+
+        const useHelper = this.config.browserHost === "launcher"
+          && process.env.CODEX_CHATGPT_WEB_BROWSER_HELPER_PROCESS !== "1";
+        if (useHelper) {
+          this.launcherHelper ??= new LauncherBrowserHelperClient(this.config);
+        }
+        const active = Promise.resolve().then(
+          () => useHelper ? this.launcherHelper!.run(turn) : this.runExclusive(turn),
+        );
+        this.activeRuns.set(turn.traceId, active);
+        try {
+          return await active;
+        } finally {
+          if (this.activeRuns.get(turn.traceId) === active) this.activeRuns.delete(turn.traceId);
+        }
+      } finally {
+        this.scheduledRuns.delete(turn.traceId);
+      }
+    })();
+
+    this.scheduledRuns.set(turn.traceId, scheduled);
+    return scheduled;
   }
 
   verifyConnector(traceId = `verify_${randomUUID().replaceAll("-", "")}`): Promise<string> {
@@ -2357,7 +2380,7 @@ export class ChatGptBrowserWorker {
 
   private enqueueMaintenance<T>(name: string, action: () => Promise<T>): Promise<T> {
     const operation = this.maintenanceTail.then(() => {
-      if (this.activeRuns.size > 0) {
+      if (this.scheduledRuns.size > 0 || this.activeRuns.size > 0) {
         throw new Error(`ChatGPT ${name} requires all browser turns to finish`);
       }
       return action();
@@ -2372,7 +2395,7 @@ export class ChatGptBrowserWorker {
       this.launcherHelper = undefined;
       await helper.close();
     }
-    await Promise.allSettled([...this.activeRuns.values()]);
+    await Promise.allSettled([...this.scheduledRuns.values()]);
     await this.maintenanceTail;
     const browser = this.browser;
     this.browser = undefined;
