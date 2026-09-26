@@ -668,9 +668,17 @@ export async function notifyLauncherTurn(
             ? Math.min(2_000, Math.max(100, requestedDelay))
             : 500;
           await new Promise<void>((resolve, reject) => {
-            const retryTimer = setTimeout(resolve, Math.min(retryDelayMs, Math.max(1, deadline - Date.now())));
+            const finish = () => {
+              signal?.removeEventListener("abort", abort);
+              resolve();
+            };
+            const retryTimer = setTimeout(
+              finish,
+              Math.min(retryDelayMs, Math.max(1, deadline - Date.now())),
+            );
             const abort = () => {
               clearTimeout(retryTimer);
+              signal?.removeEventListener("abort", abort);
               reject(new DOMException("Launcher browser acquisition cancelled", "AbortError"));
             };
             signal?.addEventListener("abort", abort, { once: true });
