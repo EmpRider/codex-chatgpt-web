@@ -830,6 +830,9 @@ export class ChatGptSubmissionRejectionObserver {
   private page?: Page;
   private readonly requests = new Set<Request>();
   private checks: Array<Promise<ChatGptWebAdapterError | undefined>> = [];
+  private acceptedResponse = false;
+  private acceptance: Promise<void> = new Promise(() => {});
+  private resolveAcceptance?: () => void;
 
   private readonly onRequest = (request: Request): void => {
     if (!this.page || request.method() !== "POST"
@@ -839,25 +842,39 @@ export class ChatGptSubmissionRejectionObserver {
   };
 
   private readonly onResponse = (response: Response): void => {
-    if (!this.requests.delete(response.request()) || response.status() !== 413
-      || !response.headers()["content-type"]?.includes("application/json")) return;
+    if (!this.requests.delete(response.request())) return;
+    const status = response.status();
+    if (status >= 200 && status < 300) {
+      this.acceptedResponse = true;
+      this.resolveAcceptance?.();
+      return;
+    }
+    if (status !== 413 || !response.headers()["content-type"]?.includes("application/json")) return;
     this.checks.push(withChatGptBrowserObservationTimeout(response.json(), 3_000)
       .then(body => body?.detail?.code === "message_length_exceeds_limit"
         ? new ChatGptWebAdapterError(
           "ChatGPT rejected this message because it exceeds the selected mode's input-size limit. Compact the task before retrying.",
           { status: 400, errorType: "invalid_request_error", code: "context_length_exceeded", retryable: false },
         ) : undefined)
-      // Unreadable or unfamiliar responses do not establish a size rejection. The normal
-      // bound-response DOM error remains authoritative in that case.
       .catch(() => undefined));
   };
 
   begin(page: Page): void {
     this.dispose();
     this.checks = [];
+    this.acceptedResponse = false;
+    this.acceptance = new Promise<void>(resolve => { this.resolveAcceptance = resolve; });
     this.page = page;
     page.on("request", this.onRequest);
     page.on("response", this.onResponse);
+  }
+
+  accepted(): boolean {
+    return this.acceptedResponse;
+  }
+
+  waitForAcceptance(signal?: AbortSignal): Promise<void> {
+    return withBrowserTurnAbort(this.acceptance, signal);
   }
 
   async failure(): Promise<ChatGptWebAdapterError | undefined> {
@@ -871,6 +888,7 @@ export class ChatGptSubmissionRejectionObserver {
     this.requests.clear();
   }
 }
+
 
 type SelectedChatGptWebModelMode = ChatGptWebModelMode & {
   modelFamily?: "5.6" | "6";
@@ -1387,7 +1405,7 @@ export function chatGptTurnIsComplete(state: {
     && state.completionActionVisible;
 }
 
-export type ChatGptSubmissionEvidence = "user_turn" | "assistant_turn" | "generation_running" | "mcp_tool_call";
+export type ChatGptSubmissionEvidence = "user_turn" | "assistant_turn" | "generation_running" | "mcp_tool_call" | "network_response";
 
 export function chatGptSubmissionEvidence(state: {
   initialTurnIdentities: readonly string[];
@@ -2804,10 +2822,17 @@ export class ChatGptBrowserWorker {
     afterProgressRevision: number,
     externalProgress?: ChatGptTurnProgressReader,
     signal?: AbortSignal,
+    submissionObserver?: ChatGptSubmissionRejectionObserver,
   ): Promise<void> {
     const domMutation = this.waitForTurnDomMutation(page);
+    const acceptance = submissionObserver
+      ? submissionObserver.waitForAcceptance(signal)
+      : undefined;
     if (!externalProgress) {
-      await withBrowserTurnAbort(domMutation, signal);
+      await withBrowserTurnAbort(Promise.race([
+        domMutation,
+        ...(acceptance ? [acceptance] : []),
+      ]), signal);
       return;
     }
     const progressWaitAbort = new AbortController();
@@ -2818,6 +2843,7 @@ export class ChatGptBrowserWorker {
       await withBrowserTurnAbort(Promise.race([
         domMutation,
         externalProgress.waitForChange(afterProgressRevision, progressSignal).then(() => undefined),
+        ...(acceptance ? [acceptance] : []),
       ]), signal);
     } finally {
       progressWaitAbort.abort();
@@ -2831,10 +2857,12 @@ export class ChatGptBrowserWorker {
     externalProgress?: ChatGptTurnProgressReader,
     initialToolBatchRevision = externalProgress?.snapshot().lastToolBatchRevision ?? 0,
     completionTracker?: ChatGptCompletionTracker,
+    submissionObserver?: ChatGptSubmissionRejectionObserver,
   ): Promise<ChatGptSubmissionEvidence> {
     if (signal?.aborted) throw new DOMException("ChatGPT web turn aborted", "AbortError");
     for (;;) {
       if (signal?.aborted) throw new DOMException("ChatGPT web turn aborted", "AbortError");
+      if (submissionObserver?.accepted()) return "network_response";
       const progress = externalProgress?.snapshot();
       if (progress
         && externalProgress
@@ -2874,6 +2902,7 @@ export class ChatGptBrowserWorker {
         progress?.revision ?? 0,
         externalProgress,
         signal,
+        submissionObserver,
       );
     }
   }
@@ -3593,6 +3622,7 @@ export class ChatGptBrowserWorker {
     initialToolBatchRevision = externalProgress?.snapshot().lastToolBatchRevision ?? 0,
     completionTracker?: ChatGptCompletionTracker,
     recoverObservation?: ChatGptObservationRecovery,
+    submissionObserver?: ChatGptSubmissionRejectionObserver,
   ): Promise<ChatGptSubmissionEvidence> {
     let observationPage = page;
     let observationBaseline = baseline;
@@ -3606,6 +3636,7 @@ export class ChatGptBrowserWorker {
           externalProgress,
           initialToolBatchRevision,
           completionTracker,
+          submissionObserver,
         );
         return evidence;
       } catch (error) {
@@ -3638,6 +3669,7 @@ export class ChatGptBrowserWorker {
     submissionLifecycle?: Pick<BrowserTurn, "onSendActivated" | "onSubmitted">,
     completionTracker?: ChatGptCompletionTracker,
     recoverObservation?: ChatGptObservationRecovery,
+    submissionObserver?: ChatGptSubmissionRejectionObserver,
   ): Promise<ChatGptSubmissionEvidence> {
     const composer = await this.activeComposer(page);
     const sendButton = composer
@@ -3677,6 +3709,7 @@ export class ChatGptBrowserWorker {
       initialToolBatchRevision,
       completionTracker,
       recoverObservation,
+      submissionObserver,
     );
     await submissionLifecycle?.onSubmitted?.();
     return evidence;
