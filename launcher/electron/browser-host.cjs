@@ -544,9 +544,11 @@ class BrowserHost {
     signal?.throwIfAborted();
     if (this.turnTabs.size >= MAX_BROWSER_TABS
       && !BrowserHost.prototype.evictOldestReclaimableTurnTab.call(this)) {
-      throw new Error(
-        `ChatGPT Web already has ${MAX_BROWSER_TABS} browser tabs; close one before starting another turn to avoid excessive parallel traffic on the ChatGPT account`,
+      const error = new Error(
+        `ChatGPT Web is currently using all ${MAX_BROWSER_TABS} browser turn slots`,
       );
+      error.code = "browser_capacity_exhausted";
+      throw error;
     }
     const id = randomBytes(12).toString("base64url");
     const surfaceId = randomBytes(24).toString("base64url");
@@ -633,9 +635,11 @@ class BrowserHost {
   createManualTurnTab(traceId, helperPid, conversationKey, prompt, manualSubmitTimeoutMs) {
     if (this.turnTabs.size >= MAX_BROWSER_TABS
       && !BrowserHost.prototype.evictOldestReclaimableTurnTab.call(this)) {
-      throw new Error(
-        `ChatGPT Web already has ${MAX_BROWSER_TABS} browser tabs; close one before starting another turn to avoid excessive parallel traffic on the ChatGPT account`,
+      const error = new Error(
+        `ChatGPT Web is currently using all ${MAX_BROWSER_TABS} browser turn slots`,
       );
+      error.code = "browser_capacity_exhausted";
+      throw error;
     }
     const id = randomBytes(12).toString("base64url");
     const ordinal = Array.from({ length: MAX_BROWSER_TABS }, (_unused, index) => index + 1)
