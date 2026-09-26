@@ -2310,7 +2310,10 @@ export class ChatGptBrowserWorker {
       return Promise.reject(new Error(`Duplicate ChatGPT web browser turn: ${turn.traceId}`));
     }
 
-    const scheduled = (async () => {
+    // Defer the scheduler body by one microtask so the trace is registered in scheduledRuns
+    // before any fast start/failure can reach the cleanup path. This also makes duplicate detection
+    // authoritative for queued and immediately-admitted turns alike.
+    const scheduled = Promise.resolve().then(async () => {
       try {
         while (this.activeRuns.size >= MAX_CHATGPT_BROWSER_TABS) {
           if (turn.abortSignal?.aborted) {
@@ -2342,7 +2345,7 @@ export class ChatGptBrowserWorker {
       } finally {
         this.scheduledRuns.delete(turn.traceId);
       }
-    })();
+    });
 
     this.scheduledRuns.set(turn.traceId, scheduled);
     return scheduled;
