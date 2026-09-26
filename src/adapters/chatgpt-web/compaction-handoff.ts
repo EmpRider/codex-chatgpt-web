@@ -164,6 +164,7 @@ export async function settleActiveCompactionSource(
   source: ChatGptTurnSession,
   broker: TurnBroker,
   signal?: AbortSignal,
+  onProgress?: () => void,
 ): Promise<{ answer: string; compactionInstructionDelivered: boolean }> {
   return source.runExclusive(async () => {
     if (signal?.aborted) {
@@ -181,6 +182,26 @@ export async function settleActiveCompactionSource(
       );
     }
     let token: string | undefined;
+    const activityAbort = new AbortController();
+    const activitySignal = signal
+      ? AbortSignal.any([signal, activityAbort.signal])
+      : activityAbort.signal;
+    const activity = source.runtime.activity;
+    let activityRevision = activity?.snapshot().revision ?? 0;
+    const activityPump = activity && onProgress
+      ? (async () => {
+          for (;;) {
+            try {
+              const snapshot = await activity.waitForChange(activityRevision, activitySignal);
+              activityRevision = snapshot.revision;
+              onProgress();
+            } catch (error) {
+              if (activitySignal.aborted) return;
+              throw error;
+            }
+          }
+        })()
+      : undefined;
     try {
       token = await source.runtime.token;
       broker.requestCompaction(token, interruptedByActiveCompaction());
@@ -193,6 +214,7 @@ export async function settleActiveCompactionSource(
         );
         source.runtime.externalProgress.recordToolResult();
         source.markResultDelivered(request.callId);
+        onProgress?.();
       }
       const browserOutcome = await withCompactionAbort(source.browserOutcome, signal);
       if (browserOutcome.type === "error") throw browserOutcome.error;
@@ -210,6 +232,8 @@ export async function settleActiveCompactionSource(
       if (signal?.aborted) source.cancel(abortReason(signal));
       throw error;
     } finally {
+      activityAbort.abort();
+      await activityPump?.catch(() => {});
       if (token) await broker.revoke(token);
     }
   });
@@ -220,6 +244,7 @@ export async function settleActiveZeroRiskCompactionSource(
   source: ChatGptTurnSession,
   broker: TurnBrokerOwner,
   signal?: AbortSignal,
+  onProgress?: () => void,
 ): Promise<string | undefined> {
   return source.runExclusive(async () => {
     if (signal?.aborted) {
@@ -237,6 +262,26 @@ export async function settleActiveZeroRiskCompactionSource(
       );
     }
     let token: string | undefined;
+    const activityAbort = new AbortController();
+    const activitySignal = signal
+      ? AbortSignal.any([signal, activityAbort.signal])
+      : activityAbort.signal;
+    const activity = source.runtime.activity;
+    let activityRevision = activity?.snapshot().revision ?? 0;
+    const activityPump = activity && onProgress
+      ? (async () => {
+          for (;;) {
+            try {
+              const snapshot = await activity.waitForChange(activityRevision, activitySignal);
+              activityRevision = snapshot.revision;
+              onProgress();
+            } catch (error) {
+              if (activitySignal.aborted) return;
+              throw error;
+            }
+          }
+        })()
+      : undefined;
     try {
       token = await source.runtime.token;
       const interruptedQueued = await broker.requestCompaction(
@@ -255,6 +300,7 @@ export async function settleActiveZeroRiskCompactionSource(
         );
         source.runtime.externalProgress.recordToolResult();
         source.markResultDelivered(request.callId);
+        onProgress?.();
       }
       const browserOutcome = await withCompactionAbort(source.browserOutcome, signal);
       if (browserOutcome.type === "error") throw browserOutcome.error;
@@ -269,6 +315,8 @@ export async function settleActiveZeroRiskCompactionSource(
       if (signal?.aborted) source.cancel(abortReason(signal));
       throw error;
     } finally {
+      activityAbort.abort();
+      await activityPump?.catch(() => {});
       if (token) await broker.revoke(token);
     }
   });
