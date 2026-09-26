@@ -2538,7 +2538,7 @@ test("a required retained conversation fails before creating a browser tab", asy
   assert.equal(created, false);
 });
 
-test("five browser tabs are a hard account-safety limit", async () => {
+test("five browser tabs remain the account-safety limit but report retryable capacity", async () => {
   const turnTabs = new Map(Array.from({ length: 5 }, (_unused, index) => [
     `tab-${index + 1}`,
     { ordinal: index + 1 },
@@ -2546,7 +2546,8 @@ test("five browser tabs are a hard account-safety limit", async () => {
 
   await assert.rejects(
     BrowserHost.prototype.createTurnTab.call({ turnTabs }, "trace_six", 444),
-    /already has 5 browser tabs.*avoid excessive parallel traffic/,
+    (error) => error?.code === "browser_capacity_exhausted"
+      && /currently using all 5 browser turn slots/.test(error.message),
   );
 });
 
