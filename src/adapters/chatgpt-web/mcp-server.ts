@@ -6,6 +6,7 @@ import { namespacedToolName, type CodexTool } from "../../types";
 import { VERSION } from "../../version";
 import type { ChatGptTurnEnvironment } from "./environment";
 import {
+  CHATGPT_WEB_MCP_CONTEXT_BATCH_CHUNKS,
   CHATGPT_WEB_MCP_CONTEXT_READ_WIRE_NAME,
   chatGptWebMcpContextReadQuery,
   type ChatGptWebMcpContextManifest,
@@ -803,14 +804,17 @@ export async function runChatGptMcpServer(options: {
           && contextTransport
           && reservedContextQuery
           && query?.trim() === reservedContextQuery) {
-          if (limit !== 1 || include_schema !== false) {
-            throw new Error("Codex MCP context inventory reads require limit=1 and include_schema=false");
+          if (limit < 1 || limit > CHATGPT_WEB_MCP_CONTEXT_BATCH_CHUNKS || include_schema !== false) {
+            throw new Error(
+              `Codex MCP context inventory reads require limit=1..${CHATGPT_WEB_MCP_CONTEXT_BATCH_CHUNKS} and include_schema=false`,
+            );
           }
           const response = await callTurnBroker<Record<string, unknown>>(options.brokerSocketPath, {
             method: "context_read",
             bindingId: claimed.bindingId,
             contextId: contextTransport.contextId,
             chunk: offset,
+            limit,
           }, 5_000, extra.signal);
           return result(response);
         }
