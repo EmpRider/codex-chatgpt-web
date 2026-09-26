@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createContext, runInContext } from "node:vm";
 import type { Page } from "playwright-core";
-import { CHATGPT_BROWSER_OBSERVATION_PROBE_TIMEOUT_MS, CHATGPT_COMPLETION_SETTLE_MS, CHATGPT_EXTERNAL_PROGRESS_CLOCK_SKEW_MS, CHATGPT_EXTERNAL_PROGRESS_STALL_CEILING_MS, ChatGptCompletionTracker, chatGptExternalProgressSuppressesDomHealth, CHATGPT_RESPONSE_DOM_GRACE_MS, MAX_CHATGPT_INTERNAL_OBSERVATION_FAULTS, CHATGPT_COMPOSER_DOCUMENT_END_KEY, CHATGPT_COMPOSER_SELECT_ALL_KEY, ChatGptBrowserObservationTimeoutError, ChatGptDomHealthObservationError, ChatGptBrowserWorker, ChatGptSubmissionRejectionObserver, ChatGptPromptAttachmentIntegrityError, ChatGptTurnDomHealthTracker, ChatGptVisibleTraceTracker, MAX_CHATGPT_BROWSER_PAGE_REBINDS, MAX_CHATGPT_BROWSER_TABS, MAX_CHATGPT_CONNECTOR_TRIGGER_ATTEMPTS, assertChatGptWebInputWithinLimits, assertChatGptWebMultipartInputWithinLimits, browserDiagnosticCheckpoint, chatGptConnectorAttachmentMode, chatGptNewTurnIdentity, chatGptReboundTurnIdentity, chatGptSubmissionEvidence, connectAfterClosingBrowserConnection, dismissChatGptTemporaryChatOnboarding, isChatGptTraceControl, redactChatGptUiDiagnostic, resolveBrowserConfig, resolveChatGptToolConfirmation, resolveChatGptWebMultipartStagingMode, sanitizeChatGptBrowserDiagnosticState, setChatGptThinkMode, stripChatGptTraceControlSuffix, throwIfChatGptRateLimitDialog, throwIfChatGptSessionFailureAlert, throwIfChatGptTerminalErrorAlert, withChatGptBrowserObservationTimeout, CHATGPT_MULTIPART_RESPONSE_DOM_GRACE_MS, browserStageTimeouts, ChatGptSuspensionClock, remainingStageBudgetMs } from "../src/adapters/chatgpt-web/browser-worker";
+import { CHATGPT_BROWSER_OBSERVATION_PROBE_TIMEOUT_MS, CHATGPT_COMPLETION_SETTLE_MS, CHATGPT_EXTERNAL_PROGRESS_CLOCK_SKEW_MS, CHATGPT_EXTERNAL_PROGRESS_STALL_CEILING_MS, ChatGptCompletionTracker, ChatGptPostToolFinalAnswerMissingError, CHATGPT_POST_TOOL_FINALIZATION_PROMPT, chatGptExternalProgressSuppressesDomHealth, CHATGPT_RESPONSE_DOM_GRACE_MS, MAX_CHATGPT_INTERNAL_OBSERVATION_FAULTS, CHATGPT_COMPOSER_DOCUMENT_END_KEY, CHATGPT_COMPOSER_SELECT_ALL_KEY, ChatGptBrowserObservationTimeoutError, ChatGptDomHealthObservationError, ChatGptBrowserWorker, ChatGptSubmissionRejectionObserver, ChatGptPromptAttachmentIntegrityError, ChatGptTurnDomHealthTracker, ChatGptVisibleTraceTracker, MAX_CHATGPT_BROWSER_PAGE_REBINDS, MAX_CHATGPT_BROWSER_TABS, MAX_CHATGPT_CONNECTOR_TRIGGER_ATTEMPTS, assertChatGptWebInputWithinLimits, assertChatGptWebMultipartInputWithinLimits, browserDiagnosticCheckpoint, chatGptConnectorAttachmentMode, chatGptNewTurnIdentity, chatGptReboundTurnIdentity, chatGptSubmissionEvidence, connectAfterClosingBrowserConnection, dismissChatGptTemporaryChatOnboarding, isChatGptTraceControl, redactChatGptUiDiagnostic, resolveBrowserConfig, resolveChatGptToolConfirmation, resolveChatGptWebMultipartStagingMode, sanitizeChatGptBrowserDiagnosticState, setChatGptThinkMode, stripChatGptTraceControlSuffix, throwIfChatGptRateLimitDialog, throwIfChatGptSessionFailureAlert, throwIfChatGptTerminalErrorAlert, withChatGptBrowserObservationTimeout, CHATGPT_MULTIPART_RESPONSE_DOM_GRACE_MS, browserStageTimeouts, ChatGptSuspensionClock, remainingStageBudgetMs } from "../src/adapters/chatgpt-web/browser-worker";
 import { ensureChatGptPersonalizedConnectorAccess, chatGptUnavailableProDetail } from "../src/adapters/chatgpt-web/browser-worker";
 import { chatGptStoppedThinkingError } from "../src/adapters/chatgpt-web/adapter-error";
 import { CHATGPT_STOPPED_THINKING_LABELS } from "../src/adapters/chatgpt-web/ui-labels";
@@ -4439,7 +4439,7 @@ test("Full mode has no fixed post-tool final-answer deadline", () => {
   }, 3_100 + CHATGPT_COMPLETION_SETTLE_MS)).toBeTrue();
 });
 
-test("Full mode fails closed when ChatGPT exposes completion without a post-tool final answer", () => {
+test("Full mode emits a typed recovery signal when ChatGPT ends at the pre-tool answer boundary", () => {
   const tracker = new ChatGptCompletionTracker(500, 1_000);
   const partialLookingFinal = {
     responsePresent: true,
@@ -4453,8 +4453,39 @@ test("Full mode fails closed when ChatGPT exposes completion without a post-tool
   expect(tracker.update(partialLookingFinal, 1_000)).toBeFalse();
   // Citation/markup hydration is not a new final answer and cannot release the boundary.
   expect(tracker.update({ ...partialLookingFinal, currentHtml: '<p data-hydrated="true">partial answer</p>' }, 1_999)).toBeFalse();
-  expect(() => tracker.update(partialLookingFinal, 2_000))
-    .toThrow("completed without producing a final answer after its last Codex tool call");
+  let failure: unknown;
+  try {
+    tracker.update(partialLookingFinal, 2_000);
+  } catch (error) {
+    failure = error;
+  }
+  expect(failure).toBeInstanceOf(ChatGptPostToolFinalAnswerMissingError);
+
+  // A completion-fence race may reveal a newly starting MCP activity. Recovery resets only this
+  // grace window rather than accepting stale pre-tool text or failing the browser turn.
+  tracker.resetMissingPostToolAnswerGrace();
+  expect(tracker.update(partialLookingFinal, 2_001)).toBeFalse();
+  expect(tracker.update(partialLookingFinal, 3_000)).toBeFalse();
+  expect(() => tracker.update(partialLookingFinal, 3_001))
+    .toThrow(ChatGptPostToolFinalAnswerMissingError);
+});
+
+test("post-tool finalization recovery is tool-less and happens only after the broker completion fence", () => {
+  expect(CHATGPT_POST_TOOL_FINALIZATION_PROMPT).toContain("Do not call any tool or connector");
+  expect(CHATGPT_POST_TOOL_FINALIZATION_PROMPT).toContain("complete final user-facing answer");
+  expect(CHATGPT_POST_TOOL_FINALIZATION_PROMPT).toContain("Preserve the original requested output format");
+
+  const worker = readFileSync("src/adapters/chatgpt-web/browser-worker.ts", "utf8");
+  const recovery = worker.indexOf("error instanceof ChatGptPostToolFinalAnswerMissingError");
+  const fence = worker.indexOf("turn.completionFence.commit(revision)", recovery);
+  const clearConnector = worker.indexOf("this.clearChatGptComposerState(page)", recovery);
+  const recoveryPrompt = worker.indexOf("CHATGPT_POST_TOOL_FINALIZATION_PROMPT", recovery);
+  const disableProgress = worker.indexOf("activeExternalProgress = undefined", recovery);
+  expect(recovery).toBeGreaterThan(0);
+  expect(fence).toBeGreaterThan(recovery);
+  expect(clearConnector).toBeGreaterThan(fence);
+  expect(recoveryPrompt).toBeGreaterThan(clearConnector);
+  expect(disableProgress).toBeGreaterThan(recovery);
 });
 
 test("a future progress timestamp is not treated as liveness", () => {
