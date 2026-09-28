@@ -18,8 +18,9 @@ const rootRegressionFiles = [
   // Current/legacy ChatGPT response layouts and final-answer extraction.
   "tests/browser-response-dom.test.ts",
   "tests/chatgpt-session.test.ts",
-  // End-to-end adapter/MCP contracts and retained-turn behavior.
-  "tests/chatgpt-web-harness.test.ts",
+  // The full chatgpt-web-harness suite runs in bun run verify immediately after this gate.
+  // Do not duplicate the entire harness here: standalone selection can retain Windows-only
+  // broker handles longer than the focused tests below need, while adding no release coverage.
 ];
 
 const launcherRegressionFiles = [
