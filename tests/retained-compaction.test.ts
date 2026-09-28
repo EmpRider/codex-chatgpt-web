@@ -523,10 +523,14 @@ test("retained compaction heartbeats renew the handoff liveness deadline", async
     run: async (turn: BrowserTurn): Promise<string> => {
       const prepared = await turn.prepareResume!();
       prepared.release();
-      await Bun.sleep(150);
-      turn.onHeartbeat?.();
-      await Bun.sleep(150);
-      turn.onHeartbeat?.();
+      // Keep this run alive longer than the original liveness deadline while leaving
+      // substantial scheduler margin between heartbeats. CI runners can pause a process for
+      // hundreds of milliseconds under load, so tiny 150ms/250ms timing windows make this
+      // integration test flaky without adding any stronger liveness guarantee.
+      for (let heartbeat = 0; heartbeat < 4; heartbeat += 1) {
+        await Bun.sleep(300);
+        turn.onHeartbeat?.();
+      }
       submitHandoff("Heartbeat-renewed checkpoint");
       return await new Promise<string>((_resolve, reject) => {
         const onAbort = () => reject(new DOMException("retained handoff browser closed", "AbortError"));
@@ -544,11 +548,11 @@ test("retained compaction heartbeats renew the handoff liveness deadline", async
     { localToolsEnabled: true, solAvailable: true, extraHighAvailable: true, proAvailable: true },
     "trace_renewed_deadline",
     undefined,
-    250,
+    1_000,
     () => { progress += 1; },
   )).resolves.toBe("Heartbeat-renewed checkpoint");
-  expect(progress).toBeGreaterThanOrEqual(4);
-  expect(renewals).toBeGreaterThanOrEqual(3);
+  expect(progress).toBeGreaterThanOrEqual(6);
+  expect(renewals).toBeGreaterThanOrEqual(5);
 });
 
 test("a rejected exact compaction run is evicted while a successful run remains replayable", async () => {
