@@ -51,6 +51,8 @@ jobs:
       - name: Prepare owned AppImage toolset
         if: runner.os == 'Linux'
         run: bun run launcher/scripts/prepare-linux-appimage-tools.cjs
+      - name: Run EmpRider fork regression gate
+        run: bun run regression:fork
       - run: bun run verify
       - run: bun run app:package
       - name: Verify Linux AppImage ABI on current Arch
