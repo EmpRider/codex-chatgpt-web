@@ -1698,6 +1698,7 @@ test("repeated connector verification reuses its selected pill before clearing t
     config: { appName: "Codex Native2 DEV" },
     activeComposer: async () => selectedComposer,
     connectorIsSelected: async () => true,
+    attachedPromptText: async () => "",
   }, page, async checkpoint => { checkpoints.push(checkpoint); })).resolves.toBe(selectedComposer);
 
   expect(fillCalls).toBe(0);
