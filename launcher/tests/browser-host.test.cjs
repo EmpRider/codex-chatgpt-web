@@ -1150,6 +1150,66 @@ test("a later sign-out wins over pending native and page authentication probes",
   assert.equal(updates.some(update => update.authenticated === true), false);
 });
 
+test("session changes use the open page after invalidating an older check", async () => {
+  for (const result of [
+    { sessionAuthenticated: true, expected: "ready" },
+    { sessionAuthenticated: false, expected: "signed-out" },
+    { sessionAuthenticated: false, sessionCheckError: "HTTP 403", expected: "error" },
+  ]) {
+    let finishOld;
+    let pageChecks = 0;
+    const fixture = Object.assign(Object.create(BrowserHost.prototype), {
+      authenticationRevision: 0, state: { authenticated: false }, turnTabs: new Map(),
+      view: { webContents: {
+        getURL: () => "https://chatgpt.com/?temporary-chat=true", isDestroyed: () => false,
+        executeJavaScript: async () => {
+          pageChecks++;
+          if (pageChecks === 1) await new Promise(resolve => { finishOld = resolve; });
+          return { composer: true, temporary: true, readyState: "complete", ...result };
+        },
+        session: { fetch: async () => { assert.fail("A loaded ChatGPT page owns session verification"); } },
+      } },
+      setState(patch) { this.state = { ...this.state, ...patch }; },
+      snapshot() { return this.state; }, logger: { info() {}, warn() {} },
+    });
+    const old = fixture.probeAuthentication();
+    const refresh = fixture.refreshAuthenticationFromSession();
+    finishOld();
+    await Promise.all([old, refresh]);
+    assert.equal(pageChecks, 2);
+    assert.equal(fixture.state.authenticated, result.sessionAuthenticated);
+    assert.equal(fixture.state.status, result.expected);
+  }
+});
+
+test("sign-out during a refreshed page check rejects its earlier signed-in result", async () => {
+  let finishPage;
+  let pageChecks = 0;
+  const updates = [];
+  const fixture = Object.assign(Object.create(BrowserHost.prototype), {
+    authenticationRevision: 0, state: { authenticated: false }, turnTabs: new Map(),
+    view: { webContents: {
+      getURL: () => "https://chatgpt.com/?temporary-chat=true", isDestroyed: () => false,
+      executeJavaScript: async () => {
+        const check = ++pageChecks;
+        if (check === 1) await new Promise(resolve => { finishPage = resolve; });
+        return { sessionAuthenticated: check === 1, readyState: "complete", composer: true, temporary: true };
+      },
+      session: { fetch: async () => { assert.fail("Must use the loaded page"); } },
+    } },
+    setState(patch) { updates.push(patch); this.state = { ...this.state, ...patch }; },
+    snapshot() { return this.state; }, logger: { info() {}, warn() {} },
+  });
+  const first = fixture.refreshAuthenticationFromSession();
+  const second = fixture.refreshAuthenticationFromSession();
+  finishPage();
+  await Promise.all([first, second]);
+  assert.equal(pageChecks, 2);
+  assert.equal(fixture.state.authenticated, false);
+  assert.equal(fixture.state.status, "signed-out");
+  assert.equal(updates.some(update => update.authenticated === true), false);
+});
+
 test("in-page account navigation schedules authentication refresh only for the main frame", async () => {
   const contents = Object.assign(new EventEmitter(), { setWindowOpenHandler() {} });
   let checks = 0;
