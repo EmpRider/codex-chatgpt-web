@@ -1076,7 +1076,7 @@ test("shared session changes refresh hidden sign-in state without navigating any
     state: { authenticated: true, status: "ready" },
     turnTabs: new Map(),
     getBrowserInteractionMode: () => mode,
-    view: { webContents: { session: {
+    view: { webContents: { isDestroyed: () => false, getURL: () => IDLE_BROWSER_URL, session: {
       cookies,
       fetch: async (url, options) => {
         requests.push({ url, options });
@@ -1120,12 +1120,13 @@ test("a later sign-out wins over pending native and page authentication probes",
   let finishNative;
   let finishPage;
   let requests = 0;
+  let url = "https://chatgpt.com/?temporary-chat=true";
   const updates = [];
   const fixture = Object.assign(Object.create(BrowserHost.prototype), {
     authenticationRevision: 0, state: { authenticated: false },
     turnTabs: new Map(),
     view: { webContents: {
-      getURL: () => "https://chatgpt.com/?temporary-chat=true", isDestroyed: () => false,
+      getURL: () => url, isDestroyed: () => false,
       executeJavaScript: () => new Promise(resolve => { finishPage = resolve; }),
       session: { fetch: async url => {
         requests += 1;
@@ -1137,6 +1138,7 @@ test("a later sign-out wins over pending native and page authentication probes",
     snapshot() { return this.state; }, logger: { info() {}, warn() {} },
   });
   const page = fixture.probeAuthentication();
+  url = IDLE_BROWSER_URL;
   const first = fixture.refreshAuthenticationFromSession();
   const second = fixture.refreshAuthenticationFromSession();
   assert.equal(first, second);
