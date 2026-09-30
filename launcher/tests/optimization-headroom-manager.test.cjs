@@ -80,7 +80,7 @@ test("Headroom reuses an already healthy service on the configured port", async 
     healthCheck: async (port, route) => {
       assert.equal(port, 8787);
       assert.equal(route, "/readyz");
-      return { ready: true };
+      return { service: "headroom-proxy", ready: true };
     },
   });
 
@@ -91,7 +91,7 @@ test("Headroom reuses an already healthy service on the configured port", async 
     mlEnabled: false,
   });
 
-  assert.deepEqual(health, { ready: true });
+  assert.deepEqual(health, { service: "headroom-proxy", ready: true });
   assert.equal(resolverCalled, false);
   assert.deepEqual(service.state(), {
     running: true,
@@ -101,4 +101,30 @@ test("Headroom reuses an already healthy service on the configured port", async 
     portConflict: false,
     lastError: null,
   });
+});
+
+
+test("Headroom does not reuse an unrelated healthy service on the configured port", async () => {
+  let resolverCalled = false;
+  const service = new HeadroomService({
+    root: process.cwd(),
+    logger: null,
+    portResolver: async () => {
+      resolverCalled = true;
+      throw new Error("Headroom port 8787 is already in use. Change the Headroom port in Settings and try again.");
+    },
+    healthCheck: async () => ({ service: "another-service", ready: true }),
+  });
+
+  await assert.rejects(
+    () => service.start({
+      executable: "unused-headroom",
+      port: 8787,
+      codeEnabled: true,
+      mlEnabled: false,
+    }),
+    /Headroom port 8787 is already in use/,
+  );
+  assert.equal(resolverCalled, true);
+  assert.equal(service.state().ready, false);
 });
