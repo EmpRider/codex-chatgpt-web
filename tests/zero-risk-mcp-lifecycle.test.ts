@@ -428,6 +428,7 @@ describe("Zero Risk public MCP ABI", () => {
       const invocation = callTurnBroker(socketPath, {
         method: "invoke",
         bindingId: claimed.bindingId,
+        activityId,
         wireName: "exec_command",
         arguments: { cmd: "slow-safe-tool" },
       }, 25);
