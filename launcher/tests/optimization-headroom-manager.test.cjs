@@ -9,9 +9,10 @@ const {
 
 test("private uv runtime resolves supported packaged platforms", () => {
   assert.equal(uvAssetName("win32", "x64"), "uv-x86_64-pc-windows-msvc.zip");
+  assert.equal(uvAssetName("win32", "arm64"), "uv-aarch64-pc-windows-msvc.zip");
   assert.equal(uvAssetName("darwin", "arm64"), "uv-aarch64-apple-darwin.tar.gz");
   assert.equal(uvAssetName("linux", "x64"), "uv-x86_64-unknown-linux-musl.tar.gz");
-  assert.equal(uvAssetName("win32", "arm64"), null);
+  assert.equal(uvAssetName("linux", "arm64"), "uv-aarch64-unknown-linux-gnu.tar.gz");
 });
 
 test("Headroom extras are selected by GUI features", () => {
