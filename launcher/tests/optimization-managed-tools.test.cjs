@@ -31,7 +31,7 @@ test("normalization repairs only invalid optimization fields", () => {
   const normalized = normalizeOptimizationSettings({
     autoUpdate: "yes",
     adhd: { enabled: false, activationMode: "wat" },
-    rtk: { enabled: true, ultraCompact: true },
+    rtk: { enabled: true },
     headroom: { enabled: true, codeEnabled: false, mlEnabled: true, minTokens: -1, protectRecentTurns: 99 },
     caveman: { enabled: true, level: "ultra" },
     ponytail: { enabled: true, level: "full", applyToSubagents: false },
@@ -41,7 +41,6 @@ test("normalization repairs only invalid optimization fields", () => {
   assert.equal(normalized.autoUpdate, true);
   assert.equal(normalized.adhd.enabled, false);
   assert.equal(normalized.adhd.activationMode, "always");
-  assert.equal(normalized.rtk.ultraCompact, true);
   assert.equal(normalized.headroom.codeEnabled, false);
   assert.equal(normalized.headroom.mlEnabled, true);
   assert.equal(normalized.headroom.minTokens, 500);
