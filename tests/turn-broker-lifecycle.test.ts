@@ -742,3 +742,114 @@ test("one timed-out MCP invocation does not cancel a parallel sibling on the sam
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+
+test("an unresolved timed-out invocation cannot be replayed as an identical native side effect", async () => {
+  const root = mkdtempSync(join(tmpdir(), "cgw-amb-"));
+  const socketPath = process.platform === "win32"
+    ? defaultBrokerEndpoint(root)
+    : join(tmpdir(), `cgw-amb-${process.pid}.sock`);
+  const broker = TurnBroker.forSocket(socketPath);
+  try {
+    const token = await broker.register({
+      cwd: root,
+      roots: [root],
+      writableRoots: [root],
+      sandboxPolicy: { type: "dangerFullAccess" },
+      tools: [],
+    }, undefined, "ambiguous-timeout-turn");
+    const firstActivity = "activity_ambiguousfirst123456789";
+    const claimed = await callTurnBroker<{ bindingId: string }>(socketPath, {
+      method: "claim",
+      token,
+      activityId: firstActivity,
+    });
+
+    const first = callTurnBroker(socketPath, {
+      method: "invoke",
+      bindingId: claimed.bindingId,
+      wireName: "exec_command",
+      arguments: { cmd: "perform-side-effect", cwd: root },
+    }, 25);
+    const [firstRequest] = await broker.nextToolBatch(token);
+    expect(firstRequest).toBeDefined();
+    await expect(first).rejects.toThrow("timed out");
+    await Bun.sleep(25);
+    await callTurnBroker(socketPath, {
+      method: "activity_complete",
+      token,
+      activityId: firstActivity,
+    });
+
+    const secondActivity = "activity_ambiguoussecond12345678";
+    await callTurnBroker(socketPath, {
+      method: "claim",
+      token,
+      activityId: secondActivity,
+    });
+    const duplicate = callTurnBroker<{
+      content: unknown[];
+      structuredContent?: unknown;
+      isError?: boolean;
+    }>(socketPath, {
+      method: "invoke",
+      bindingId: claimed.bindingId,
+      wireName: "exec_command",
+      arguments: { cwd: root, cmd: "perform-side-effect" },
+    }, 500);
+
+    const waitAbort = new AbortController();
+    const timer = setTimeout(() => waitAbort.abort(), 50);
+    try {
+      await expect(broker.nextToolBatch(token, waitAbort.signal)).rejects.toThrow("tool wait aborted");
+    } finally {
+      clearTimeout(timer);
+    }
+    await expect(duplicate).resolves.toMatchObject({
+      isError: true,
+      structuredContent: {
+        code: "codex_tool_outcome_ambiguous",
+        retryable: false,
+      },
+    });
+
+    await callTurnBroker(socketPath, {
+      method: "activity_complete",
+      token,
+      activityId: secondActivity,
+    });
+    // Once the original native operation reports its eventual result, the ambiguity is cleared.
+    expect(() => broker.completeTool(token, firstRequest!.callId, {
+      content: [{ type: "text", text: "original completed late" }],
+    })).not.toThrow();
+
+    const thirdActivity = "activity_ambiguousthird123456789";
+    await callTurnBroker(socketPath, {
+      method: "claim",
+      token,
+      activityId: thirdActivity,
+    });
+    const retry = callTurnBroker(socketPath, {
+      method: "invoke",
+      bindingId: claimed.bindingId,
+      wireName: "exec_command",
+      arguments: { cmd: "perform-side-effect", cwd: root },
+    }, 2_000);
+    const [retryRequest] = await broker.nextToolBatch(token);
+    expect(retryRequest).toBeDefined();
+    broker.completeTool(token, retryRequest!.callId, {
+      content: [{ type: "text", text: "retry completed" }],
+    });
+    await expect(retry).resolves.toMatchObject({
+      content: [{ type: "text", text: "retry completed" }],
+    });
+    await callTurnBroker(socketPath, {
+      method: "activity_complete",
+      token,
+      activityId: thirdActivity,
+    });
+  } finally {
+    await broker.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
