@@ -1,0 +1,352 @@
+import { expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { callTurnBroker, TurnBroker } from "../src/adapters/chatgpt-web/turn-broker";
+import { defaultBrokerEndpoint } from "../src/config";
+
+function harness(name: string) {
+  const root = mkdtempSync(join(tmpdir(), `cgw-deep-${name}-`));
+  const socketPath = defaultBrokerEndpoint(root);
+  const broker = TurnBroker.forSocket(socketPath);
+  const environment = {
+    cwd: root,
+    roots: [root],
+    writableRoots: [root],
+    sandboxPolicy: { type: "dangerFullAccess" as const },
+    tools: [],
+  };
+  return {
+    root,
+    socketPath,
+    broker,
+    environment,
+    close: async () => {
+      await broker.close();
+      rmSync(root, { recursive: true, force: true });
+    },
+  };
+}
+
+async function claim(
+  socketPath: string,
+  token: string,
+  activityId: string,
+): Promise<{ bindingId: string }> {
+  return callTurnBroker<{ bindingId: string }>(socketPath, {
+    method: "claim",
+    token,
+    activityId,
+  });
+}
+
+async function completeActivity(
+  socketPath: string,
+  token: string,
+  activityId: string,
+  activityAbandoned = false,
+): Promise<void> {
+  await callTurnBroker(socketPath, {
+    method: "activity_complete",
+    token,
+    activityId,
+    ...(activityAbandoned ? { activityAbandoned: true } : {}),
+  });
+}
+
+test("unknown timed-out side effect blocks only the identical fingerprint", async () => {
+  const h = harness("fingerprint-isolation");
+  try {
+    const token = await h.broker.register(h.environment, undefined, "deep-fingerprint");
+    const firstActivity = "activity_deepfingerprint001";
+    const firstClaim = await claim(h.socketPath, token, firstActivity);
+
+    const timedOut = callTurnBroker(h.socketPath, {
+      method: "invoke",
+      bindingId: firstClaim.bindingId,
+      activityId: firstActivity,
+      wireName: "exec_command",
+      arguments: { cmd: "dangerous-operation", cwd: h.root },
+    }, 25);
+    const [original] = await h.broker.nextToolBatch(token);
+    expect(original).toBeDefined();
+    await expect(timedOut).rejects.toThrow("timed out");
+    await Bun.sleep(25);
+    await completeActivity(h.socketPath, token, firstActivity, true);
+
+    const differentActivity = "activity_deepfingerprint002";
+    await claim(h.socketPath, token, differentActivity);
+    const different = callTurnBroker(h.socketPath, {
+      method: "invoke",
+      bindingId: firstClaim.bindingId,
+      activityId: differentActivity,
+      wireName: "exec_command",
+      arguments: { cmd: "safe-different-operation", cwd: h.root },
+    }, 1_000);
+    const [differentRequest] = await h.broker.nextToolBatch(token);
+    expect(differentRequest?.arguments?.cmd).toBe("safe-different-operation");
+    h.broker.completeTool(token, differentRequest!.callId, {
+      content: [{ type: "text", text: "different completed" }],
+    });
+    await expect(different).resolves.toMatchObject({
+      content: [{ type: "text", text: "different completed" }],
+    });
+    await completeActivity(h.socketPath, token, differentActivity);
+
+    const duplicateActivity = "activity_deepfingerprint003";
+    await claim(h.socketPath, token, duplicateActivity);
+    await expect(callTurnBroker(h.socketPath, {
+      method: "invoke",
+      bindingId: firstClaim.bindingId,
+      activityId: duplicateActivity,
+      wireName: "exec_command",
+      arguments: { cwd: h.root, cmd: "dangerous-operation" },
+    }, 500)).resolves.toMatchObject({
+      isError: true,
+      structuredContent: { code: "codex_tool_outcome_ambiguous" },
+    });
+    await completeActivity(h.socketPath, token, duplicateActivity);
+
+    h.broker.completeTool(token, original!.callId, {
+      content: [{ type: "text", text: "original eventually completed" }],
+    });
+  } finally {
+    await h.close();
+  }
+});
+
+test("a late result is idempotently replayed inside one recovery activity and expires afterward", async () => {
+  const h = harness("late-replay");
+  try {
+    const token = await h.broker.register(h.environment, undefined, "deep-late-replay");
+    const originalActivity = "activity_deeplateoriginal01";
+    const originalClaim = await claim(h.socketPath, token, originalActivity);
+
+    const timedOut = callTurnBroker(h.socketPath, {
+      method: "invoke",
+      bindingId: originalClaim.bindingId,
+      activityId: originalActivity,
+      wireName: "exec_command",
+      arguments: { cmd: "same-side-effect", cwd: h.root },
+    }, 25);
+    const [originalRequest] = await h.broker.nextToolBatch(token);
+    await expect(timedOut).rejects.toThrow("timed out");
+    await Bun.sleep(25);
+    await completeActivity(h.socketPath, token, originalActivity, true);
+    h.broker.completeTool(token, originalRequest!.callId, {
+      content: [{ type: "text", text: "cached-native-result" }],
+      structuredContent: { recovered: true },
+    });
+
+    const recoveryActivity = "activity_deeplaterecover001";
+    await claim(h.socketPath, token, recoveryActivity);
+    const invokeRecovery = () => callTurnBroker(h.socketPath, {
+      method: "invoke",
+      bindingId: originalClaim.bindingId,
+      activityId: recoveryActivity,
+      wireName: "exec_command",
+      arguments: { cwd: h.root, cmd: "same-side-effect" },
+    }, 500);
+
+    await expect(invokeRecovery()).resolves.toMatchObject({
+      content: [{ type: "text", text: "cached-native-result" }],
+      structuredContent: { recovered: true },
+    });
+    await expect(invokeRecovery()).resolves.toMatchObject({
+      content: [{ type: "text", text: "cached-native-result" }],
+      structuredContent: { recovered: true },
+    });
+
+    const noNativeReplay = new AbortController();
+    const timer = setTimeout(() => noNativeReplay.abort(), 40);
+    try {
+      await expect(h.broker.nextToolBatch(token, noNativeReplay.signal)).rejects.toThrow("tool wait aborted");
+    } finally {
+      clearTimeout(timer);
+    }
+    await completeActivity(h.socketPath, token, recoveryActivity);
+
+    const intentionalActivity = "activity_deeplateintent001";
+    await claim(h.socketPath, token, intentionalActivity);
+    const intentional = callTurnBroker(h.socketPath, {
+      method: "invoke",
+      bindingId: originalClaim.bindingId,
+      activityId: intentionalActivity,
+      wireName: "exec_command",
+      arguments: { cmd: "same-side-effect", cwd: h.root },
+    }, 1_000);
+    const [intentionalRequest] = await h.broker.nextToolBatch(token);
+    expect(intentionalRequest).toBeDefined();
+    h.broker.completeTool(token, intentionalRequest!.callId, {
+      content: [{ type: "text", text: "new-native-execution" }],
+    });
+    await expect(intentional).resolves.toMatchObject({
+      content: [{ type: "text", text: "new-native-execution" }],
+    });
+    await completeActivity(h.socketPath, token, intentionalActivity);
+  } finally {
+    await h.close();
+  }
+});
+
+test("repeated transport timeouts do not strand activities or prevent completion fencing", async () => {
+  const h = harness("timeout-stress");
+  try {
+    const token = await h.broker.register(h.environment, undefined, "deep-timeout-stress");
+    let bindingId = "";
+
+    for (let index = 0; index < 12; index += 1) {
+      const activityId = `activity_deepstress${String(index).padStart(4, "0")}abcd`;
+      const claimed = await claim(h.socketPath, token, activityId);
+      bindingId ||= claimed.bindingId;
+      expect(claimed.bindingId).toBe(bindingId);
+
+      const invocation = callTurnBroker(h.socketPath, {
+        method: "invoke",
+        bindingId,
+        activityId,
+        wireName: "exec_command",
+        arguments: { cmd: `slow-${index}` },
+      }, 15);
+      const [request] = await h.broker.nextToolBatch(token);
+      expect(request?.arguments?.cmd).toBe(`slow-${index}`);
+      await expect(invocation).rejects.toThrow("timed out");
+      await Bun.sleep(10);
+      await completeActivity(h.socketPath, token, activityId, true);
+
+      if (index % 3 === 0) {
+        h.broker.completeTool(token, request!.callId, {
+          content: [{ type: "text", text: `late-${index}` }],
+        });
+      }
+    }
+
+    expect(h.broker.beginCompletionFence(token)).toBeDefined();
+
+    const finalActivity = "activity_deepstressfinal001";
+    await claim(h.socketPath, token, finalActivity);
+    const healthy = callTurnBroker(h.socketPath, {
+      method: "invoke",
+      bindingId,
+      activityId: finalActivity,
+      wireName: "exec_command",
+      arguments: { cmd: "healthy-final" },
+    }, 1_000);
+    const [healthyRequest] = await h.broker.nextToolBatch(token);
+    h.broker.completeTool(token, healthyRequest!.callId, {
+      content: [{ type: "text", text: "healthy" }],
+    });
+    await expect(healthy).resolves.toMatchObject({
+      content: [{ type: "text", text: "healthy" }],
+    });
+    await completeActivity(h.socketPath, token, finalActivity);
+  } finally {
+    await h.close();
+  }
+}, 15_000);
+
+test("explicit turn revocation remains terminal even after timeout-preservation logic", async () => {
+  const h = harness("explicit-revoke");
+  try {
+    const token = await h.broker.register(h.environment, undefined, "deep-explicit-revoke");
+    const activityId = "activity_deeprevoke000001";
+    const claimed = await claim(h.socketPath, token, activityId);
+
+    const invocation = callTurnBroker(h.socketPath, {
+      method: "invoke",
+      bindingId: claimed.bindingId,
+      activityId,
+      wireName: "exec_command",
+      arguments: { cmd: "running-before-cancel" },
+    }, 1_000);
+    const [request] = await h.broker.nextToolBatch(token);
+    expect(request).toBeDefined();
+
+    h.broker.revoke(token, new DOMException("operator cancelled turn", "AbortError"));
+    await expect(invocation).rejects.toThrow("operator cancelled turn");
+    await expect(callTurnBroker(h.socketPath, {
+      method: "claim",
+      token,
+      activityId: "activity_deeprevoke000002",
+    })).rejects.toThrow("already finished");
+    expect(() => h.broker.completeTool(token, request!.callId, {
+      content: [{ type: "text", text: "must not resurrect" }],
+    })).toThrow("invalid or expired");
+  } finally {
+    await h.close();
+  }
+});
+
+test("parallel identical timeouts stay ambiguous without poisoning unrelated work", async () => {
+  const h = harness("parallel-identical");
+  try {
+    const token = await h.broker.register(h.environment, undefined, "deep-parallel-identical");
+    const activityA = "activity_deepparallelA00001";
+    const activityB = "activity_deepparallelB00001";
+    const activityC = "activity_deepparallelC00001";
+    const claimA = await claim(h.socketPath, token, activityA);
+    await claim(h.socketPath, token, activityB);
+
+    const invokeA = callTurnBroker(h.socketPath, {
+      method: "invoke",
+      bindingId: claimA.bindingId,
+      activityId: activityA,
+      wireName: "exec_command",
+      arguments: { cmd: "same-concurrent-side-effect" },
+    }, 25);
+    const invokeB = callTurnBroker(h.socketPath, {
+      method: "invoke",
+      bindingId: claimA.bindingId,
+      activityId: activityB,
+      wireName: "exec_command",
+      arguments: { cmd: "same-concurrent-side-effect" },
+    }, 25);
+    const batch = await h.broker.nextToolBatch(token);
+    expect(batch).toHaveLength(2);
+    await Promise.all([
+      expect(invokeA).rejects.toThrow("timed out"),
+      expect(invokeB).rejects.toThrow("timed out"),
+    ]);
+    await Bun.sleep(25);
+    await completeActivity(h.socketPath, token, activityA, true);
+    await completeActivity(h.socketPath, token, activityB, true);
+
+    h.broker.completeTool(token, batch[0]!.callId, {
+      content: [{ type: "text", text: "late-a" }],
+    });
+    h.broker.completeTool(token, batch[1]!.callId, {
+      content: [{ type: "text", text: "late-b" }],
+    });
+
+    await claim(h.socketPath, token, activityC);
+    await expect(callTurnBroker(h.socketPath, {
+      method: "invoke",
+      bindingId: claimA.bindingId,
+      activityId: activityC,
+      wireName: "exec_command",
+      arguments: { cmd: "same-concurrent-side-effect" },
+    }, 500)).resolves.toMatchObject({
+      isError: true,
+      structuredContent: { code: "codex_tool_outcome_ambiguous" },
+    });
+
+    const unrelated = callTurnBroker(h.socketPath, {
+      method: "invoke",
+      bindingId: claimA.bindingId,
+      activityId: activityC,
+      wireName: "exec_command",
+      arguments: { cmd: "unrelated-after-ambiguity" },
+    }, 1_000);
+    const [unrelatedRequest] = await h.broker.nextToolBatch(token);
+    expect(unrelatedRequest?.arguments?.cmd).toBe("unrelated-after-ambiguity");
+    h.broker.completeTool(token, unrelatedRequest!.callId, {
+      content: [{ type: "text", text: "unrelated-ok" }],
+    });
+    await expect(unrelated).resolves.toMatchObject({
+      content: [{ type: "text", text: "unrelated-ok" }],
+    });
+    await completeActivity(h.socketPath, token, activityC);
+  } finally {
+    await h.close();
+  }
+});
