@@ -82,7 +82,7 @@ function mergeSettings(current, patch) {
   return normalizeOptimizationSettings(next);
 }
 
-function createOptimizationController({ coreHome, stateStore, logger }) {
+function createOptimizationController({ coreHome, stateStore, logger, secretStore }) {
   const root = path.join(coreHome, "optimization");
   const settingsPath = path.join(root, "settings.json");
   const versionsPath = path.join(root, "versions.json");
@@ -112,6 +112,10 @@ function createOptimizationController({ coreHome, stateStore, logger }) {
       settings: current,
       root,
       lastUpdateCheckAt: stateStore.read().optimizationLastUpdateCheckAt ?? null,
+      secrets: {
+        jevApiKeyConfigured: secretStore?.hasJevApiKey?.() === true,
+        encryptionAvailable: secretStore?.encryptionAvailable?.() === true,
+      },
       components: toolIds().map(id => {
         const record = installedRecord(installed, id);
         return {
@@ -399,6 +403,16 @@ function createOptimizationController({ coreHome, stateStore, logger }) {
     return snapshot();
   }
 
+  function setJevApiKey(value) {
+    if (!secretStore) throw new Error("Optimization secret store is unavailable");
+    secretStore.setJevApiKey(value);
+    return snapshot();
+  }
+
+  function jevApiKey() {
+    return secretStore?.getJevApiKey?.() ?? null;
+  }
+
   persistRuntimeSettings();
 
   return {
@@ -407,6 +421,8 @@ function createOptimizationController({ coreHome, stateStore, logger }) {
     persistRuntimeSettings,
     root,
     setSettings,
+    setJevApiKey,
+    jevApiKey,
     snapshot,
     shutdown: () => headroomService.stop(),
   };
