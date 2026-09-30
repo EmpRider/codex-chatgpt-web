@@ -1,6 +1,7 @@
 const languages = require("./languages.json");
 const fs = require("node:fs");
 const { writePrivateFileAtomic } = require("./atomic-file.cjs");
+const { DEFAULT_OPTIMIZATION_SETTINGS, normalizeOptimizationSettings } = require("./optimization/settings.cjs");
 const SIDEBAR_MIN_WIDTH = 240;
 const SIDEBAR_MAX_WIDTH = 420;
 const SESSION_REFRESH_REMINDER_INTERVAL_MS = 48 * 60 * 60 * 1000;
@@ -27,6 +28,8 @@ const DEFAULT_STATE = Object.freeze({
   sidebarWidth: 252,
   mcpGuideStep: 0,
   sessionRefreshReminderAt: null,
+  optimization: DEFAULT_OPTIMIZATION_SETTINGS,
+  optimizationLastUpdateCheckAt: null,
 });
 
 function nextSessionRefreshReminderAt(now = Date.now()) {
@@ -40,6 +43,12 @@ function readState(filePath) {
     if (!parsed || parsed.version !== 1) return { ...DEFAULT_STATE };
     const state = { ...DEFAULT_STATE, ...parsed };
     delete state.bridgeEnabled;
+    state.optimization = normalizeOptimizationSettings(state.optimization);
+    if (state.optimizationLastUpdateCheckAt !== null
+      && (typeof state.optimizationLastUpdateCheckAt !== "string"
+        || !Number.isFinite(Date.parse(state.optimizationLastUpdateCheckAt)))) {
+      state.optimizationLastUpdateCheckAt = null;
+    }
     if (state.language !== null && (typeof state.language !== "string" || !Object.hasOwn(languages, state.language))) {
       state.language = DEFAULT_STATE.language;
     }

@@ -9,6 +9,7 @@ const {
   nextSessionRefreshReminderAt,
   validateSidebarState,
 } = require("../electron/state.cjs");
+const { DEFAULT_OPTIMIZATION_SETTINGS } = require("../electron/optimization/settings.cjs");
 
 test("launcher state persists onboarding, language, and autostart atomically", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-web-gpt-launcher-state-"));
@@ -37,6 +38,8 @@ test("launcher state persists onboarding, language, and autostart atomically", (
       sidebarWidth: 252,
       mcpGuideStep: 0,
       sessionRefreshReminderAt: null,
+      optimization: DEFAULT_OPTIMIZATION_SETTINGS,
+      optimizationLastUpdateCheckAt: null,
     });
     store.update({
       language: "zh-CN",
@@ -67,6 +70,8 @@ test("launcher state persists onboarding, language, and autostart atomically", (
       sidebarWidth: 252,
       mcpGuideStep: 0,
       sessionRefreshReminderAt: null,
+      optimization: DEFAULT_OPTIMIZATION_SETTINGS,
+      optimizationLastUpdateCheckAt: null,
     });
     if (process.platform !== "win32") assert.equal(fs.statSync(file).mode & 0o077, 0);
     assert.equal(fs.readdirSync(root).some(name => name.includes(".tmp-")), false);
@@ -148,6 +153,8 @@ test("persisted sidebar corruption is repaired without changing the rest of laun
       sidebarWidth: 252,
       mcpGuideStep: 0,
       sessionRefreshReminderAt: null,
+      optimization: DEFAULT_OPTIMIZATION_SETTINGS,
+      optimizationLastUpdateCheckAt: null,
     });
   } finally {
     fs.rmSync(root, { recursive: true, force: true });

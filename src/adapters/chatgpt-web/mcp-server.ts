@@ -14,6 +14,7 @@ import {
 import { CODEX_COMPACTION_CONTROL_WIRE_NAME } from "./native-compaction-control";
 import { callTurnBroker, TurnBrokerTimeoutError, type BrokerToolResult } from "./turn-broker";
 import { observeMcpToolCalls } from "./mcp-observation";
+import { optimizeNativeCommandResult } from "../../optimization/tool-results";
 
 interface ClaimedTurn {
   bindingId: string;
@@ -124,6 +125,21 @@ function wireName(tool: CodexTool): string {
 
 function exactTool(environment: ChatGptTurnEnvironment, name: string): CodexTool | undefined {
   return environment.tools.find(tool => !tool.namespace && tool.name === name);
+}
+
+export function nativeCommandOptimization(
+  tool: Pick<CodexTool, "name" | "namespace">,
+  args: Record<string, unknown>,
+): { command?: string } | undefined {
+  if (tool.namespace) return undefined;
+  if (tool.name === "exec_command" && typeof args.cmd === "string") {
+    return { command: args.cmd };
+  }
+  if (tool.name === "shell_command" && typeof args.command === "string") {
+    return { command: args.command };
+  }
+  if (tool.name === "write_stdin") return {};
+  return undefined;
 }
 
 function gatewayToolNameIsValid(name: string): boolean {
@@ -557,6 +573,7 @@ export async function runChatGptMcpServer(options: {
     tool: CodexTool,
     payload: { arguments?: Record<string, unknown>; input?: string },
     signal?: AbortSignal,
+    commandOptimization?: { command?: string },
   ) => {
     const timeoutMs = chatGptMcpInvocationTimeout(bound);
     try {
@@ -567,7 +584,10 @@ export async function runChatGptMcpServer(options: {
         freeform: tool.freeform === true,
         ...(tool.freeform ? { input: payload.input ?? "" } : { arguments: payload.arguments ?? {} }),
       }, timeoutMs, signal);
-      return asMcpResult(response);
+      const optimized = commandOptimization
+        ? await optimizeNativeCommandResult(response, commandOptimization.command)
+        : response;
+      return asMcpResult(optimized);
     } catch (error) {
       // A cancelled/timed-out MCP request no longer has a consumer for the native result. Revoke
       // the whole turn capability so the broker drops the pending invocation and every later call
@@ -607,6 +627,7 @@ export async function runChatGptMcpServer(options: {
     freeform: boolean,
     payload: { arguments?: Record<string, unknown>; input?: string },
     signal?: AbortSignal,
+    commandOptimization?: { command?: string },
   ) => {
     const gateway = execGateway(bound);
     if (!gateway) {
@@ -614,7 +635,7 @@ export async function runChatGptMcpServer(options: {
     }
     return invoke(bindingId, bound, gateway, {
       input: execGatewayProgram(nestedToolName, freeform, payload, bound.tools.map(wireName)),
-    }, signal);
+    }, signal, commandOptimization);
   };
 
   server.registerTool(
@@ -674,12 +695,21 @@ export async function runChatGptMcpServer(options: {
             }
           }
           const args = tool.name === "exec_command" ? execCommandArguments : shellCommandArguments;
-          return invoke(claimed.bindingId, bound, tool, { arguments: args }, extra.signal);
+          return invoke(
+            claimed.bindingId,
+            bound,
+            tool,
+            { arguments: args },
+            extra.signal,
+            { command: cmd },
+          );
         }
         const gateway = execGateway(bound);
         if (!gateway) {
           throw new Error("This Codex turn did not advertise a native command tool or the native exec gateway");
         }
+        // The gateway can flatten nested protocol metadata (including session identifiers) into
+        // text. Keep that envelope byte-exact; direct native command surfaces are optimized above.
         return invoke(claimed.bindingId, bound, gateway, {
           input: execCommandGatewayProgram(execCommandArguments, shellCommandArguments),
         }, extra.signal);
@@ -716,7 +746,7 @@ export async function runChatGptMcpServer(options: {
           ...(max_output_tokens !== undefined ? { max_output_tokens } : {}),
         } };
         return tool
-          ? invoke(claimed.bindingId, bound, tool, payload, extra.signal)
+          ? invoke(claimed.bindingId, bound, tool, payload, extra.signal, {})
           : invokeNestedNative(claimed.bindingId, bound, "write_stdin", false, payload, extra.signal);
       },
     ),
@@ -1014,7 +1044,14 @@ export async function runChatGptMcpServer(options: {
         if (input !== undefined) throw new Error(`Function Codex tool ${wire_name} does not accept freeform input`);
         const invocationArguments = args ?? {};
         assertBrowserToolArguments(tool, invocationArguments);
-        return invoke(claimed.bindingId, bound, tool, { arguments: invocationArguments }, extra.signal);
+        return invoke(
+          claimed.bindingId,
+          bound,
+          tool,
+          { arguments: invocationArguments },
+          extra.signal,
+          nativeCommandOptimization(tool, invocationArguments),
+        );
       });
     },
   );

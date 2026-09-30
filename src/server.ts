@@ -46,6 +46,8 @@ import {
 import { parseRequest } from "./responses/parser";
 import { expandPreviousResponseInput, flushResponseState, rememberResponseState } from "./responses/state";
 import { namespacedToolName, type AdapterEvent, type CodexParsedRequest } from "./types";
+import { compressParsedContextWithHeadroom } from "./optimization/headroom";
+import { optimizeRouteWithJev } from "./optimization/jev";
 import type { CodexProviderConfig } from "./types";
 import type { ProviderAdapter } from "./adapters/base";
 import { VERSION } from "./version";
@@ -520,8 +522,13 @@ export async function responseRequest(
   let route: ChatGptWebModelRoute;
   try {
     parsed = parseRequest(expanded);
-    route = routeChatGptWebRequest(parsed, config);
     const identity = extractChatGptTurnIdentity(parsed);
+    const jevLeaseKey = identity.threadId && identity.turnId
+      ? `${identity.threadId}\u0000${identity.turnId}`
+      : undefined;
+    await optimizeRouteWithJev(parsed, config, fetch, jevLeaseKey);
+    route = routeChatGptWebRequest(parsed, config);
+    await compressParsedContextWithHeadroom(parsed);
     if (identity.threadId && identity.turnId) {
       options.onTurnIdentity?.({ threadId: identity.threadId, turnId: identity.turnId });
     }

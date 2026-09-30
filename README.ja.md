@@ -21,7 +21,7 @@
 </p>
 
 <p align="center">
-  <a href="#get-started">使い始める</a> · <a href="https://github.com/EmpRider/codex-chatgpt-web/releases">更新内容</a> · <a href="docs/architecture.md">アーキテクチャ</a> · <a href="TROUBLESHOOTING.md">トラブルシューティング</a>
+  <a href="#get-started">使い始める</a> · <a href="https://github.com/EmpRider/codex-chatgpt-web/releases">更新内容</a> · <a href="docs/optimization-stack.md">最適化スタック</a> · <a href="docs/architecture.md">アーキテクチャ</a> · <a href="TROUBLESHOOTING.md">トラブルシューティング</a>
 </p>
 
 アカウントで利用可能な Pro を含む ChatGPT Web モデルを、Codex のネイティブモデル選択画面から使えます。ChatGPT Web の独立した利用枠を使うため、Work や Codex の利用枠は消費しません。UI、タスク、画像、ストリーミングはそのままです。

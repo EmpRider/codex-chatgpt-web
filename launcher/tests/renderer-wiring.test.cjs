@@ -677,3 +677,10 @@ test("plugin name editor fixes Codex and edits Native2 before asking to reconfig
   assert.equal(submitted, "Work");
   assert.equal(configureMode, "automatic");
 });
+
+test("RTK ultra-compact setting is wired from the GUI into launcher optimization settings", () => {
+  assert.match(appSource, /label="RTK ultra compact"/);
+  assert.match(appSource, /checked=\{optimization\.settings\.rtk\.ultraCompact\}/);
+  assert.match(appSource, /updateFeature\("rtk", \{ ultraCompact: enabled \}\)/);
+  assert.match(preloadSource, /setOptimizationSettings:[\s\S]*?launcher:optimization-settings/);
+});

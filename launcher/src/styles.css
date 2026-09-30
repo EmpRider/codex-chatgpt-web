@@ -2745,3 +2745,93 @@ code {
 .plugin-name-input input { min-width: 0; width: 100%; border: 0; background: transparent; }
 .plugin-name-setting code { overflow-wrap: anywhere; font-size: 12px; }
 .plugin-name-setting p { color: var(--color-text-secondary); font-size: 13px; margin: 0; }
+
+/* Managed optimization stack */
+
+.optimization-select {
+  min-width: 110px;
+  height: 30px;
+  padding: 0 28px 0 9px;
+  border: 1px solid var(--color-border-heavy);
+  border-radius: var(--radius-sm);
+  background: var(--color-background-control);
+  color: var(--color-text-primary);
+  font: inherit;
+}
+
+.optimization-update-row,
+.optimization-component {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.optimization-update-row {
+  min-height: 54px;
+  margin-top: 8px;
+  border-top: 1px solid var(--color-border);
+}
+
+.optimization-update-row strong,
+.optimization-component strong {
+  display: block;
+  color: var(--color-text-primary);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.optimization-update-row small,
+.optimization-component small {
+  display: block;
+  margin-top: 2px;
+  color: var(--color-text-tertiary);
+  font-size: var(--text-xs);
+}
+
+.optimization-component-list {
+  border-top: 1px solid var(--color-border);
+}
+
+.optimization-component {
+  min-height: 42px;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.optimization-component code {
+  max-width: 190px;
+  overflow: hidden;
+  color: var(--color-text-tertiary);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.optimization-number {
+  width: 92px;
+  height: 30px;
+  padding: 0 8px;
+  border: 1px solid var(--color-border-heavy);
+  border-radius: var(--radius-sm);
+  background: var(--color-background-control);
+  color: var(--color-text-primary);
+  font: inherit;
+  text-align: right;
+}
+
+.optimization-secret {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.optimization-secret input {
+  width: min(240px, 36vw);
+  height: 30px;
+  padding: 0 9px;
+  border: 1px solid var(--color-border-heavy);
+  border-radius: var(--radius-sm);
+  background: var(--color-background-control);
+  color: var(--color-text-primary);
+  font: inherit;
+}

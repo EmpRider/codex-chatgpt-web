@@ -338,6 +338,7 @@ class RuntimeSupervisor {
     publishOperation,
     runtimeInvocationFactory = runtimeInvocation,
     onConfigRead,
+    runtimeEnvironment = () => ({}),
   }) {
     this.app = app;
     this.logger = logger;
@@ -353,6 +354,7 @@ class RuntimeSupervisor {
     this.publishOperation = publishOperation;
     this.runtimeInvocationFactory = runtimeInvocationFactory;
     this.onConfigRead = onConfigRead;
+    this.runtimeEnvironment = runtimeEnvironment;
     this.configPath = path.join(coreHome, "config.json");
     this.statePath = path.join(coreHome, "runtime", "launcher-supervisor.json");
     this.daemon = null;
@@ -501,6 +503,7 @@ class RuntimeSupervisor {
       detached: DETACH_OWNED_CHILD,
       env: windowsTrustEnvironment({
         ...process.env,
+        ...(name === "daemon" && typeof this.runtimeEnvironment === "function" ? this.runtimeEnvironment() : {}),
         CODEX_CHATGPT_WEB_BROWSER_HOST_DESCRIPTOR: this.browserDescriptorPath,
       }, this.platform),
       stdio: ["ignore", "pipe", "pipe"],

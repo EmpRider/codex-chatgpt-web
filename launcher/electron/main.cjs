@@ -16,6 +16,7 @@ const {
   nativeTheme,
   screen,
   session,
+  safeStorage,
   shell,
   Tray,
 } = require("electron");
@@ -37,6 +38,8 @@ const { RuntimeSupervisor } = require("./runtime-supervisor.cjs");
 const { DEVELOPMENT_PROFILE, resolveLauncherProfile } = require("./profile.cjs");
 const { runtimeBundlePaths } = require("./runtime-command.cjs");
 const { createUpdateController } = require("./update.cjs");
+const { createOptimizationController } = require("./optimization/controller.cjs");
+const { createOptimizationSecretStore } = require("./optimization/secrets.cjs");
 const {
   createStateStore,
   nextSessionRefreshReminderAt,
@@ -107,6 +110,7 @@ let lastOperation = null;
 let catalogVerificationTimer = null;
 let catalogVerificationInFlight = false;
 let updateController = null;
+let optimizationController = null;
 let limitsController = null;
 
 function findFreePort() {
@@ -561,7 +565,34 @@ function registerIpc({ logger, stateStore }) {
     smokePassed: smokePassedThisSession || smokePassedForCurrentVersion(stateStore.read()),
     operation: lastOperation,
     update: updateController?.getState() ?? { status: "disabled" },
+    optimization: typeof optimizationController !== "undefined" && optimizationController
+      ? optimizationController.snapshot()
+      : null,
   }));
+
+  handle("launcher:optimization-snapshot", () => {
+    if (!optimizationController) throw new Error("Optimization manager is not initialized");
+    return optimizationController.snapshot();
+  });
+  handle("launcher:optimization-settings", async (_event, patch) => {
+    if (!optimizationController) throw new Error("Optimization manager is not initialized");
+    const result = await optimizationController.setSettings(patch);
+    send("launcher:state-changed", result.state);
+    return result;
+  });
+  handle("launcher:optimization-check-updates", async () => {
+    if (!optimizationController) throw new Error("Optimization manager is not initialized");
+    return optimizationController.checkUpdates({ force: true });
+  });
+  handle("launcher:optimization-jev-key", async (_event, value) => {
+    if (!optimizationController) throw new Error("Optimization manager is not initialized");
+    if (browserHost?.activeTraceId || runtimeHost?.currentOperation()) {
+      throw new Error("Finish or cancel the active task before changing the Jev API key");
+    }
+    const snapshot = optimizationController.setJevApiKey(value);
+    if (runtimeSupervisor?.readConfig()) await runtimeSupervisor.restart();
+    return snapshot;
+  });
 
   handle("launcher:set-language", (_event, language) => {
     const state = stateStore.update({ language: validateLanguage(language) });
@@ -1049,6 +1080,7 @@ async function requestQuit() {
       throw new Error(`Wait for ${activeOperation} to finish before quitting Codex Web GPT`);
     }
     await runtimeSupervisor?.shutdown({ cancelActiveTurns: true, force: true });
+    await optimizationController?.shutdown();
     stopCatalogVerificationMonitor();
     quitting = true;
     await browserHost?.persistSession();
@@ -1137,6 +1169,23 @@ async function start() {
     filePath: path.join(app.getPath("logs"), "launcher.jsonl"),
     publish: (record) => send("launcher:log", record),
   });
+  const optimizationSecretStore = createOptimizationSecretStore({
+    filePath: path.join(app.getPath("userData"), "optimization-secrets.json"),
+    safeStorage,
+  });
+  const optimizerRuntimeExecutable = installedRuntimeRoot
+    ? runtimeBundlePaths(installedRuntimeRoot, process.platform).executable
+    : process.env.CODEX_CHATGPT_WEB_BUN?.trim()
+      || process.env.CODEX_WEB_GPT_BUN?.trim()
+      || "bun";
+  optimizationController = createOptimizationController({
+    coreHome: CORE_HOME,
+    stateStore,
+    logger,
+    secretStore: optimizationSecretStore,
+    runtimeExecutable: optimizerRuntimeExecutable,
+    publish: value => send("launcher:optimization-changed", value),
+  });
   const startHidden = process.argv.includes("--hidden") && stateStore.read().onboardingComplete;
   nativeTheme.themeSource = "system";
   mainWindow = createWindow({
@@ -1162,6 +1211,12 @@ async function start() {
     browserDescriptorPath: BROWSER_DESCRIPTOR_PATH,
     launcherProfile: LAUNCHER_PROFILE.kind,
     publishOperation,
+    runtimeEnvironment: () => {
+      const jevApiKey = optimizationController?.jevApiKey();
+      // The launcher-managed secret is authoritative. An ambient machine-level JEV_API_KEY must
+      // not silently bypass the GUI's configured/not-configured state.
+      return { JEV_API_KEY: jevApiKey || "" };
+    },
     onConfigRead: config => {
       // Setup may read an intermediate config before rollback. The setting IPC commits
       // its change only after the existing setup transaction has succeeded.
@@ -1232,7 +1287,16 @@ async function start() {
     });
   }
   await loadRenderer(mainWindow);
-  if (!launcherSmokeTest) void updateController.checkOnce();
+  if (!launcherSmokeTest) {
+    void updateController.checkOnce();
+    void optimizationController.ensureActive()
+      .then(() => optimizationController.checkUpdates({ startup: true }))
+      .catch((error) => {
+        logger.warn("optimization.startup_reconcile_failed", {
+          message: error instanceof Error ? error.message : String(error),
+        });
+      });
+  }
   if (launcherSmokeTest) {
     const smokeRuntimeRoot = runtimeRootProvider();
     if (app.isPackaged && !smokeRuntimeRoot) {
@@ -1467,6 +1531,7 @@ void start().catch(async (error) => {
     // Browser bootstrap can fail before the renderer is loaded. Keep the error reachable
     // through the existing instance, and release browser resources before a user retry.
     const cleanupErrors = [];
+    try { await optimizationController?.shutdown(); } catch (caught) { cleanupErrors.push(String(caught)); }
     try { browserHost?.destroy(); } catch (caught) { cleanupErrors.push(String(caught)); }
     try { await browserControl?.close(); } catch (caught) { cleanupErrors.push(String(caught)); }
     if (process.argv.includes("--launcher-smoke-test")) return;

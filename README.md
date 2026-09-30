@@ -21,7 +21,7 @@
 </p>
 
 <p align="center">
-  <a href="#get-started">Get started</a> · <a href="https://github.com/EmpRider/codex-chatgpt-web/releases">What’s new</a> · <a href="docs/architecture.md">Architecture</a> · <a href="TROUBLESHOOTING.md">Troubleshooting</a>
+  <a href="#get-started">Get started</a> · <a href="https://github.com/EmpRider/codex-chatgpt-web/releases">What’s new</a> · <a href="docs/optimization-stack.md">Optimization stack</a> · <a href="docs/architecture.md">Architecture</a> · <a href="TROUBLESHOOTING.md">Troubleshooting</a>
 </p>
 
 Use the ChatGPT Web models available on your account, including Pro, from Codex’s native model picker—with ChatGPT Web’s separate usage limits, without spending your Work or Codex quota. Keep the same interface, tasks, images, and streaming.
@@ -40,6 +40,8 @@ Full harness mode connects ChatGPT to the current task’s files, terminal, tool
 4. **For coding with tools**, open **MCP** in the launcher and complete the Full harness setup below.
 
 The app includes its browser and runtime. No separate Chrome, Node, or Bun installation is needed.
+
+Optional **Jev, i-have-adhd, RTK, Headroom, Caveman, and Ponytail** optimizations are managed from **Settings → Optimization**. Side dependencies are downloaded into the app-owned runtime and never installed into Codex. See [Managed optimization stack](docs/optimization-stack.md).
 
 <details>
 <summary><strong>Terminal install, updates & repair</strong></summary>
