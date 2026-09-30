@@ -32,6 +32,7 @@ const DEFAULT_OPTIMIZATION_SETTINGS = Object.freeze({
   jev: Object.freeze({
     enabled: false,
     baseUrl: "https://api.typesafe.ai",
+    model: "jev-latest",
     costWeight: 0.02,
     adaptiveThinking: true,
     reassessAfterToolFailure: true,
@@ -50,6 +51,11 @@ function integerIn(value, fallback, min, max) {
 }
 function level(value, fallback) {
   return LEVELS.has(value) ? value : fallback;
+}
+function modelName(value, fallback) {
+  if (typeof value !== "string") return fallback;
+  const normalized = value.trim();
+  return /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/.test(normalized) ? normalized : fallback;
 }
 function endpointUrl(value, fallback) {
   if (typeof value !== "string" || !value.trim()) return fallback;
@@ -114,6 +120,7 @@ function normalizeOptimizationSettings(value) {
     jev: {
       enabled: bool(jev.enabled, DEFAULT_OPTIMIZATION_SETTINGS.jev.enabled),
       baseUrl: endpointUrl(jev.baseUrl, DEFAULT_OPTIMIZATION_SETTINGS.jev.baseUrl),
+      model: modelName(jev.model, DEFAULT_OPTIMIZATION_SETTINGS.jev.model),
       costWeight: numberIn(jev.costWeight, DEFAULT_OPTIMIZATION_SETTINGS.jev.costWeight, 0, 1),
       adaptiveThinking: bool(jev.adaptiveThinking, DEFAULT_OPTIMIZATION_SETTINGS.jev.adaptiveThinking),
       reassessAfterToolFailure: bool(
