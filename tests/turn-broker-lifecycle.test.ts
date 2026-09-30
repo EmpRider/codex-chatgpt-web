@@ -853,3 +853,52 @@ test("an unresolved timed-out invocation cannot be replayed as an identical nati
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+
+test("activity completion abandons its delivered invocation without waiting for socket-close cleanup", async () => {
+  const root = mkdtempSync(join(tmpdir(), "cgw-act-"));
+  const socketPath = process.platform === "win32"
+    ? defaultBrokerEndpoint(root)
+    : join(tmpdir(), `cgw-act-${process.pid}.sock`);
+  const broker = TurnBroker.forSocket(socketPath);
+  try {
+    const token = await broker.register({
+      cwd: root,
+      roots: [root],
+      writableRoots: [root],
+      sandboxPolicy: { type: "dangerFullAccess" },
+      tools: [],
+    }, undefined, "activity-cleanup-turn");
+    const activityId = "activity_cleanupowner12345678901";
+    const claimed = await callTurnBroker<{ bindingId: string }>(socketPath, {
+      method: "claim",
+      token,
+      activityId,
+    });
+
+    const invocation = callTurnBroker(socketPath, {
+      method: "invoke",
+      bindingId: claimed.bindingId,
+      activityId,
+      wireName: "exec_command",
+      arguments: { cmd: "slow-owner-call" },
+    }, 2_000);
+    const [request] = await broker.nextToolBatch(token);
+    expect(request).toBeDefined();
+
+    await callTurnBroker(socketPath, {
+      method: "activity_complete",
+      token,
+      activityId,
+    });
+    expect(broker.beginCompletionFence(token)).toBeDefined();
+
+    await expect(invocation).rejects.toThrow("activity completed");
+    expect(() => broker.completeTool(token, request!.callId, {
+      content: [{ type: "text", text: "late result" }],
+    })).not.toThrow();
+  } finally {
+    await broker.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
