@@ -290,17 +290,13 @@ function canBindLoopbackPort(port) {
   });
 }
 
-async function findAvailableHeadroomPort(preferredPort, { canBind = canBindLoopbackPort, attempts = 32 } = {}) {
+async function findAvailableHeadroomPort(preferredPort, { canBind = canBindLoopbackPort } = {}) {
   const preferred = Number(preferredPort);
   if (!Number.isInteger(preferred) || preferred < 1024 || preferred > 65535) {
     throw new Error("Invalid Headroom preferred port");
   }
-  for (let offset = 0; offset < attempts; offset += 1) {
-    const candidate = preferred + offset;
-    if (candidate > 65535) break;
-    if (await canBind(candidate)) return candidate;
-  }
-  throw new Error(`No free loopback port found for Headroom near ${preferred}`);
+  if (await canBind(preferred)) return preferred;
+  throw new Error(`Headroom port ${preferred} is already in use. Change the Headroom port in Settings and try again.`);
 }
 
 function localGetJson(port, route) {
@@ -321,11 +317,18 @@ function localGetJson(port, route) {
 }
 
 class HeadroomService {
-  constructor({ root, logger, onStateChange, portResolver = findAvailableHeadroomPort }) {
+  constructor({
+    root,
+    logger,
+    onStateChange,
+    portResolver = findAvailableHeadroomPort,
+    healthCheck = localGetJson,
+  }) {
     this.root = root;
     this.logger = logger;
     this.onStateChange = onStateChange;
     this.portResolver = portResolver;
+    this.healthCheck = healthCheck;
     this.child = null;
     this.port = null;
     this.preferredPort = null;
@@ -336,7 +339,7 @@ class HeadroomService {
 
   state() {
     return {
-      running: Boolean(this.child && this.child.exitCode === null),
+      running: Boolean((this.child && this.child.exitCode === null) || this.ready),
       ready: this.ready,
       port: this.port,
       preferredPort: this.preferredPort,
@@ -367,16 +370,32 @@ class HeadroomService {
 
   async start({ executable, port, codeEnabled, mlEnabled }) {
     await this.stop();
-    const effectivePort = await this.portResolver(port);
     this.preferredPort = port;
-    this.port = effectivePort;
-    this.portConflict = effectivePort !== port;
-    if (this.portConflict) {
-      this.logger?.warn("optimization.headroom_port_conflict", {
-        preferredPort: port,
-        effectivePort,
-      });
+    this.port = port;
+    this.portConflict = false;
+
+    try {
+      const existingHealth = await this.healthCheck(port, "/readyz");
+      if (existingHealth?.ready === true || existingHealth?.status === "healthy") {
+        this.ready = true;
+        this.lastError = null;
+        this.publishState();
+        this.logger?.info("optimization.headroom_reused", { port });
+        return existingHealth;
+      }
+    } catch {}
+
+    try {
+      await this.portResolver(port);
+    } catch (error) {
+      this.port = null;
+      this.ready = false;
+      this.lastError = error instanceof Error ? error.message : String(error);
+      this.publishState();
+      throw error;
     }
+
+    const effectivePort = port;
     const workspace = path.join(this.root, "headroom-workspace");
     fs.mkdirSync(workspace, { recursive: true, mode: 0o700 });
     const args = ["proxy", "--host", "127.0.0.1", "--port", String(effectivePort), codeEnabled ? "--code-aware" : "--no-code-aware"];
@@ -426,7 +445,7 @@ class HeadroomService {
       if (spawnError) throw spawnError;
       if (child.exitCode !== null) throw new Error(`Headroom exited during startup: ${stderr.trim()}`);
       try {
-        const health = await localGetJson(effectivePort, "/readyz");
+        const health = await this.healthCheck(effectivePort, "/readyz");
         if (health?.ready === true || health?.status === "healthy") {
           this.ready = true;
           this.lastError = null;
