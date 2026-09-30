@@ -1,6 +1,6 @@
 import type { CodexMessage, CodexParsedRequest } from "../types";
 import { extractChatGptTurnIdentity } from "../adapters/chatgpt-web/environment";
-import { loadManagedText, loadOptimizationSettings } from "./config";\nimport { rtkToolPolicy } from "./rtk";
+import { loadManagedText, loadOptimizationSettings } from "./config";
 
 const FALLBACK_ADHD = [
   "Lead with the next useful action or answer.",
@@ -84,7 +84,6 @@ export function optimizationPolicyForRequest(parsed: CodexParsedRequest): string
     );
   }
 
-  parts.push(...rtkToolPolicy());
   if (!parts.length) return [];
   return [
     "<codex_web_optimization_policy>",
