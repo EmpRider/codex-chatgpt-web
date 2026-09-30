@@ -221,6 +221,10 @@ function createOptimizationController({ coreHome, stateStore, logger, secretStor
   }
 
   async function setSettings(patch) {
+    // Startup/manual provisioning owns versions.json and the Headroom process while it runs.
+    // Apply GUI mutations only after that transaction settles so a stale update snapshot cannot
+    // overwrite a newly selected flavor/port or race a sidecar restart.
+    if (updatePromise) await updatePromise;
     const current = settings();
     const next = mergeSettings(current, patch);
     const state = stateStore.update({ optimization: next });
