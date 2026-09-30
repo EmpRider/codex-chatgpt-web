@@ -1,12 +1,13 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const https = require("node:https");
+const { spawnSync } = require("node:child_process");
 const { writePrivateFileAtomic } = require("../atomic-file.cjs");
 const { TOOL_MANIFEST, toolIds } = require("./manifest.cjs");
 const { normalizeOptimizationSettings } = require("./settings.cjs");
 const { resolveUpdatePlan, shouldCheckForUpdates } = require("./managed-tools.cjs");
 const { decodeGitHubText, installTextSnapshot } = require("./provisioner.cjs");
-const { installRtkRelease } = require("./rtk-manager.cjs");
+const { installRtkRelease, verifyRtkBinary } = require("./rtk-manager.cjs");
 const { HeadroomService, ensureHeadroom } = require("./headroom-manager.cjs");
 const { provisionJev } = require("./jev-manager.cjs");
 const { ensureOptimizationPaths, optimizationPaths } = require("./runtime-paths.cjs");
@@ -72,6 +73,42 @@ function componentEnabled(settings, id) {
 function installedRecord(versions, id) {
   const record = versions?.components?.[id];
   return record && typeof record === "object" ? record : null;
+}
+
+function localComponentHealthy(id, record) {
+  if (!record?.version) return false;
+  try {
+    if (TOOL_MANIFEST[id]?.kind === "skill") {
+      const skill = typeof record.path === "string" ? path.join(record.path, "SKILL.md") : "";
+      return Boolean(skill
+        && fs.statSync(skill, { throwIfNoEntry: false })?.isFile()
+        && fs.readFileSync(skill, "utf8").trim().length > 0);
+    }
+    if (id === "rtk") {
+      if (typeof record.executable !== "string"
+        || !fs.statSync(record.executable, { throwIfNoEntry: false })?.isFile()) return false;
+      verifyRtkBinary(record.executable, record.version);
+      return true;
+    }
+    if (id === "headroom") {
+      if (typeof record.executable !== "string"
+        || !fs.statSync(record.executable, { throwIfNoEntry: false })?.isFile()) return false;
+      const result = spawnSync(record.executable, ["--version"], {
+        encoding: "utf8", timeout: 15_000, windowsHide: true,
+      });
+      if (result.error || result.status !== 0) return false;
+      return `${result.stdout || ""}\n${result.stderr || ""}`.includes(record.version);
+    }
+    if (id === "jev") {
+      if (typeof record.path !== "string") return false;
+      return fs.statSync(path.join(record.path, ".ready"), { throwIfNoEntry: false })?.isFile() === true
+        && fs.statSync(path.join(record.path, "src", "router.mjs"), { throwIfNoEntry: false })?.isFile() === true
+        && fs.statSync(path.join(record.path, "node_modules", "@typesafe-ai", "sdk"), { throwIfNoEntry: false })?.isDirectory() === true;
+    }
+    return false;
+  } catch {
+    return false;
+  }
 }
 
 function mergeSettings(current, patch) {
@@ -317,11 +354,12 @@ function createOptimizationController({ coreHome, stateStore, logger, secretStor
     await Promise.all(toolIds().map(async id => {
       const definition = TOOL_MANIFEST[id];
       const record = installedRecord(installed, id) || {};
+      const healthyBeforeCheck = localComponentHealthy(id, record);
       try {
         const availableVersion = await remoteVersion(definition);
         const plan = resolveUpdatePlan({
           id,
-          installedVersion: record.version ?? null,
+          installedVersion: healthyBeforeCheck ? record.version ?? null : null,
           remoteVersion: availableVersion,
           remoteError: null,
         });
@@ -402,7 +440,9 @@ function createOptimizationController({ coreHome, stateStore, logger, secretStor
         installed.components[id] = {
           ...record,
           updateAction: plan.action,
-          status: record.version ? "ready" : "update-check-failed",
+          status: healthyBeforeCheck
+            ? (record.version ? "ready" : "update-check-failed")
+            : (record.version ? "repair-needed" : "update-check-failed"),
           lastError: message,
         };
         logger?.warn("optimization.update_check_failed", { id, message });
@@ -461,6 +501,7 @@ function createOptimizationController({ coreHome, stateStore, logger, secretStor
 
 module.exports = {
   createOptimizationController,
+  localComponentHealthy,
   mergeSettings,
   requestJson,
 };
