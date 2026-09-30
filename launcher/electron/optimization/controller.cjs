@@ -5,6 +5,7 @@ const { writePrivateFileAtomic } = require("../atomic-file.cjs");
 const { TOOL_MANIFEST, toolIds } = require("./manifest.cjs");
 const { normalizeOptimizationSettings } = require("./settings.cjs");
 const { resolveUpdatePlan, shouldCheckForUpdates } = require("./managed-tools.cjs");
+const { decodeGitHubText, installTextSnapshot } = require("./provisioner.cjs");
 
 const USER_AGENT = "codex-web-gpt-optimization-manager";
 const MAX_METADATA_BYTES = 2 * 1024 * 1024;
@@ -143,6 +144,41 @@ function createOptimizationController({ coreHome, stateStore, logger }) {
     return { state, optimization: snapshot() };
   }
 
+  async function githubFile(definition, sourcePath, ref) {
+    const encodedPath = sourcePath.split("/").map(encodeURIComponent).join("/");
+    return requestJson(
+      `https://api.github.com/repos/${definition.repository}/contents/${encodedPath}?ref=${encodeURIComponent(ref)}`,
+    );
+  }
+
+  async function provisionSkill(id, definition, version) {
+    const sourcePayload = await githubFile(definition, definition.sourcePath, version);
+    const content = decodeGitHubText(sourcePayload, definition.sourcePath);
+    let licenseContent = null;
+    if (definition.licensePath) {
+      try {
+        licenseContent = decodeGitHubText(
+          await githubFile(definition, definition.licensePath, version),
+          definition.licensePath,
+        );
+      } catch (error) {
+        logger?.warn("optimization.license_fetch_failed", {
+          id,
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+    const installedPath = installTextSnapshot({
+      root,
+      id,
+      version,
+      sourcePath: definition.sourcePath,
+      content,
+      licenseContent,
+    });
+    return installedPath;
+  }
+
   async function remoteVersion(definition) {
     if (definition.release) {
       const release = await requestJson(`https://api.github.com/repos/${definition.repository}/releases/latest`);
@@ -180,13 +216,28 @@ function createOptimizationController({ coreHome, stateStore, logger }) {
           remoteVersion: availableVersion,
           remoteError: null,
         });
-        installed.components[id] = {
-          ...record,
-          availableVersion,
-          updateAction: plan.action,
-          status: plan.action === "none" ? (record.version ? "ready" : "not-installed") : "update-available",
-          lastError: null,
-        };
+        if (definition.kind === "skill" && (plan.action === "install" || plan.action === "update")) {
+          const installedPath = await provisionSkill(id, definition, availableVersion);
+          installed.components[id] = {
+            ...record,
+            version: availableVersion,
+            path: installedPath,
+            availableVersion,
+            updateAction: "none",
+            status: "ready",
+            lastError: null,
+            updatedAt: new Date().toISOString(),
+          };
+          logger?.info("optimization.component_updated", { id, version: availableVersion });
+        } else {
+          installed.components[id] = {
+            ...record,
+            availableVersion,
+            updateAction: plan.action,
+            status: plan.action === "none" ? (record.version ? "ready" : "not-installed") : "update-available",
+            lastError: null,
+          };
+        }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         const plan = resolveUpdatePlan({
