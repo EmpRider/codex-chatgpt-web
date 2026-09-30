@@ -1171,11 +1171,17 @@ async function start() {
     filePath: path.join(app.getPath("userData"), "optimization-secrets.json"),
     safeStorage,
   });
+  const optimizerRuntimeExecutable = installedRuntimeRoot
+    ? runtimeBundlePaths(installedRuntimeRoot, process.platform).executable
+    : process.env.CODEX_CHATGPT_WEB_BUN?.trim()
+      || process.env.CODEX_WEB_GPT_BUN?.trim()
+      || "bun";
   optimizationController = createOptimizationController({
     coreHome: CORE_HOME,
     stateStore,
     logger,
     secretStore: optimizationSecretStore,
+    runtimeExecutable: optimizerRuntimeExecutable,
   });
   const startHidden = process.argv.includes("--hidden") && stateStore.read().onboardingComplete;
   nativeTheme.themeSource = "system";
