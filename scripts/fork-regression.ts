@@ -68,6 +68,9 @@ async function run(command: string, args: string[], cwd = root): Promise<void> {
 console.log("Fork regression gate: validating EmpRider custom behavior before general verification.");
 
 await run(process.execPath, ["test", ...rootRegressionFiles]);
+// Run the intentionally timer-heavy long-turn stress suite in isolation so it cannot distort the
+// tight timing assertions in retained-compaction and other normal regression files.
+await run(process.execPath, ["test", "regression/long-turn-lifecycle.test.ts"]);
 await run("node", ["--test", ...launcherRegressionFiles], resolve(root, "launcher"));
 
 console.log("\nFork regression gate passed.");
