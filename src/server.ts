@@ -520,10 +520,13 @@ export async function responseRequest(
   let route: ChatGptWebModelRoute;
   try {
     parsed = parseRequest(expanded);
-    await optimizeRouteWithJev(parsed, config);
+    const identity = extractChatGptTurnIdentity(parsed);
+    const jevLeaseKey = identity.threadId && identity.turnId
+      ? `${identity.threadId}\u0000${identity.turnId}`
+      : undefined;
+    await optimizeRouteWithJev(parsed, config, fetch, jevLeaseKey);
     route = routeChatGptWebRequest(parsed, config);
     await compressParsedContextWithHeadroom(parsed);
-    const identity = extractChatGptTurnIdentity(parsed);
     if (identity.threadId && identity.turnId) {
       options.onTurnIdentity?.({ threadId: identity.threadId, turnId: identity.turnId });
     }
