@@ -21,6 +21,7 @@ export interface OptimizationSettings {
   jev: {
     enabled: boolean;
     baseUrl: string;
+    model: string;
     costWeight: number;
     adaptiveThinking: boolean;
     reassessAfterToolFailure: boolean;
@@ -45,6 +46,7 @@ export const DEFAULT_OPTIMIZATION_SETTINGS: OptimizationSettings = {
   jev: {
     enabled: false,
     baseUrl: "https://api.typesafe.ai",
+    model: "jev-latest",
     costWeight: 0.02,
     adaptiveThinking: true,
     reassessAfterToolFailure: true,
@@ -64,6 +66,12 @@ function bool(value: unknown, fallback: boolean): boolean {
 
 function level(value: unknown, fallback: OptimizationLevel): OptimizationLevel {
   return value === "off" || value === "lite" || value === "full" || value === "ultra" ? value : fallback;
+}
+
+function modelName(value: unknown, fallback: string): string {
+  if (typeof value !== "string") return fallback;
+  const normalized = value.trim();
+  return /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/.test(normalized) ? normalized : fallback;
 }
 
 function endpointUrl(value: unknown, fallback: string): string {
@@ -127,6 +135,7 @@ export function normalizeOptimizationSettings(value: unknown): OptimizationSetti
     jev: {
       enabled: bool(jev.enabled, false),
       baseUrl: endpointUrl(jev.baseUrl, "https://api.typesafe.ai"),
+      model: modelName(jev.model, "jev-latest"),
       costWeight: finite(jev.costWeight, 0.02, 0, 1),
       adaptiveThinking: bool(jev.adaptiveThinking, true),
       reassessAfterToolFailure: bool(jev.reassessAfterToolFailure, true),
