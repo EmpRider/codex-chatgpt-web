@@ -70,6 +70,12 @@ describe("RTK native command-result compression", () => {
     expect(rtkFilterForCommand("rg TODO src")).toBe("rg");
     expect(rtkFilterForCommand("python -m pytest -q")).toBe("pytest");
     expect(rtkFilterForCommand("cargo test --all")).toBe("cargo-test");
+    expect(rtkFilterForCommand("docker logs api")).toBe("log");
+    expect(rtkFilterForCommand("kubectl logs deploy/api")).toBe("log");
+    expect(rtkFilterForCommand("journalctl -u api")).toBe("log");
+    // RTK's pipe command has no ls/tree filter; those original outputs fall through to Headroom.
+    expect(rtkFilterForCommand("ls -la")).toBeUndefined();
+    expect(rtkFilterForCommand("tree -L 2")).toBeUndefined();
     expect(rtkFilterForCommand("mvn test")).toBeUndefined();
   });
 
