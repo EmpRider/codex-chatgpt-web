@@ -14,7 +14,7 @@ afterEach(() => {
   for (const home of homes.splice(0)) rmSync(home, { recursive: true, force: true });
 });
 
-function configure({ enabled = true } = {}) {
+function configure({ enabled = true, ultraCompact = false } = {}) {
   const home = mkdtempSync(join(tmpdir(), "rtk-opt-test-"));
   homes.push(home);
   process.env.CODEX_CHATGPT_WEB_HOME = home;
@@ -25,7 +25,7 @@ function configure({ enabled = true } = {}) {
   const executable = join(runtime, process.platform === "win32" ? "rtk.exe" : "rtk");
   writeFileSync(executable, "");
   writeFileSync(join(control, "settings.json"), JSON.stringify({
-    rtk: { enabled },
+    rtk: { enabled, ultraCompact },
     headroom: { enabled: false },
   }));
   writeFileSync(join(control, "versions.json"), JSON.stringify({
@@ -47,14 +47,15 @@ describe("RTK native command-result compression", () => {
   });
 
   test("applies managed RTK pipe output when it is smaller", async () => {
-    configure();
+    configure({ ultraCompact: true });
     const raw = "verbose line\n".repeat(100);
-    let invocation: { executable: string; input: string; filter?: string } | undefined;
-    const output = await compressCommandResultWithRtk(result(raw), async (executable, input, filter) => {
-      invocation = { executable, input, filter };
+    let invocation: { executable: string; input: string; ultra: boolean; filter?: string } | undefined;
+    const output = await compressCommandResultWithRtk(result(raw), async (executable, input, ultra, filter) => {
+      invocation = { executable, input, ultra, filter };
       return { output: "10 lines summarized\n", stderr: "" };
     });
     expect(invocation?.input).toBe(raw);
+    expect(invocation?.ultra).toBe(true);
     expect(invocation?.filter).toBeUndefined();
     expect((output.content[0] as any).text).toBe("10 lines summarized\n");
   });
@@ -65,7 +66,7 @@ describe("RTK native command-result compression", () => {
     let filter: string | undefined;
     await compressCommandResultWithRtk(
       result(raw),
-      async (_executable, _input, selected) => {
+      async (_executable, _input, _ultra, selected) => {
         filter = selected;
         return { output: "compact\n", stderr: "" };
       },
