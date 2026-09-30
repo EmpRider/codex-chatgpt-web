@@ -48,7 +48,15 @@ async function provisionJev({
   const versionRoot = path.join(root, "components", "jev", commit);
   const marker = path.join(versionRoot, ".ready");
   if (fs.statSync(marker, { throwIfNoEntry: false })?.isFile()) {
-    return { version: commit, path: versionRoot };
+    try {
+      runBun(runtimeExecutable, [
+        "-e",
+        "import('./src/router.mjs').then(m=>{if(typeof m.Router!=='function')process.exit(2)})",
+      ], versionRoot, 30_000);
+      return { version: commit, path: versionRoot };
+    } catch {
+      fs.rmSync(versionRoot, { recursive: true, force: true });
+    }
   }
 
   const staging = `${versionRoot}.staging-${process.pid}-${Date.now()}`;
