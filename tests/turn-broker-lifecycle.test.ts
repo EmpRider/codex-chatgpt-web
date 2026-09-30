@@ -671,3 +671,74 @@ test("timed-out undelivered MCP invocation is removed from the next tool batch",
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+
+test("one timed-out MCP invocation does not cancel a parallel sibling on the same turn", async () => {
+  const root = mkdtempSync(join(tmpdir(), "cgw-par-"));
+  const socketPath = process.platform === "win32"
+    ? defaultBrokerEndpoint(root)
+    : join(tmpdir(), `cgw-par-${process.pid}.sock`);
+  const broker = TurnBroker.forSocket(socketPath);
+  try {
+    const token = await broker.register({
+      cwd: root,
+      roots: [root],
+      writableRoots: [root],
+      sandboxPolicy: { type: "dangerFullAccess" },
+      tools: [],
+    }, undefined, "parallel-timeout-turn");
+    const firstActivity = "activity_parallelfirst1234567890";
+    const secondActivity = "activity_parallelsecond123456789";
+    const firstClaim = await callTurnBroker<{ bindingId: string }>(socketPath, {
+      method: "claim", token, activityId: firstActivity,
+    });
+    const secondClaim = await callTurnBroker<{ bindingId: string }>(socketPath, {
+      method: "claim", token, activityId: secondActivity,
+    });
+    expect(secondClaim.bindingId).toBe(firstClaim.bindingId);
+
+    const timedOut = callTurnBroker(socketPath, {
+      method: "invoke",
+      bindingId: firstClaim.bindingId,
+      wireName: "exec_command",
+      arguments: { cmd: "slow-first" },
+    }, 25);
+    const survivor = callTurnBroker(socketPath, {
+      method: "invoke",
+      bindingId: secondClaim.bindingId,
+      wireName: "exec_command",
+      arguments: { cmd: "fast-second" },
+    }, 2_000);
+
+    const batch = await broker.nextToolBatch(token);
+    expect(batch).toHaveLength(2);
+    const first = batch.find(request => request.arguments?.cmd === "slow-first");
+    const second = batch.find(request => request.arguments?.cmd === "fast-second");
+    expect(first).toBeDefined();
+    expect(second).toBeDefined();
+
+    await expect(timedOut).rejects.toThrow("timed out");
+    await Bun.sleep(25);
+    broker.completeTool(token, second!.callId, {
+      content: [{ type: "text", text: "second completed" }],
+    });
+    await expect(survivor).resolves.toMatchObject({
+      content: [{ type: "text", text: "second completed" }],
+    });
+
+    await callTurnBroker(socketPath, {
+      method: "activity_complete", token, activityId: firstActivity,
+    });
+    await callTurnBroker(socketPath, {
+      method: "activity_complete", token, activityId: secondActivity,
+    });
+    expect(broker.beginCompletionFence(token)).toBeDefined();
+
+    expect(() => broker.completeTool(token, first!.callId, {
+      content: [{ type: "text", text: "first completed late" }],
+    })).not.toThrow();
+  } finally {
+    await broker.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
