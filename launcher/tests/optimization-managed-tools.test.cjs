@@ -19,6 +19,7 @@ test("plug-and-play defaults enable safe zero-setup optimizers", () => {
   assert.equal(DEFAULT_OPTIMIZATION_SETTINGS.autoUpdate, true);
   assert.equal(DEFAULT_OPTIMIZATION_SETTINGS.adhd.enabled, true);
   assert.equal(DEFAULT_OPTIMIZATION_SETTINGS.rtk.enabled, true);
+  assert.equal(DEFAULT_OPTIMIZATION_SETTINGS.rtk.ultraCompact, false);
   assert.equal(DEFAULT_OPTIMIZATION_SETTINGS.headroom.enabled, true);
   assert.equal(DEFAULT_OPTIMIZATION_SETTINGS.headroom.codeEnabled, true);
   assert.equal(DEFAULT_OPTIMIZATION_SETTINGS.headroom.mlEnabled, false);
