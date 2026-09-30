@@ -684,3 +684,15 @@ test("RTK ultra-compact setting is wired from the GUI into launcher optimization
   assert.match(appSource, /updateFeature\("rtk", \{ ultraCompact: enabled \}\)/);
   assert.match(preloadSource, /setOptimizationSettings:[\s\S]*?launcher:optimization-settings/);
 });
+
+test("Jev base URL is configurable from the optimization GUI", () => {
+  assert.match(appSource, /label="Jev \/ TypeSafe base URL"/);
+  assert.match(appSource, /value=\{jevBaseUrl\}/);
+  assert.match(appSource, /updateFeature\("jev", \{ baseUrl: jevBaseUrl\.trim\(\) \}\)/);
+});
+
+test("Headroom port is presented as a preferred port with conflict fallback", () => {
+  assert.match(appSource, /label="Headroom preferred port"/);
+  assert.match(appSource, /automatically selects the next free local port/);
+  assert.match(appSource, /preferred \$\{component\.preferredPort\} busy/);
+});
