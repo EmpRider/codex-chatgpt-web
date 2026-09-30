@@ -3,6 +3,7 @@ const fs = require("node:fs");
 const https = require("node:https");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
+const { writePrivateFileAtomic } = require("../atomic-file.cjs");
 
 const USER_AGENT = "codex-web-gpt-rtk-manager";
 
@@ -141,6 +142,7 @@ async function installRtkRelease({
   platform = process.platform,
   arch = process.arch,
   dependencies = {},
+  licenseContent = null,
 }) {
   const assetName = rtkAssetName(platform, arch);
   if (!assetName) throw new Error(`RTK is unsupported on ${platform}/${arch}`);
@@ -171,7 +173,8 @@ async function installRtkRelease({
     const fetchText = dependencies.downloadText || downloadText;
     const fetchFile = dependencies.downloadFile || downloadFile;
     await fetchFile(asset.browser_download_url, archive);
-    const expected = checksumFor(await fetchText(checksums.browser_download_url), assetName);
+    const checksumsText = await fetchText(checksums.browser_download_url);
+    const expected = checksumFor(checksumsText, assetName);
     const actual = (dependencies.sha256 || fileSha256)(archive);
     if (expected !== actual) throw new Error("RTK SHA-256 verification failed");
     (dependencies.extractArchive || extractArchive)(archive, path.join(temp, "extracted"), platform);
@@ -180,6 +183,19 @@ async function installRtkRelease({
     fs.copyFileSync(binary, finalBinary);
     if (platform !== "win32") fs.chmodSync(finalBinary, 0o755);
     (dependencies.verifyBinary || verifyRtkBinary)(finalBinary, version);
+    writePrivateFileAtomic(path.join(versionRoot, "checksums.txt"),
+      checksumsText.endsWith("\n") ? checksumsText : `${checksumsText}\n`);
+    if (licenseContent) {
+      writePrivateFileAtomic(path.join(versionRoot, "LICENSE"),
+        licenseContent.endsWith("\n") ? licenseContent : `${licenseContent}\n`);
+    }
+    writePrivateFileAtomic(path.join(versionRoot, "source.json"), `${JSON.stringify({
+      repository: "rtk-ai/rtk",
+      release: release.tag_name,
+      asset: assetName,
+      sha256: expected,
+      installedAt: new Date().toISOString(),
+    }, null, 2)}\n`);
     return { version, path: versionRoot, executable: finalBinary };
   } catch (error) {
     fs.rmSync(versionRoot, { recursive: true, force: true });
