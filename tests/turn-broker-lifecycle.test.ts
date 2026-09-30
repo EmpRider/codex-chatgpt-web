@@ -530,6 +530,7 @@ test("timed-out MCP invocation retires only that invocation and keeps the browse
     const invocation = callTurnBroker(socketPath, {
       method: "invoke",
       bindingId: claimed.bindingId,
+      activityId,
       wireName: "exec_command",
       arguments: { cmd: "long-running-command" },
     }, 25);
@@ -581,6 +582,7 @@ test("late native result after MCP timeout is ignored without poisoning the surv
     const invocation = callTurnBroker(socketPath, {
       method: "invoke",
       bindingId: claimed.bindingId,
+      activityId,
       wireName: "exec_command",
       arguments: { cmd: "slow-command" },
     }, 25);
@@ -645,6 +647,7 @@ test("timed-out undelivered MCP invocation is removed from the next tool batch",
     await expect(callTurnBroker(socketPath, {
       method: "invoke",
       bindingId: claimed.bindingId,
+      activityId,
       wireName: "exec_command",
       arguments: { cmd: "never-delivered" },
     }, 25)).rejects.toThrow("timed out");
@@ -700,12 +703,14 @@ test("one timed-out MCP invocation does not cancel a parallel sibling on the sam
     const timedOut = callTurnBroker(socketPath, {
       method: "invoke",
       bindingId: firstClaim.bindingId,
+      activityId: firstActivity,
       wireName: "exec_command",
       arguments: { cmd: "slow-first" },
     }, 25);
     const survivor = callTurnBroker(socketPath, {
       method: "invoke",
       bindingId: secondClaim.bindingId,
+      activityId: secondActivity,
       wireName: "exec_command",
       arguments: { cmd: "fast-second" },
     }, 2_000);
@@ -768,6 +773,7 @@ test("an unresolved timed-out invocation cannot be replayed as an identical nati
     const first = callTurnBroker(socketPath, {
       method: "invoke",
       bindingId: claimed.bindingId,
+      activityId: firstActivity,
       wireName: "exec_command",
       arguments: { cmd: "perform-side-effect", cwd: root },
     }, 25);
@@ -794,6 +800,7 @@ test("an unresolved timed-out invocation cannot be replayed as an identical nati
     }>(socketPath, {
       method: "invoke",
       bindingId: claimed.bindingId,
+      activityId: secondActivity,
       wireName: "exec_command",
       arguments: { cwd: root, cmd: "perform-side-effect" },
     }, 500);
