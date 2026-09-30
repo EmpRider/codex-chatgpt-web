@@ -2267,7 +2267,7 @@ function OptimizationSettingsPanel({
           </small>
         </span>
         <SecondaryButton disabled={busy} onClick={() => void checkUpdates()}>
-          {busy ? "Checking…" : "Check updates"}
+          {busy ? "Checking & updating…" : "Check & update"}
         </SecondaryButton>
       </div>
       <div className="optimization-component-list">
@@ -2277,7 +2277,12 @@ function OptimizationSettingsPanel({
               <strong>{component.name}</strong>
               <small>{component.status}</small>
             </span>
-            <code>{component.installedVersion ?? "not installed"}</code>
+            <code>
+              {component.installedVersion ?? "not installed"}
+              {component.availableVersion && component.availableVersion !== component.installedVersion
+                ? ` → ${component.availableVersion}`
+                : ""}
+            </code>
           </div>
         ))}
       </div>
