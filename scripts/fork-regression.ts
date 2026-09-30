@@ -18,6 +18,12 @@ const rootRegressionFiles = [
   // Current/legacy ChatGPT response layouts and final-answer extraction.
   "tests/browser-response-dom.test.ts",
   "tests/chatgpt-session.test.ts",
+  // Launcher-managed optimization stack: routing, policies, context/tool compression and fail-open behavior.
+  "tests/optimization-config.test.ts",
+  "tests/optimization-headroom.test.ts",
+  "tests/optimization-instructions.test.ts",
+  "tests/optimization-jev.test.ts",
+  "tests/optimization-rtk.test.ts",
   // The full chatgpt-web-harness suite runs in bun run verify immediately after this gate.
   // Do not duplicate the entire harness here: standalone selection can retain Windows-only
   // broker handles longer than the focused tests below need, while adding no release coverage.
@@ -30,6 +36,15 @@ const launcherRegressionFiles = [
   "tests/runtime-host.test.cjs",
   // Renderer wiring for settings and connector-name updates.
   "tests/renderer-wiring.test.cjs",
+  // App-owned optimizer provisioning, updates, secrets, runtime safety and self-healing.
+  "tests/optimization-controller-security.test.cjs",
+  "tests/optimization-headroom-manager.test.cjs",
+  "tests/optimization-jev-manager.test.cjs",
+  "tests/optimization-managed-tools.test.cjs",
+  "tests/optimization-provisioner.test.cjs",
+  "tests/optimization-rtk-manager.test.cjs",
+  "tests/optimization-runtime-paths.test.cjs",
+  "tests/optimization-secrets.test.cjs",
 ];
 
 async function run(command: string, args: string[], cwd = root): Promise<void> {
