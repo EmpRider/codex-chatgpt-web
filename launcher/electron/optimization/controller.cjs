@@ -7,6 +7,7 @@ const { normalizeOptimizationSettings } = require("./settings.cjs");
 const { resolveUpdatePlan, shouldCheckForUpdates } = require("./managed-tools.cjs");
 const { decodeGitHubText, installTextSnapshot } = require("./provisioner.cjs");
 const { installRtkRelease } = require("./rtk-manager.cjs");
+const { HeadroomService, ensureHeadroom } = require("./headroom-manager.cjs");
 
 const USER_AGENT = "codex-web-gpt-optimization-manager";
 const MAX_METADATA_BYTES = 2 * 1024 * 1024;
@@ -86,6 +87,7 @@ function createOptimizationController({ coreHome, stateStore, logger }) {
   const settingsPath = path.join(root, "settings.json");
   const versionsPath = path.join(root, "versions.json");
   fs.mkdirSync(root, { recursive: true, mode: 0o700 });
+  const headroomService = new HeadroomService({ root, logger });
 
   function settings() {
     return normalizeOptimizationSettings(stateStore.read().optimization);
@@ -126,7 +128,7 @@ function createOptimizationController({ coreHome, stateStore, logger }) {
     };
   }
 
-  function setSettings(patch) {
+  async function setSettings(patch) {
     const current = settings();
     const next = mergeSettings(current, patch);
     const state = stateStore.update({ optimization: next });
@@ -142,6 +144,46 @@ function createOptimizationController({ coreHome, stateStore, logger }) {
         jev: next.jev.enabled,
       },
     });
+
+    const headroomChanged = JSON.stringify(current.headroom) !== JSON.stringify(next.headroom);
+    if (headroomChanged) {
+      if (!next.headroom.enabled) await headroomService.stop();
+      else {
+        const installed = versions();
+        const record = installedRecord(installed, "headroom");
+        const version = record?.availableVersion || record?.version;
+        if (version) {
+          try {
+            const result = await provisionHeadroom(version, next);
+            installed.components.headroom = {
+              ...record,
+              version: result.version,
+              availableVersion: result.version,
+              path: result.path,
+              executable: result.headroom,
+              python: result.python,
+              codeEnabled: next.headroom.codeEnabled,
+              mlEnabled: next.headroom.mlEnabled,
+              updateAction: "none",
+              status: "ready",
+              lastError: null,
+              updatedAt: new Date().toISOString(),
+            };
+            writePrivateFileAtomic(versionsPath, `${JSON.stringify(installed, null, 2)}\n`);
+            await headroomService.start({
+              executable: result.headroom,
+              port: next.headroom.port,
+              codeEnabled: next.headroom.codeEnabled,
+              mlEnabled: next.headroom.mlEnabled,
+            });
+          } catch (error) {
+            logger?.warn("optimization.headroom_reconfigure_failed", {
+              message: error instanceof Error ? error.message : String(error),
+            });
+          }
+        }
+      }
+    }
     return { state, optimization: snapshot() };
   }
 
@@ -150,6 +192,41 @@ function createOptimizationController({ coreHome, stateStore, logger }) {
     return requestJson(
       `https://api.github.com/repos/${definition.repository}/contents/${encodedPath}?ref=${encodeURIComponent(ref)}`,
     );
+  }
+
+  async function provisionHeadroom(version, currentSettings) {
+    return ensureHeadroom({
+      root,
+      version,
+      codeEnabled: currentSettings.headroom.codeEnabled,
+      mlEnabled: currentSettings.headroom.mlEnabled,
+    });
+  }
+
+  async function ensureActive() {
+    const currentSettings = settings();
+    if (!currentSettings.headroom.enabled) {
+      await headroomService.stop();
+      return snapshot();
+    }
+    const installed = versions();
+    const record = installedRecord(installed, "headroom");
+    if (!record?.executable || !fs.statSync(record.executable, { throwIfNoEntry: false })?.isFile()) {
+      return snapshot();
+    }
+    try {
+      await headroomService.start({
+        executable: record.executable,
+        port: currentSettings.headroom.port,
+        codeEnabled: currentSettings.headroom.codeEnabled,
+        mlEnabled: currentSettings.headroom.mlEnabled,
+      });
+    } catch (error) {
+      logger?.warn("optimization.headroom_start_failed", {
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+    return snapshot();
   }
 
   async function provisionRtk(version) {
@@ -253,6 +330,23 @@ function createOptimizationController({ coreHome, stateStore, logger }) {
             updatedAt: new Date().toISOString(),
           };
           logger?.info("optimization.component_updated", { id, version: result.version });
+        } else if (id === "headroom" && (plan.action === "install" || plan.action === "update")) {
+          const result = await provisionHeadroom(availableVersion, currentSettings);
+          installed.components[id] = {
+            ...record,
+            version: result.version,
+            path: result.path,
+            executable: result.headroom,
+            python: result.python,
+            codeEnabled: currentSettings.headroom.codeEnabled,
+            mlEnabled: currentSettings.headroom.mlEnabled,
+            availableVersion,
+            updateAction: "none",
+            status: "ready",
+            lastError: null,
+            updatedAt: new Date().toISOString(),
+          };
+          logger?.info("optimization.component_updated", { id, version: result.version });
         } else {
           installed.components[id] = {
             ...record,
@@ -282,6 +376,25 @@ function createOptimizationController({ coreHome, stateStore, logger }) {
 
     writePrivateFileAtomic(versionsPath, `${JSON.stringify(installed, null, 2)}\n`);
     stateStore.update({ optimizationLastUpdateCheckAt: new Date(now).toISOString() });
+    if (currentSettings.headroom.enabled) {
+      const record = installedRecord(installed, "headroom");
+      if (record?.executable) {
+        try {
+          await headroomService.start({
+            executable: record.executable,
+            port: currentSettings.headroom.port,
+            codeEnabled: currentSettings.headroom.codeEnabled,
+            mlEnabled: currentSettings.headroom.mlEnabled,
+          });
+        } catch (error) {
+          logger?.warn("optimization.headroom_start_failed", {
+            message: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
+    } else {
+      await headroomService.stop();
+    }
     logger?.info("optimization.update_check_completed", { manual: force });
     return snapshot();
   }
@@ -290,10 +403,12 @@ function createOptimizationController({ coreHome, stateStore, logger }) {
 
   return {
     checkUpdates,
+    ensureActive,
     persistRuntimeSettings,
     root,
     setSettings,
     snapshot,
+    shutdown: () => headroomService.stop(),
   };
 }
 
