@@ -155,7 +155,12 @@ async function installRtkRelease({
   const versionRoot = path.join(root, "components", "rtk", version);
   const finalBinary = path.join(versionRoot, platform === "win32" ? "rtk.exe" : "rtk");
   if (fs.statSync(finalBinary, { throwIfNoEntry: false })?.isFile()) {
-    return { version, path: versionRoot, executable: finalBinary };
+    try {
+      (dependencies.verifyBinary || verifyRtkBinary)(finalBinary, version);
+      return { version, path: versionRoot, executable: finalBinary };
+    } catch {
+      fs.rmSync(versionRoot, { recursive: true, force: true });
+    }
   }
 
   const temp = `${versionRoot}.staging-${process.pid}-${Date.now()}`;
