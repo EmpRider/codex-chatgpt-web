@@ -5,20 +5,20 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-import { shouldRetireTurnBindingAfterInvocationFailure } from "../src/adapters/chatgpt-web/mcp-server";
-import { TurnBrokerTimeoutError } from "../src/adapters/chatgpt-web/turn-broker";
   CHATGPT_WEB_MCP_CONTEXT_CHUNK_CHARS,
   CHATGPT_WEB_MCP_PROMPT_JSON_BYTE_THRESHOLD,
   CHATGPT_WEB_MCP_CONTEXT_READ_WIRE_NAME,
   createChatGptWebMcpContextTransport,
 } from "../src/adapters/chatgpt-web/context-transport";
 import type { ChatGptTurnEnvironment } from "../src/adapters/chatgpt-web/environment";
+import { shouldRetireTurnBindingAfterInvocationFailure } from "../src/adapters/chatgpt-web/mcp-server";
 import { CHATGPT_WEB_MODEL_ID } from "../src/adapters/chatgpt-web/model";
 import { compileChatGptWebPrompt } from "../src/adapters/chatgpt-web/prompt";
 import {
   callTurnBroker,
   RemoteTurnBroker,
   TurnBroker,
+  TurnBrokerTimeoutError,
 } from "../src/adapters/chatgpt-web/turn-broker";
 import { defaultBrokerEndpoint } from "../src/config";
 import type { CodexParsedRequest } from "../src/types";
