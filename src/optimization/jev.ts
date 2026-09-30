@@ -97,6 +97,61 @@ function routingContext(parsed: CodexParsedRequest): { prompt: string; recentCon
 const GENERIC_EFFORTS = ["none", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 let managedModuleCache: { version: string; module: any } | null = null;
 
+function systemOneEndpoint(baseUrl: string): string {
+  const url = new URL(baseUrl);
+  const pathname = url.pathname.replace(/\/+$/, "");
+  if (!pathname.endsWith("/v1/systemone")) {
+    url.pathname = `${pathname}/v1/systemone`.replace(/^\/\//, "/");
+  }
+  url.search = "";
+  url.hash = "";
+  return url.toString();
+}
+
+async function callSystemOne(
+  fetchImpl: typeof fetch,
+  baseUrl: string,
+  apiKey: string,
+  model: string,
+  body: unknown,
+  timeoutMs: number,
+  signal?: AbortSignal,
+): Promise<TypeSafeResponse> {
+  const response = await fetchImpl(systemOneEndpoint(baseUrl), {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${apiKey}`,
+      accept: "application/json",
+      "content-type": "application/json",
+      "user-agent": "codex-chatgpt-web-jev/1",
+    },
+    body: JSON.stringify({
+      ...(body && typeof body === "object" && !Array.isArray(body)
+        ? body as Record<string, unknown>
+        : {}),
+      model,
+    }),
+    signal: signal
+      ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)])
+      : AbortSignal.timeout(timeoutMs),
+  });
+  if (!response.ok) throw new Error(`TypeSafe HTTP ${response.status}`);
+  return response.json() as Promise<TypeSafeResponse>;
+}
+
+function managedTypeSafeClient(
+  fetchImpl: typeof fetch,
+  baseUrl: string,
+  apiKey: string,
+  model: string,
+  timeoutMs: number,
+) {
+  return {
+    systemOne: (body: unknown, options: { signal?: AbortSignal } = {}) =>
+      callSystemOne(fetchImpl, baseUrl, apiKey, model, body, timeoutMs, options.signal),
+  };
+}
+
 function nearestSupportedEffort(
   requested: string | null | undefined,
   supported: readonly ChatGptWebCodexEffort[],
@@ -165,13 +220,20 @@ async function managedInitialDecision(
   capabilities: ChatGptWebAccountCapabilities,
   apiKey: string,
   costWeight: number,
+  baseUrl: string,
+  model: string,
+  fetchImpl: typeof fetch,
+  timeoutMs: number,
 ): Promise<{ route: ChatGptWebModelRoute; effort: ChatGptWebCodexEffort; lease: number; confidence: number | null } | null> {
   const module = await loadManagedJevModule();
   if (!module) return null;
   const models = managedModelCards(capabilities);
   if (models.length < 2) return null;
   const { prompt, recentContext } = routingContext(parsed);
-  const router = new module.Router({ typesafeKey: apiKey, costWeight });
+  const router = new module.Router(
+    { typesafeKey: apiKey, costWeight },
+    { client: managedTypeSafeClient(fetchImpl, baseUrl, apiKey, model, timeoutMs) },
+  );
   const result = await router.route({
     prompt,
     models,
@@ -205,6 +267,10 @@ async function managedReassessment(
   lease: JevLease,
   apiKey: string,
   costWeight: number,
+  baseUrl: string,
+  jevModel: string,
+  fetchImpl: typeof fetch,
+  timeoutMs: number,
 ): Promise<JevLease | null> {
   const module = await loadManagedJevModule();
   if (!module) return null;
@@ -236,7 +302,10 @@ async function managedReassessment(
     } : null)
     .filter(Boolean);
 
-  const router = new module.Router({ typesafeKey: apiKey, costWeight });
+  const router = new module.Router(
+    { typesafeKey: apiKey, costWeight },
+    { client: managedTypeSafeClient(fetchImpl, baseUrl, apiKey, jevModel, timeoutMs) },
+  );
   const result = await router.reassess({
     request: prompt,
     previousRequests,
@@ -302,7 +371,6 @@ function scoreCriteria(): string[] {
 function requestBody(parsed: CodexParsedRequest, candidates: readonly Candidate[]) {
   const { prompt, recentContext } = routingContext(parsed);
   return {
-    model: "jev-latest",
     state: {
       request: prompt,
       recent_conversation: recentContext,
@@ -433,7 +501,17 @@ async function reassessEffort(
   apiKey: string,
 ): Promise<JevLease> {
   try {
-    const managed = await managedReassessment(parsed, capabilities, lease, apiKey, settings.jev.costWeight);
+    const managed = await managedReassessment(
+      parsed,
+      capabilities,
+      lease,
+      apiKey,
+      settings.jev.costWeight,
+      settings.jev.baseUrl,
+      settings.jev.model,
+      fetchImpl,
+      settings.jev.decisionTimeoutMs,
+    );
     if (managed) return managed;
   } catch {
     // Managed source is preferred, but local compatibility reassessment keeps the task fail-open.
@@ -455,16 +533,12 @@ async function reassessEffort(
       error: message.role === "toolResult" ? message.isError : false,
       result: message.role === "toolResult" ? text(message).slice(0, 4000) : "",
     }));
-  const response = await fetchImpl("https://api.typesafe.ai/v1/systemone", {
-    method: "POST",
-    headers: {
-      authorization: `Bearer ${process.env.JEV_API_KEY?.trim() ?? ""}`,
-      accept: "application/json",
-      "content-type": "application/json",
-      "user-agent": "codex-chatgpt-web-jev/1",
-    },
-    body: JSON.stringify({
-      model: "jev-latest",
+  const payload = await callSystemOne(
+    fetchImpl,
+    settings.jev.baseUrl,
+    apiKey,
+    settings.jev.model,
+    {
       state: {
         request: prompt,
         recent_conversation: recentContext,
@@ -492,11 +566,9 @@ async function reassessEffort(
           },
         },
       },
-    }),
-    signal: AbortSignal.timeout(settings.jev.decisionTimeoutMs),
-  });
-  if (!response.ok) throw new Error(`TypeSafe HTTP ${response.status}`);
-  const payload = await response.json() as TypeSafeResponse;
+    },
+    settings.jev.decisionTimeoutMs,
+  );
   const effort = payload.answers?.effort?.choice;
   if (!efforts.includes(effort as ChatGptWebCodexEffort)) throw new Error("Invalid Jev effort reassessment");
   const leaseLength = parseLease(payload.answers?.lease);
@@ -564,7 +636,16 @@ export async function optimizeRouteWithJev(
   if (candidates.length < 2) return { attempted: false, applied: false, reason: "single-candidate" };
   const started = Date.now();
   try {
-    const managed = await managedInitialDecision(parsed, capabilities, apiKey, settings.jev.costWeight);
+    const managed = await managedInitialDecision(
+      parsed,
+      capabilities,
+      apiKey,
+      settings.jev.costWeight,
+      settings.jev.baseUrl,
+      settings.jev.model,
+      fetchImpl,
+      settings.jev.decisionTimeoutMs,
+    );
     if (managed) {
       rememberLease(leaseKey, {
         route: managed.route.slug,
@@ -588,19 +669,14 @@ export async function optimizeRouteWithJev(
     // A broken or temporarily incompatible upstream module must never break the existing route.
   }
   try {
-    const response = await fetchImpl("https://api.typesafe.ai/v1/systemone", {
-      method: "POST",
-      headers: {
-        authorization: `Bearer ${apiKey}`,
-        accept: "application/json",
-        "content-type": "application/json",
-        "user-agent": "codex-chatgpt-web-jev/1",
-      },
-      body: JSON.stringify(requestBody(parsed, candidates)),
-      signal: AbortSignal.timeout(settings.jev.decisionTimeoutMs),
-    });
-    if (!response.ok) throw new Error(`TypeSafe HTTP ${response.status}`);
-    const payload = await response.json() as TypeSafeResponse;
+    const payload = await callSystemOne(
+      fetchImpl,
+      settings.jev.baseUrl,
+      apiKey,
+      settings.jev.model,
+      requestBody(parsed, candidates),
+      settings.jev.decisionTimeoutMs,
+    );
     const probabilities = validateDistribution(payload.answers?.model, candidates);
     const standalone = typeof payload.answers?.standalone?.noul === "number"
       ? payload.answers.standalone.noul
@@ -645,4 +721,5 @@ export const jevInternals = {
   clearLeases: () => leases.clear(),
   nearestSupportedEffort,
   managedModelCards,
+  systemOneEndpoint,
 };

@@ -2,6 +2,7 @@ const crypto = require("node:crypto");
 const fs = require("node:fs");
 const https = require("node:https");
 const path = require("node:path");
+const net = require("node:net");
 const { spawn, spawnSync } = require("node:child_process");
 
 const USER_AGENT = "codex-web-gpt-headroom-manager";
@@ -275,6 +276,33 @@ async function ensureHeadroom({
   }
 }
 
+function canBindLoopbackPort(port) {
+  return new Promise(resolve => {
+    const server = net.createServer();
+    let settled = false;
+    const finish = value => {
+      if (settled) return;
+      settled = true;
+      try { server.close(() => resolve(value)); } catch { resolve(value); }
+    };
+    server.once("error", () => finish(false));
+    server.listen({ host: "127.0.0.1", port, exclusive: true }, () => finish(true));
+  });
+}
+
+async function findAvailableHeadroomPort(preferredPort, { canBind = canBindLoopbackPort, attempts = 32 } = {}) {
+  const preferred = Number(preferredPort);
+  if (!Number.isInteger(preferred) || preferred < 1024 || preferred > 65535) {
+    throw new Error("Invalid Headroom preferred port");
+  }
+  for (let offset = 0; offset < attempts; offset += 1) {
+    const candidate = preferred + offset;
+    if (candidate > 65535) break;
+    if (await canBind(candidate)) return candidate;
+  }
+  throw new Error(`No free loopback port found for Headroom near ${preferred}`);
+}
+
 function localGetJson(port, route) {
   return new Promise((resolve, reject) => {
     const req = require("node:http").get({
@@ -293,12 +321,15 @@ function localGetJson(port, route) {
 }
 
 class HeadroomService {
-  constructor({ root, logger, onStateChange }) {
+  constructor({ root, logger, onStateChange, portResolver = findAvailableHeadroomPort }) {
     this.root = root;
     this.logger = logger;
     this.onStateChange = onStateChange;
+    this.portResolver = portResolver;
     this.child = null;
     this.port = null;
+    this.preferredPort = null;
+    this.portConflict = false;
     this.ready = false;
     this.lastError = null;
   }
@@ -308,6 +339,8 @@ class HeadroomService {
       running: Boolean(this.child && this.child.exitCode === null),
       ready: this.ready,
       port: this.port,
+      preferredPort: this.preferredPort,
+      portConflict: this.portConflict,
       lastError: this.lastError,
     };
   }
@@ -320,6 +353,8 @@ class HeadroomService {
     const child = this.child;
     this.child = null;
     this.port = null;
+    this.preferredPort = null;
+    this.portConflict = false;
     this.ready = false;
     this.publishState();
     if (!child || child.exitCode !== null) return;
@@ -332,9 +367,19 @@ class HeadroomService {
 
   async start({ executable, port, codeEnabled, mlEnabled }) {
     await this.stop();
+    const effectivePort = await this.portResolver(port);
+    this.preferredPort = port;
+    this.port = effectivePort;
+    this.portConflict = effectivePort !== port;
+    if (this.portConflict) {
+      this.logger?.warn("optimization.headroom_port_conflict", {
+        preferredPort: port,
+        effectivePort,
+      });
+    }
     const workspace = path.join(this.root, "headroom-workspace");
     fs.mkdirSync(workspace, { recursive: true, mode: 0o700 });
-    const args = ["proxy", "--host", "127.0.0.1", "--port", String(port), codeEnabled ? "--code-aware" : "--no-code-aware"];
+    const args = ["proxy", "--host", "127.0.0.1", "--port", String(effectivePort), codeEnabled ? "--code-aware" : "--no-code-aware"];
     const env = {
       ...process.env,
       HEADROOM_WORKSPACE_DIR: workspace,
@@ -346,7 +391,6 @@ class HeadroomService {
       env, cwd: workspace, windowsHide: true, stdio: ["ignore", "ignore", "pipe"],
     });
     this.child = child;
-    this.port = port;
     this.ready = false;
     this.lastError = null;
     this.publishState();
@@ -382,12 +426,16 @@ class HeadroomService {
       if (spawnError) throw spawnError;
       if (child.exitCode !== null) throw new Error(`Headroom exited during startup: ${stderr.trim()}`);
       try {
-        const health = await localGetJson(port, "/readyz");
+        const health = await localGetJson(effectivePort, "/readyz");
         if (health?.ready === true || health?.status === "healthy") {
           this.ready = true;
           this.lastError = null;
           this.publishState();
-          this.logger?.info("optimization.headroom_ready", { port });
+          this.logger?.info("optimization.headroom_ready", {
+            preferredPort: port,
+            port: effectivePort,
+            portConflict: this.portConflict,
+          });
           return health;
         }
       } catch {}
@@ -405,6 +453,8 @@ module.exports = {
   ensureHeadroom,
   ensureUv,
   headroomExtras,
+  canBindLoopbackPort,
+  findAvailableHeadroomPort,
   uvAssetName,
   venvExecutables,
   verifyVersionCommand,

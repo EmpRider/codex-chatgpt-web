@@ -2,6 +2,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const {
   HeadroomService,
+  findAvailableHeadroomPort,
   headroomExtras,
   uvAssetName,
   venvExecutables,
@@ -42,6 +43,28 @@ test("Headroom service state distinguishes installed runtime from live process",
     running: false,
     ready: false,
     port: null,
+    preferredPort: null,
+    portConflict: false,
     lastError: null,
   });
+});
+
+test("Headroom selects the next free loopback port when the preferred port is busy", async () => {
+  const checked = [];
+  const selected = await findAvailableHeadroomPort(8787, {
+    attempts: 4,
+    canBind: async (port) => {
+      checked.push(port);
+      return port === 8789;
+    },
+  });
+  assert.equal(selected, 8789);
+  assert.deepEqual(checked, [8787, 8788, 8789]);
+});
+
+test("Headroom reports an error when no nearby loopback port is available", async () => {
+  await assert.rejects(
+    () => findAvailableHeadroomPort(8787, { attempts: 2, canBind: async () => false }),
+    /No free loopback port/,
+  );
 });

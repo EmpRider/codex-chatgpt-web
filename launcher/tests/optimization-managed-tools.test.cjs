@@ -26,6 +26,8 @@ test("plug-and-play defaults enable safe zero-setup optimizers", () => {
   assert.equal(DEFAULT_OPTIMIZATION_SETTINGS.caveman.level, "lite");
   assert.equal(DEFAULT_OPTIMIZATION_SETTINGS.ponytail.level, "full");
   assert.equal(DEFAULT_OPTIMIZATION_SETTINGS.jev.enabled, false);
+  assert.equal(DEFAULT_OPTIMIZATION_SETTINGS.jev.baseUrl, "https://api.typesafe.ai");
+  assert.equal(DEFAULT_OPTIMIZATION_SETTINGS.jev.model, "jev-latest");
 });
 
 test("normalization repairs only invalid optimization fields", () => {
@@ -36,7 +38,15 @@ test("normalization repairs only invalid optimization fields", () => {
     headroom: { enabled: true, codeEnabled: false, mlEnabled: true, minTokens: -1, protectRecentTurns: 99 },
     caveman: { enabled: true, level: "ultra" },
     ponytail: { enabled: true, level: "full", applyToSubagents: false },
-    jev: { enabled: true, costWeight: 2, adaptiveThinking: false, reassessAfterToolFailure: false, decisionTimeoutMs: 50 },
+    jev: {
+      enabled: true,
+      baseUrl: "http://127.0.0.1:9911/",
+      model: "jev-1.13",
+      costWeight: 2,
+      adaptiveThinking: false,
+      reassessAfterToolFailure: false,
+      decisionTimeoutMs: 50,
+    },
   });
 
   assert.equal(normalized.autoUpdate, true);
@@ -49,6 +59,8 @@ test("normalization repairs only invalid optimization fields", () => {
   assert.equal(normalized.caveman.level, "ultra");
   assert.equal(normalized.ponytail.applyToSubagents, false);
   assert.equal(normalized.jev.enabled, true);
+  assert.equal(normalized.jev.baseUrl, "http://127.0.0.1:9911");
+  assert.equal(normalized.jev.model, "jev-1.13");
   assert.equal(normalized.jev.costWeight, 0.02);
   assert.equal(normalized.jev.decisionTimeoutMs, 4500);
 });
@@ -128,4 +140,18 @@ test("launcher runtime containment rejects paths outside the managed runtime", (
   assert.equal(pathInside(root, path.join(root, "components", "rtk", "rtk.exe")), true);
   assert.equal(pathInside(root, path.resolve("outside", "rtk.exe")), false);
   assert.equal(pathInside(root, "relative/path"), false);
+});
+
+test("Jev base URL rejects insecure remote endpoints", () => {
+  const normalized = normalizeOptimizationSettings({
+    jev: { baseUrl: "http://example.com:9911" },
+  });
+  assert.equal(normalized.jev.baseUrl, "https://api.typesafe.ai");
+});
+
+test("Jev model name rejects whitespace and unsafe values", () => {
+  assert.equal(normalizeOptimizationSettings({ jev: { model: "jev-1.13" } }).jev.model, "jev-1.13");
+  assert.equal(normalizeOptimizationSettings({ jev: { model: " jev-1.13 " } }).jev.model, "jev-1.13");
+  assert.equal(normalizeOptimizationSettings({ jev: { model: "jev model" } }).jev.model, "jev-latest");
+  assert.equal(normalizeOptimizationSettings({ jev: { model: "" } }).jev.model, "jev-latest");
 });

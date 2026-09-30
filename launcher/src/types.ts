@@ -38,6 +38,8 @@ export interface OptimizationSettings {
   };
   jev: {
     enabled: boolean;
+    baseUrl: string;
+    model: string;
     costWeight: number;
     adaptiveThinking: boolean;
     reassessAfterToolFailure: boolean;
@@ -54,6 +56,9 @@ export interface OptimizationComponentStatus {
   availableVersion: string | null;
   status: string;
   lastError: string | null;
+  runtimePort?: number | null;
+  preferredPort?: number | null;
+  portConflict?: boolean;
 }
 
 export interface OptimizationSnapshot {

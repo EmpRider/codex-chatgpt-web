@@ -1,6 +1,6 @@
 import { estimateTokens } from "../lib/token-estimate";
 import type { CodexMessage, CodexParsedRequest } from "../types";
-import { loadOptimizationSettings } from "./config";
+import { effectiveHeadroomPort, loadOptimizationSettings } from "./config";
 
 interface HeadroomCompressResponse {
   messages?: Array<Record<string, unknown>>;
@@ -106,7 +106,7 @@ export async function compressCommandResultWithHeadroom(
   if (estimateTokens(raw) < settings.headroom.minTokens) return result;
 
   try {
-    const response = await fetchImpl(`http://127.0.0.1:${settings.headroom.port}/v1/compress`, {
+    const response = await fetchImpl(`http://127.0.0.1:${effectiveHeadroomPort(settings)}/v1/compress`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
@@ -156,7 +156,7 @@ export async function compressParsedContextWithHeadroom(
   if (!candidates.length) return { attempted: false, applied: false, messageCount: 0 };
 
   try {
-    const response = await fetchImpl(`http://127.0.0.1:${settings.headroom.port}/v1/compress`, {
+    const response = await fetchImpl(`http://127.0.0.1:${effectiveHeadroomPort(settings)}/v1/compress`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({

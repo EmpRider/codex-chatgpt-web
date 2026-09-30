@@ -20,6 +20,8 @@ export interface OptimizationSettings {
   ponytail: { enabled: boolean; level: OptimizationLevel; applyToSubagents: boolean };
   jev: {
     enabled: boolean;
+    baseUrl: string;
+    model: string;
     costWeight: number;
     adaptiveThinking: boolean;
     reassessAfterToolFailure: boolean;
@@ -43,6 +45,8 @@ export const DEFAULT_OPTIMIZATION_SETTINGS: OptimizationSettings = {
   ponytail: { enabled: true, level: "full", applyToSubagents: true },
   jev: {
     enabled: false,
+    baseUrl: "https://api.typesafe.ai",
+    model: "jev-latest",
     costWeight: 0.02,
     adaptiveThinking: true,
     reassessAfterToolFailure: true,
@@ -62,6 +66,26 @@ function bool(value: unknown, fallback: boolean): boolean {
 
 function level(value: unknown, fallback: OptimizationLevel): OptimizationLevel {
   return value === "off" || value === "lite" || value === "full" || value === "ultra" ? value : fallback;
+}
+
+function modelName(value: unknown, fallback: string): string {
+  if (typeof value !== "string") return fallback;
+  const normalized = value.trim();
+  return /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/.test(normalized) ? normalized : fallback;
+}
+
+function endpointUrl(value: unknown, fallback: string): string {
+  if (typeof value !== "string" || !value.trim()) return fallback;
+  try {
+    const parsed = new URL(value.trim());
+    if (parsed.username || parsed.password) return fallback;
+    if (parsed.protocol === "https:") return parsed.toString().replace(/\/$/, "");
+    const loopback = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
+    if (parsed.protocol === "http:" && loopback.has(parsed.hostname)) {
+      return parsed.toString().replace(/\/$/, "");
+    }
+  } catch {}
+  return fallback;
 }
 
 function int(value: unknown, fallback: number, min: number, max: number): number {
@@ -110,6 +134,8 @@ export function normalizeOptimizationSettings(value: unknown): OptimizationSetti
     },
     jev: {
       enabled: bool(jev.enabled, false),
+      baseUrl: endpointUrl(jev.baseUrl, "https://api.typesafe.ai"),
+      model: modelName(jev.model, "jev-latest"),
       costWeight: finite(jev.costWeight, 0.02, 0, 1),
       adaptiveThinking: bool(jev.adaptiveThinking, true),
       reassessAfterToolFailure: bool(jev.reassessAfterToolFailure, true),
@@ -142,6 +168,38 @@ export function loadOptimizationSettings(): OptimizationSettings {
   } catch {
     return DEFAULT_OPTIMIZATION_SETTINGS;
   }
+}
+
+export interface OptimizationRuntimeState {
+  version: 1;
+  headroom?: {
+    running?: boolean;
+    ready?: boolean;
+    port?: number | null;
+    preferredPort?: number | null;
+    portConflict?: boolean;
+  };
+}
+
+export function loadOptimizationRuntimeState(): OptimizationRuntimeState | undefined {
+  const path = join(optimizationRoot(), "runtime.json");
+  if (!existsSync(path)) return undefined;
+  try {
+    const value = JSON.parse(readFileSync(path, "utf8")) as OptimizationRuntimeState;
+    return value?.version === 1 ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export function effectiveHeadroomPort(settings = loadOptimizationSettings()): number {
+  const runtime = loadOptimizationRuntimeState()?.headroom;
+  return runtime?.ready === true
+    && Number.isInteger(runtime.port)
+    && Number(runtime.port) >= 1024
+    && Number(runtime.port) <= 65535
+    ? Number(runtime.port)
+    : settings.headroom.port;
 }
 
 export interface ManagedComponentRecord {

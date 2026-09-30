@@ -160,13 +160,16 @@ function createOptimizationController({ coreHome, stateStore, logger, secretStor
   const root = paths.runtimeRoot;
   const settingsPath = paths.settingsPath;
   const versionsPath = paths.versionsPath;
+  const runtimeStatePath = path.join(paths.controlRoot, "runtime.json");
   let updatePromise = null;
   const headroomService = new HeadroomService({
     root,
     logger,
-    onStateChange: () => {
+    onStateChange: serviceState => {
       // Runtime health is ephemeral and intentionally not persisted into versions.json.
-      // Publish a fresh snapshot so the GUI can distinguish installed from actually running.
+      // Persist only the currently effective local endpoint so the bridge can follow
+      // an automatically selected conflict-free Headroom port.
+      try { persistRuntimeState(serviceState); } catch {}
       try { publish?.(snapshot()); } catch {}
     },
   });
@@ -186,6 +189,21 @@ function createOptimizationController({ coreHome, stateStore, logger, secretStor
   function persistRuntimeSettings(value = settings()) {
     writePrivateFileAtomic(settingsPath, `${JSON.stringify(value, null, 2)}\n`);
   }
+
+  function persistRuntimeState(serviceState = headroomService.state()) {
+    writePrivateFileAtomic(runtimeStatePath, `${JSON.stringify({
+      version: 1,
+      headroom: {
+        running: serviceState.running === true,
+        ready: serviceState.ready === true,
+        port: Number.isInteger(serviceState.port) ? serviceState.port : null,
+        preferredPort: Number.isInteger(serviceState.preferredPort) ? serviceState.preferredPort : null,
+        portConflict: serviceState.portConflict === true,
+      },
+    }, null, 2)}\n`);
+  }
+
+  persistRuntimeState();
 
   function notify() {
     const value = snapshot();
@@ -223,6 +241,11 @@ function createOptimizationController({ coreHome, stateStore, logger, secretStor
           availableVersion: record?.availableVersion ?? null,
           status,
           lastError,
+          ...(id === "headroom" ? {
+            runtimePort: service?.port ?? null,
+            preferredPort: current.headroom.port,
+            portConflict: service?.portConflict === true,
+          } : {}),
         };
       }),
     };
