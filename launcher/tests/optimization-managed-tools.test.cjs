@@ -105,7 +105,7 @@ test("update plan installs missing tools and upgrades changed versions", () => {
   }).action, "none");
 });
 
-test("startup update cadence checks immediately then at most once per six hours", () => {
+test("background update cadence remains bounded between explicit startup checks", () => {
   const now = Date.parse("2026-09-30T10:00:00Z");
   assert.equal(shouldCheckForUpdates(null, now), true);
   assert.equal(shouldCheckForUpdates("2026-09-30T05:00:01Z", now), false);
