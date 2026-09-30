@@ -23,3 +23,11 @@ test("launcher runtime containment rejects paths outside the managed runtime", (
   assert.equal(pathInside(runtime, path.resolve(core, "..", "outside")), false);
   assert.equal(pathInside(runtime, "relative/path"), false);
 });
+
+test("runtime path helper rejects sibling and traversal targets", () => {
+  const core = path.resolve("tmp-core-home");
+  const paths = optimizationPaths(core);
+  assert.equal(path.normalize(paths.runtimeRoot), path.join(core, "optimization-runtime"));
+  const sibling = path.join(core, "other-runtime", "rtk.exe");
+  assert.notEqual(path.dirname(sibling), paths.runtimeRoot);
+});
