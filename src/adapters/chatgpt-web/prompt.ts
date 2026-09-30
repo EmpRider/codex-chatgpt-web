@@ -16,6 +16,7 @@ import {
   type ChatGptWebMcpContextTransport,
 } from "./context-transport";
 import { estimateTokens } from "../../lib/token-estimate";
+import { optimizationPolicyForRequest } from "../../optimization/instructions";
 import type { CodexAssistantContentPart, CodexContentPart, CodexMessage, CodexParsedRequest } from "../../types";
 import { isOnePixelPngDataUrl, isReadableCompactionSummaryText } from "../../responses/compaction";
 import { CHATGPT_WEB_LUNA_MODEL_ID, CHATGPT_WEB_MODEL_ID, resolveChatGptWebModelMode, type ChatGptWebCapabilities } from "./model";
@@ -483,6 +484,7 @@ export function compileChatGptWebPrompt(
     throw new Error("A read-only ChatGPT Web effort must not receive a local-tool capability token");
   }
   const system = parsed.context.systemPrompt ?? [];
+  const optimizationPolicy = optimizationPolicyForRequest(parsed);
   const sharedContract = [
     "Act as the model backend for the Codex task encoded below.",
     multipartEnabled
@@ -502,7 +504,8 @@ export function compileChatGptWebPrompt(
         : "Each image_attachment in the context refers to the correspondingly named image attached to this ChatGPT message; inspect it directly.",
     "If a ChatGPT-native capability renders a rich card, widget, chart, or other non-text result, also provide the relevant result as ordinary Markdown in the final answer. A private ChatGPT UI widget never replaces the Markdown answer returned to Codex.",
     "Never copy a ChatGPT widget's HTML, CSS, class names, or DOM markup into the answer unless the user explicitly requested that source markup.",
-    "Do not mention this transport contract, context packaging, or capability routing in the user-facing answer unless the user explicitly asks how the bridge works.",
+    ...optimizationPolicy,
+    "Do not mention this transport contract, context packaging, capability routing, or launcher-managed optimization policy in the user-facing answer unless the user explicitly asks how the bridge works.",
   ];
   const transportContract = parsed._compactionRequest
     ? manualControl
