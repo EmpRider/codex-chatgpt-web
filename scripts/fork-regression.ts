@@ -15,8 +15,6 @@ const rootRegressionFiles = [
   "tests/launcher-browser-host.test.ts",
   // Broker lifecycle, physical cleanup, capacity and completion semantics.
   "tests/turn-broker-lifecycle.test.ts",
-  // Long-running turn stress: repeated MCP timeouts, late-result recovery, parallel ambiguity.
-  "tests/long-turn-deep-regression.test.ts",
   // Current/legacy ChatGPT response layouts and final-answer extraction.
   "tests/browser-response-dom.test.ts",
   "tests/chatgpt-session.test.ts",
@@ -70,6 +68,9 @@ async function run(command: string, args: string[], cwd = root): Promise<void> {
 console.log("Fork regression gate: validating EmpRider custom behavior before general verification.");
 
 await run(process.execPath, ["test", ...rootRegressionFiles]);
+// Run the intentionally timer-heavy long-turn stress suite in isolation so it cannot distort the
+// tight timing assertions in retained-compaction and other normal regression files.
+await run(process.execPath, ["test", "regression/long-turn-lifecycle.test.ts"]);
 await run("node", ["--test", ...launcherRegressionFiles], resolve(root, "launcher"));
 
 console.log("\nFork regression gate passed.");
