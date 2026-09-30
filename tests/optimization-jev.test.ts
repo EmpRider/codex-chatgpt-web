@@ -54,7 +54,7 @@ const automatic = {
 
 describe("Jev route optimization", () => {
   test("applies the highest-probability eligible route before normal route resolution", async () => {
-    configure({ baseUrl: "http://127.0.0.1:9911/custom" });
+    configure({ baseUrl: "http://127.0.0.1:9911/custom", model: "jev-1.13" });
     const request = parsed();
     const candidates = jevInternals.candidateList(automatic) as any[];
     const selected = candidates.find(candidate =>
@@ -65,6 +65,7 @@ describe("Jev route optimization", () => {
       expect(String(_url)).toBe("http://127.0.0.1:9911/custom/v1/systemone");
       expect(init.headers.authorization).toBe("Bearer test-key");
       const body = JSON.parse(init.body);
+      expect(body.model).toBe("jev-1.13");
       expect(body.state.request).toContain("cross-module");
       return new Response(JSON.stringify({
         answers: {
@@ -79,15 +80,16 @@ describe("Jev route optimization", () => {
   });
 
   test("prefers the app-managed Jev module from optimization-runtime", async () => {
-    configure();
+    configure({ baseUrl: "http://127.0.0.1:9912", model: "jev-1.13" });
     const home = process.env.CODEX_CHATGPT_WEB_HOME!;
     const version = "managed-test-v1";
     const component = join(home, "optimization-runtime", "components", "jev", version);
     mkdirSync(join(component, "src"), { recursive: true });
     writeFileSync(join(component, "src", "router.mjs"), [
       "export class Router {",
-      "  constructor(config) { this.config = config; }",
+      "  constructor(config, deps = {}) { this.config = config; this.client = deps.client; }",
       "  async route(input) {",
+      "    await this.client.systemOne({ state: { managed: true } });",
       "    return {",
       "      reason: 'jev',",
       "      model: input.models[0],",
@@ -106,16 +108,23 @@ describe("Jev route optimization", () => {
     }));
 
     const request = parsed();
-    let fallbackCalled = false;
-    const result = await optimizeRouteWithJev(request, automatic, (async () => {
-      fallbackCalled = true;
-      throw new Error("fallback TypeSafe client should not be called");
+    let managedCall = 0;
+    const result = await optimizeRouteWithJev(request, automatic, (async (url: any, init: any) => {
+      managedCall += 1;
+      expect(String(url)).toBe("http://127.0.0.1:9912/v1/systemone");
+      const body = JSON.parse(init.body);
+      expect(body.model).toBe("jev-1.13");
+      expect(body.state.managed).toBe(true);
+      return new Response(JSON.stringify({ answers: {} }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
     }) as unknown as typeof fetch);
 
     expect(result.applied).toBe(true);
     expect(result.reason).toBe("jev-managed");
     expect(result.confidence).toBe(0.77);
-    expect(fallbackCalled).toBe(false);
+    expect(managedCall).toBe(1);
   });
 
   test("fails open on an invalid Jev response", async () => {
