@@ -465,15 +465,19 @@ export class TurnBroker implements TurnBrokerOwner {
     this.prune();
     const channel = this.channels.get(token);
     if (!channel) throw new Error("turn token is invalid or expired");
-    this.assertSafeHarnessRunning(channel, true);
     const invocation = channel.invocations.get(callId);
+    // A native result can arrive after its MCP consumer timed out and, in Zero Risk, even after
+    // the user-visible turn has already completed. The tombstone proves this exact call belonged
+    // to the turn, so consume it before terminal-state validation. Unknown or still-pending calls
+    // keep the normal safe-turn checks below.
+    if (!invocation && channel.abandonedCallIds.delete(callId)) {
+      console.info(
+        `[chatgpt-web] broker trace=${channel.traceId} ignored late result for abandoned call=${callId.slice(0, 17)}`,
+      );
+      return;
+    }
+    this.assertSafeHarnessRunning(channel, true);
     if (!invocation) {
-      if (channel.abandonedCallIds.delete(callId)) {
-        console.info(
-          `[chatgpt-web] broker trace=${channel.traceId} ignored late result for abandoned call=${callId.slice(0, 17)}`,
-        );
-        return;
-      }
       throw new Error(`tool call is not pending: ${callId}`);
     }
     if (!channel.deliveredCallIds.delete(callId)) {
