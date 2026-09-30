@@ -70,6 +70,14 @@ function componentEnabled(settings, id) {
   return settings[id]?.enabled === true;
 }
 
+function shouldProvisionComponent(settings, id, record) {
+  return componentEnabled(settings, id) || Boolean(record?.version);
+}
+
+function newlyEnabledComponents(current, next) {
+  return toolIds().filter(id => !componentEnabled(current, id) && componentEnabled(next, id));
+}
+
 function installedRecord(versions, id) {
   const record = versions?.components?.[id];
   return record && typeof record === "object" ? record : null;
@@ -241,9 +249,7 @@ function createOptimizationController({ coreHome, stateStore, logger, secretStor
       },
     });
 
-    const newlyEnabled = toolIds().filter(id =>
-      !componentEnabled(current, id) && componentEnabled(next, id)
-    );
+    const newlyEnabled = newlyEnabledComponents(current, next);
     if (newlyEnabled.length) {
       await checkUpdates({ force: true, ids: newlyEnabled });
     }
@@ -503,7 +509,7 @@ function createOptimizationController({ coreHome, stateStore, logger, secretStor
           remoteVersion: availableVersion,
           remoteError: null,
         });
-        const canProvision = componentEnabled(currentSettings, id) || Boolean(record.version);
+        const canProvision = shouldProvisionComponent(currentSettings, id, record);
         if (!canProvision && (plan.action === "install" || plan.action === "update")) {
           installed.components[id] = {
             ...record,
@@ -665,5 +671,7 @@ module.exports = {
   localComponentHealthy,
   pathInside,
   mergeSettings,
+  newlyEnabledComponents,
   requestJson,
+  shouldProvisionComponent,
 };
