@@ -73,7 +73,7 @@ describe("Headroom context optimization", () => {
         tokens_after: 20,
         tokens_saved: 1480,
       }), { status: 200, headers: { "content-type": "application/json" } });
-    }) as typeof fetch);
+    }) as unknown as typeof fetch);
     expect(result.applied).toBe(true);
     expect((request.context.messages[0] as any).content).toBe("compressed");
     expect(result.tokensSaved).toBe(1480);
@@ -87,7 +87,7 @@ describe("Headroom context optimization", () => {
     ]);
     const result = await compressParsedContextWithHeadroom(request, (async () => {
       throw new Error("offline");
-    }) as typeof fetch);
+    }) as unknown as typeof fetch);
     expect(result.applied).toBe(false);
     expect((request.context.messages[0] as any).content).toBe(original);
   });
@@ -99,7 +99,7 @@ describe("Headroom context optimization", () => {
       { role: "toolResult", toolCallId: "tool-1", toolName: "exec", content: original, isError: false, timestamp: 1 },
     ]);
     const result = await compressParsedContextWithHeadroom(request, (async () =>
-      new Response(JSON.stringify({ messages: [] }), { status: 200 })) as typeof fetch);
+      new Response(JSON.stringify({ messages: [] }), { status: 200 })) as unknown as typeof fetch);
     expect(result.applied).toBe(false);
     expect((request.context.messages[0] as any).content).toBe(original);
   });
@@ -116,7 +116,7 @@ describe("Headroom live command-result compression", () => {
       return new Response(JSON.stringify({
         messages: [{ role: "assistant", content: "compressed command evidence" }],
       }), { status: 200, headers: { "content-type": "application/json" } });
-    }) as typeof fetch);
+    }) as unknown as typeof fetch);
     expect(result.content).toEqual([{ type: "text", text: "compressed command evidence" }]);
   });
 
@@ -130,7 +130,7 @@ describe("Headroom live command-result compression", () => {
     }, (async () => {
       called = true;
       throw new Error("must not call");
-    }) as typeof fetch);
+    }) as unknown as typeof fetch);
     expect(called).toBe(false);
     expect((errorResult.content[0] as any).text).toBe(raw);
 
@@ -138,7 +138,7 @@ describe("Headroom live command-result compression", () => {
       content: [{ type: "text", text: raw }],
     }, (async () => {
       throw new Error("offline");
-    }) as typeof fetch);
+    }) as unknown as typeof fetch);
     expect((unavailable.content[0] as any).text).toBe(raw);
   });
 });

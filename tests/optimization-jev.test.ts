@@ -65,7 +65,7 @@ describe("Jev route optimization", () => {
           model: { type: "choice", choice: selected.key, confidence: 0.91, probabilities },
         },
       }), { status: 200, headers: { "content-type": "application/json" } });
-    }) as typeof fetch);
+    }) as unknown as typeof fetch);
     expect(result.applied).toBe(true);
     expect(request.modelId).toBe("chatgpt-web/gpt-5.6-pro");
     expect(request.options.reasoning).toBe("max");
@@ -103,7 +103,7 @@ describe("Jev route optimization", () => {
     const result = await optimizeRouteWithJev(request, automatic, (async () => {
       fallbackCalled = true;
       throw new Error("fallback TypeSafe client should not be called");
-    }) as typeof fetch);
+    }) as unknown as typeof fetch);
 
     expect(result.applied).toBe(true);
     expect(result.reason).toBe("jev-managed");
@@ -118,7 +118,7 @@ describe("Jev route optimization", () => {
     const result = await optimizeRouteWithJev(request, automatic, (async () =>
       new Response(JSON.stringify({
         answers: { model: { probabilities: { broken: 1 } } },
-      }), { status: 200 })) as typeof fetch);
+      }), { status: 200 })) as unknown as typeof fetch);
     expect(result.applied).toBe(false);
     expect(request.modelId).toBe(before.model);
     expect(request.options.reasoning).toBe(before.reasoning);
@@ -135,7 +135,7 @@ describe("Jev route optimization", () => {
     }, (async () => {
       called = true;
       throw new Error("must not call");
-    }) as typeof fetch);
+    }) as unknown as typeof fetch);
     expect(result.reason).toBe("manual-mode");
     expect(called).toBe(false);
     expect(request.modelId).toBe("chatgpt-web/gpt-5.6-sol");
