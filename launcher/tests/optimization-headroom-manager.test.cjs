@@ -4,6 +4,7 @@ const {
   headroomExtras,
   uvAssetName,
   venvExecutables,
+  verifyVersionCommand,
 } = require("../electron/optimization/headroom-manager.cjs");
 
 test("private uv runtime resolves supported packaged platforms", () => {
@@ -22,4 +23,13 @@ test("Headroom extras are selected by GUI features", () => {
 test("Headroom venv paths stay private and platform-specific", () => {
   assert.match(venvExecutables("C:/private", "win32").headroom, /Scripts[\\/]headroom\.exe$/);
   assert.match(venvExecutables("/private", "linux").python, /bin[\\/]python$/);
+});
+
+test("private runtime version verification rejects stale binaries", () => {
+  const ok = () => ({ status: 0, stdout: "uv 0.8.20\n", stderr: "" });
+  assert.match(verifyVersionCommand("uv", "0.8.20", ok), /0\.8\.20/);
+  const stale = () => ({ status: 0, stdout: "uv 0.8.19\n", stderr: "" });
+  assert.throws(() => verifyVersionCommand("uv", "0.8.20", stale), /unexpected version/);
+  const failed = () => ({ status: 1, stdout: "", stderr: "broken" });
+  assert.throws(() => verifyVersionCommand("uv", "0.8.20", failed), /health check failed/);
 });
