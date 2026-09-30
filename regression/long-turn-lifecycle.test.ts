@@ -295,20 +295,19 @@ test("parallel identical timeouts stay ambiguous without poisoning unrelated wor
       activityId: activityA,
       wireName: "exec_command",
       arguments: { cmd: "same-concurrent-side-effect" },
-    }, 25);
+    }, 80);
     const invokeB = callTurnBroker(h.socketPath, {
       method: "invoke",
       bindingId: claimA.bindingId,
       activityId: activityB,
       wireName: "exec_command",
       arguments: { cmd: "same-concurrent-side-effect" },
-    }, 25);
+    }, 80);
+    const invokeATimedOut = expect(invokeA).rejects.toThrow("timed out");
+    const invokeBTimedOut = expect(invokeB).rejects.toThrow("timed out");
     const batch = await h.broker.nextToolBatch(token);
     expect(batch).toHaveLength(2);
-    await Promise.all([
-      expect(invokeA).rejects.toThrow("timed out"),
-      expect(invokeB).rejects.toThrow("timed out"),
-    ]);
+    await Promise.all([invokeATimedOut, invokeBTimedOut]);
     await Bun.sleep(25);
     await completeActivity(h.socketPath, token, activityA, true);
     await completeActivity(h.socketPath, token, activityB, true);
@@ -370,9 +369,10 @@ test("MCP timeout cleanup does not publish turn retirement to the browser owner"
       activityId,
       wireName: "exec_command",
       arguments: { cmd: "slow-retirement-check" },
-    }, 40);
+    }, 80);
+    const invocationTimedOut = expect(invocation).rejects.toThrow("timed out");
     const [request] = await h.broker.nextToolBatch(token);
-    await expect(invocation).rejects.toThrow("timed out");
+    await invocationTimedOut;
     await Bun.sleep(40);
     await completeActivity(h.socketPath, token, activityId, true);
 
