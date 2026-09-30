@@ -207,8 +207,20 @@ async function ensureHeadroom({
   const installRoot = path.join(root, "components", "headroom", version, flavor);
   const venvRoot = path.join(installRoot, "venv");
   const executables = venvExecutables(venvRoot, platform);
+  const runCommand = dependencies.run || run;
   if (fs.statSync(executables.headroom, { throwIfNoEntry: false })?.isFile()) {
-    return { version, path: installRoot, ...executables };
+    try {
+      await runCommand(executables.headroom, ["--version"], {
+        env: {
+          ...process.env,
+          UV_PYTHON_INSTALL_DIR: path.join(root, "runtimes", "python"),
+          UV_CACHE_DIR: path.join(root, "cache", "uv"),
+        },
+      });
+      return { version, path: installRoot, ...executables };
+    } catch {
+      fs.rmSync(installRoot, { recursive: true, force: true });
+    }
   }
 
   const uv = await ensureUv(root, { platform, arch, dependencies });
@@ -218,7 +230,6 @@ async function ensureHeadroom({
     UV_PYTHON_INSTALL_DIR: path.join(root, "runtimes", "python"),
     UV_CACHE_DIR: path.join(root, "cache", "uv"),
   };
-  const runCommand = dependencies.run || run;
   try {
     await runCommand(uv, ["venv", "--python", PYTHON_VERSION, venvRoot], { env });
     const extras = headroomExtras({ codeEnabled, mlEnabled }).join(",");
