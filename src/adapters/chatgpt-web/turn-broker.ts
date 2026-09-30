@@ -1530,8 +1530,11 @@ export async function callTurnBroker<T>(
       settled = true;
       clearTimeout(timer);
       cleanup();
-      socket.destroy();
+      // A Windows named-pipe destroy can lag behind the logical transport timeout. Reject the
+      // broker call first so its owning MCP activity can settle immediately; activity_complete is
+      // the durable cleanup boundary and safely handles the pipe's eventual close notification.
       rejectCall(error);
+      queueMicrotask(() => socket.destroy());
     };
     const finishResponse = () => {
       if (settled) return;
