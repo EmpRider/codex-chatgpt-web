@@ -1,6 +1,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const {
+  HeadroomService,
   headroomExtras,
   uvAssetName,
   venvExecutables,
@@ -33,4 +34,14 @@ test("private runtime version verification rejects stale binaries", () => {
   assert.throws(() => verifyVersionCommand("uv", "0.8.20", stale), /unexpected version/);
   const failed = () => ({ status: 1, stdout: "", stderr: "broken" });
   assert.throws(() => verifyVersionCommand("uv", "0.8.20", failed), /health check failed/);
+});
+
+test("Headroom service state distinguishes installed runtime from live process", () => {
+  const service = new HeadroomService({ root: process.cwd(), logger: null });
+  assert.deepEqual(service.state(), {
+    running: false,
+    ready: false,
+    port: null,
+    lastError: null,
+  });
 });
