@@ -358,6 +358,8 @@ class HeadroomService {
     child.once("error", error => {
       spawnError = error;
       if (this.child === child) {
+        this.child = null;
+        this.port = null;
         this.lastError = error.message;
         this.ready = false;
         this.publishState();
