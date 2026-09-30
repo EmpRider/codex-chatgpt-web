@@ -71,6 +71,46 @@ describe("Jev route optimization", () => {
     expect(request.options.reasoning).toBe("max");
   });
 
+  test("prefers the app-managed Jev module from optimization-runtime", async () => {
+    configure();
+    const home = process.env.CODEX_CHATGPT_WEB_HOME!;
+    const version = "managed-test-v1";
+    const component = join(home, "optimization-runtime", "components", "jev", version);
+    mkdirSync(join(component, "src"), { recursive: true });
+    writeFileSync(join(component, "src", "router.mjs"), [
+      "export class Router {",
+      "  constructor(config) { this.config = config; }",
+      "  async route(input) {",
+      "    return {",
+      "      reason: 'jev',",
+      "      model: input.models[0],",
+      "      effort: 'low',",
+      "      lease: 1,",
+      "      confidence: 0.77,",
+      "    };",
+      "  }",
+      "}",
+    ].join("\n"));
+    writeFileSync(join(home, "optimization", "versions.json"), JSON.stringify({
+      version: 1,
+      components: {
+        jev: { version, path: component, status: "ready" },
+      },
+    }));
+
+    const request = parsed();
+    let fallbackCalled = false;
+    const result = await optimizeRouteWithJev(request, automatic, (async () => {
+      fallbackCalled = true;
+      throw new Error("fallback TypeSafe client should not be called");
+    }) as typeof fetch);
+
+    expect(result.applied).toBe(true);
+    expect(result.reason).toBe("jev");
+    expect(result.confidence).toBe(0.77);
+    expect(fallbackCalled).toBe(false);
+  });
+
   test("fails open on an invalid Jev response", async () => {
     configure();
     const request = parsed();
