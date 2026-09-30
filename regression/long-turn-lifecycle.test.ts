@@ -307,11 +307,23 @@ test("parallel identical timeouts stay ambiguous without poisoning unrelated wor
       wireName: "exec_command",
       arguments: { cmd: "same-concurrent-side-effect" },
     }, 150);
-    const invokeATimedOut = expect(invokeA).rejects.toThrow("timed out");
-    const invokeBTimedOut = expect(invokeB).rejects.toThrow("timed out");
+    // Convert the deliberately rejected calls to fulfilled outcome records immediately. Bun can
+    // otherwise classify a fast expected rejection as unhandled before a .rejects matcher settles.
+    const outcomeA = invokeA.then(
+      value => ({ status: "fulfilled" as const, value }),
+      error => ({ status: "rejected" as const, error }),
+    );
+    const outcomeB = invokeB.then(
+      value => ({ status: "fulfilled" as const, value }),
+      error => ({ status: "rejected" as const, error }),
+    );
     const batch = await batchPromise;
     expect(batch).toHaveLength(2);
-    await Promise.all([invokeATimedOut, invokeBTimedOut]);
+    const [settledA, settledB] = await Promise.all([outcomeA, outcomeB]);
+    expect(settledA.status).toBe("rejected");
+    expect(settledB.status).toBe("rejected");
+    if (settledA.status === "rejected") expect(String(settledA.error)).toContain("timed out");
+    if (settledB.status === "rejected") expect(String(settledB.error)).toContain("timed out");
     await Bun.sleep(25);
     await completeActivity(h.socketPath, token, activityA, true);
     await completeActivity(h.socketPath, token, activityB, true);
