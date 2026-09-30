@@ -14,6 +14,7 @@ import {
 import { CODEX_COMPACTION_CONTROL_WIRE_NAME } from "./native-compaction-control";
 import { callTurnBroker, TurnBrokerTimeoutError, type BrokerToolResult } from "./turn-broker";
 import { observeMcpToolCalls } from "./mcp-observation";
+import { optimizeNativeCommandResult } from "../../optimization/tool-results";
 
 interface ClaimedTurn {
   bindingId: string;
@@ -557,6 +558,7 @@ export async function runChatGptMcpServer(options: {
     tool: CodexTool,
     payload: { arguments?: Record<string, unknown>; input?: string },
     signal?: AbortSignal,
+    optimizeCommandOutput = false,
   ) => {
     const timeoutMs = chatGptMcpInvocationTimeout(bound);
     try {
@@ -567,7 +569,10 @@ export async function runChatGptMcpServer(options: {
         freeform: tool.freeform === true,
         ...(tool.freeform ? { input: payload.input ?? "" } : { arguments: payload.arguments ?? {} }),
       }, timeoutMs, signal);
-      return asMcpResult(response);
+      const optimized = optimizeCommandOutput
+        ? await optimizeNativeCommandResult(response)
+        : response;
+      return asMcpResult(optimized);
     } catch (error) {
       // A cancelled/timed-out MCP request no longer has a consumer for the native result. Revoke
       // the whole turn capability so the broker drops the pending invocation and every later call
@@ -607,6 +612,7 @@ export async function runChatGptMcpServer(options: {
     freeform: boolean,
     payload: { arguments?: Record<string, unknown>; input?: string },
     signal?: AbortSignal,
+    optimizeCommandOutput = false,
   ) => {
     const gateway = execGateway(bound);
     if (!gateway) {
@@ -614,7 +620,7 @@ export async function runChatGptMcpServer(options: {
     }
     return invoke(bindingId, bound, gateway, {
       input: execGatewayProgram(nestedToolName, freeform, payload, bound.tools.map(wireName)),
-    }, signal);
+    }, signal, optimizeCommandOutput);
   };
 
   server.registerTool(
@@ -674,7 +680,7 @@ export async function runChatGptMcpServer(options: {
             }
           }
           const args = tool.name === "exec_command" ? execCommandArguments : shellCommandArguments;
-          return invoke(claimed.bindingId, bound, tool, { arguments: args }, extra.signal);
+          return invoke(claimed.bindingId, bound, tool, { arguments: args }, extra.signal, true);
         }
         const gateway = execGateway(bound);
         if (!gateway) {
@@ -682,7 +688,7 @@ export async function runChatGptMcpServer(options: {
         }
         return invoke(claimed.bindingId, bound, gateway, {
           input: execCommandGatewayProgram(execCommandArguments, shellCommandArguments),
-        }, extra.signal);
+        }, extra.signal, true);
       },
     ),
   );
@@ -716,8 +722,8 @@ export async function runChatGptMcpServer(options: {
           ...(max_output_tokens !== undefined ? { max_output_tokens } : {}),
         } };
         return tool
-          ? invoke(claimed.bindingId, bound, tool, payload, extra.signal)
-          : invokeNestedNative(claimed.bindingId, bound, "write_stdin", false, payload, extra.signal);
+          ? invoke(claimed.bindingId, bound, tool, payload, extra.signal, true)
+          : invokeNestedNative(claimed.bindingId, bound, "write_stdin", false, payload, extra.signal, true);
       },
     ),
   );
