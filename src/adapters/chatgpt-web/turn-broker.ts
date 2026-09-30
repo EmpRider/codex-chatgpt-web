@@ -86,6 +86,12 @@ interface TurnChannel {
     result?: BrokerToolResult;
     replayActivityId?: string;
   }>;
+  /** Native results that settled before their owning MCP activity reported its disposition. */
+  completedInvocationResults: Map<string, {
+    fingerprint: string;
+    activityId: string;
+    result: BrokerToolResult;
+  }>;
   invocations: Map<string, PendingInvocation>;
   waiters: Set<ToolWaiter>;
   compactionRequested: boolean;
@@ -147,6 +153,7 @@ interface BrokerRequest {
   traceId?: string;
   callId?: string;
   activityId?: string;
+  activityAbandoned?: boolean;
   revision?: number;
   toolResult?: BrokerToolResult;
   handoffId?: string;
@@ -345,6 +352,7 @@ export class TurnBroker implements TurnBrokerOwner {
       queuedCallIds: [],
       deliveredCallIds: new Set(),
       abandonedInvocations: new Map(),
+      completedInvocationResults: new Map(),
       invocations: new Map(),
       waiters: new Set(),
       compactionRequested: false,
@@ -514,6 +522,16 @@ export class TurnBroker implements TurnBrokerOwner {
     channel.invocations.delete(callId);
     if (invocation.signal && invocation.onAbort) {
       invocation.signal.removeEventListener("abort", invocation.onAbort);
+    }
+    if (invocation.activityId) {
+      // Hold the result until the MCP activity declares whether its consumer actually received it.
+      // This closes the race where a client timeout destroys its socket just before the broker
+      // resolves the native result, but the server observes that close only afterwards.
+      channel.completedInvocationResults.set(callId, {
+        fingerprint: invocation.fingerprint,
+        activityId: invocation.activityId,
+        result: structuredClone(result),
+      });
     }
     console.info(`[chatgpt-web] broker trace=${channel.traceId} completed call=${callId.slice(0, 17)} pending=${channel.invocations.size}`);
     invocation.resolve(result);
@@ -1202,6 +1220,20 @@ export class TurnBroker implements TurnBrokerOwner {
       }
       const wasActive = channel.activities.delete(request.activityId);
       channel.completedActivities.add(request.activityId);
+      const abandonedActivity = request.activityAbandoned === true;
+      // A result can settle in the narrow interval after the MCP client gives up but before the
+      // broker observes that request socket closing. The activity disposition is authoritative:
+      // preserve those results for safe recovery only when the consumer abandoned the activity.
+      for (const [callId, completed] of [...channel.completedInvocationResults]) {
+        if (completed.activityId !== request.activityId) continue;
+        channel.completedInvocationResults.delete(callId);
+        if (abandonedActivity) {
+          channel.abandonedInvocations.set(callId, {
+            fingerprint: completed.fingerprint,
+            result: structuredClone(completed.result),
+          });
+        }
+      }
       // A completed MCP activity is the durable lifecycle boundary for every invocation it owns.
       // Do not depend on a later socket-close notification (notably delayed on Windows named pipes)
       // to remove a timed-out/cancelled invocation from the completion fence.
@@ -1436,6 +1468,7 @@ export class TurnBroker implements TurnBrokerOwner {
     channel.queuedCallIds = [];
     channel.deliveredCallIds.clear();
     channel.abandonedInvocations.clear();
+    channel.completedInvocationResults.clear();
   }
 
   private prune(): void {
