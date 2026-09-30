@@ -15,6 +15,8 @@ const rootRegressionFiles = [
   "tests/launcher-browser-host.test.ts",
   // Broker lifecycle, physical cleanup, capacity and completion semantics.
   "tests/turn-broker-lifecycle.test.ts",
+  // Long-running turn stress: repeated MCP timeouts, late-result recovery, parallel ambiguity.
+  "tests/long-turn-deep-regression.test.ts",
   // Current/legacy ChatGPT response layouts and final-answer extraction.
   "tests/browser-response-dom.test.ts",
   "tests/chatgpt-session.test.ts",
