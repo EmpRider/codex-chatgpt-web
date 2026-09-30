@@ -696,3 +696,10 @@ test("Headroom port is presented as a preferred port with conflict fallback", ()
   assert.match(appSource, /automatically selects the next free local port/);
   assert.match(appSource, /preferred \$\{component\.preferredPort\} busy/);
 });
+
+test("Jev model name is configurable from the optimization GUI", () => {
+  assert.match(appSource, /label="Jev model"/);
+  assert.match(appSource, /value=\{jevModel\}/);
+  assert.match(appSource, /updateFeature\("jev", \{ model: jevModel\.trim\(\) \}\)/);
+  assert.match(appSource, /jev-1\.13/);
+});
