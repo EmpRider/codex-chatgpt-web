@@ -133,18 +133,29 @@ export function loadOptimizationSettings(): OptimizationSettings {
   }
 }
 
-interface VersionRecord {
+export interface ManagedComponentRecord {
   version?: string;
   path?: string;
+  executable?: string;
   status?: string;
+  availableVersion?: string;
+}
+
+export function loadManagedComponent(id: string): ManagedComponentRecord | undefined {
+  try {
+    const versions = JSON.parse(readFileSync(join(optimizationRoot(), "versions.json"), "utf8")) as {
+      components?: Record<string, ManagedComponentRecord>;
+    };
+    const record = versions.components?.[id];
+    return record && typeof record === "object" ? record : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 export function loadManagedText(id: string, relativePath = "SKILL.md"): string | undefined {
   try {
-    const versions = JSON.parse(readFileSync(join(optimizationRoot(), "versions.json"), "utf8")) as {
-      components?: Record<string, VersionRecord>;
-    };
-    const record = versions.components?.[id];
+    const record = loadManagedComponent(id);
     if (!record?.path || !existsSync(record.path)) return undefined;
     const file = join(record.path, relativePath);
     if (!existsSync(file)) return undefined;
