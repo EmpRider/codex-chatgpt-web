@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  compressCommandResultWithHeadroom,
   compressParsedContextWithHeadroom,
   headroomEligibleMessages,
 } from "../src/optimization/headroom";
@@ -101,5 +102,43 @@ describe("Headroom context optimization", () => {
       new Response(JSON.stringify({ messages: [] }), { status: 200 })) as typeof fetch);
     expect(result.applied).toBe(false);
     expect((request.context.messages[0] as any).content).toBe(original);
+  });
+});
+
+describe("Headroom live command-result compression", () => {
+  test("compresses a large plain-text command result without changing its MCP shape", async () => {
+    configureHeadroom({ minTokens: 50 });
+    const raw = "repeated command output ".repeat(1000);
+    const source = { content: [{ type: "text", text: raw }] };
+    const result = await compressCommandResultWithHeadroom(source, (async (_url: any, init: any) => {
+      const body = JSON.parse(init.body);
+      expect(body.messages).toEqual([{ role: "assistant", content: raw }]);
+      return new Response(JSON.stringify({
+        messages: [{ role: "assistant", content: "compressed command evidence" }],
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    }) as typeof fetch);
+    expect(result.content).toEqual([{ type: "text", text: "compressed command evidence" }]);
+  });
+
+  test("fails open for command errors and unavailable service", async () => {
+    configureHeadroom({ minTokens: 50 });
+    const raw = "diagnostic ".repeat(1000);
+    let called = false;
+    const errorResult = await compressCommandResultWithHeadroom({
+      content: [{ type: "text", text: raw }],
+      isError: true,
+    }, (async () => {
+      called = true;
+      throw new Error("must not call");
+    }) as typeof fetch);
+    expect(called).toBe(false);
+    expect((errorResult.content[0] as any).text).toBe(raw);
+
+    const unavailable = await compressCommandResultWithHeadroom({
+      content: [{ type: "text", text: raw }],
+    }, (async () => {
+      throw new Error("offline");
+    }) as typeof fetch);
+    expect((unavailable.content[0] as any).text).toBe(raw);
   });
 });
