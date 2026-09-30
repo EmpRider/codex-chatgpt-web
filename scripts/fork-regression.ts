@@ -18,11 +18,13 @@ const rootRegressionFiles = [
   // Current/legacy ChatGPT response layouts and final-answer extraction.
   "tests/browser-response-dom.test.ts",
   "tests/chatgpt-session.test.ts",
+  "tests/prompt-contract.test.ts",
   // Launcher-managed optimization stack: routing, policies, context/tool compression and fail-open behavior.
   "tests/optimization-config.test.ts",
   "tests/optimization-headroom.test.ts",
   "tests/optimization-instructions.test.ts",
   "tests/optimization-jev.test.ts",
+  "tests/optimization-mcp-command-routing.test.ts",
   "tests/optimization-rtk.test.ts",
   // The full chatgpt-web-harness suite runs in bun run verify immediately after this gate.
   // Do not duplicate the entire harness here: standalone selection can retain Windows-only
