@@ -296,12 +296,12 @@ function createOptimizationController({ coreHome, stateStore, logger, secretStor
     return commit.sha;
   }
 
-  async function checkUpdates({ force = false } = {}) {
+  async function checkUpdates({ force = false, startup = false } = {}) {
     const currentState = stateStore.read();
     const currentSettings = settings();
     const now = Date.now();
-    if (!force && (!currentSettings.autoUpdate
-      || !shouldCheckForUpdates(currentState.optimizationLastUpdateCheckAt, now))) {
+    if (!force && !currentSettings.autoUpdate) return snapshot();
+    if (!force && !startup && !shouldCheckForUpdates(currentState.optimizationLastUpdateCheckAt, now)) {
       return snapshot();
     }
 
