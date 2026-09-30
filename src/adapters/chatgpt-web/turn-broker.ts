@@ -1530,11 +1530,20 @@ export async function callTurnBroker<T>(
       settled = true;
       clearTimeout(timer);
       cleanup();
-      // A Windows named-pipe destroy can lag behind the logical transport timeout. Reject the
-      // broker call first so its owning MCP activity can settle immediately; activity_complete is
-      // the durable cleanup boundary and safely handles the pipe's eventual close notification.
-      rejectCall(error);
-      queueMicrotask(() => socket.destroy());
+      // Activity cleanup follows a timed-out invoke immediately. On Windows a named-pipe destroy
+      // can be logically requested before the peer has observed the close; opening activity_complete
+      // in that interval can stall behind the still-closing pipe. Start teardown first and give the
+      // close event a short bounded grace period before exposing the timeout to the caller.
+      let rejectionSettled = false;
+      const rejectAfterTeardown = () => {
+        if (rejectionSettled) return;
+        rejectionSettled = true;
+        clearTimeout(teardownGrace);
+        rejectCall(error);
+      };
+      const teardownGrace = setTimeout(rejectAfterTeardown, 250);
+      socket.once("close", rejectAfterTeardown);
+      socket.destroy();
     };
     const finishResponse = () => {
       if (settled) return;
