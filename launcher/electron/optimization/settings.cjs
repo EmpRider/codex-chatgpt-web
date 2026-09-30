@@ -31,6 +31,7 @@ const DEFAULT_OPTIMIZATION_SETTINGS = Object.freeze({
   }),
   jev: Object.freeze({
     enabled: false,
+    baseUrl: "https://api.typesafe.ai",
     costWeight: 0.02,
     adaptiveThinking: true,
     reassessAfterToolFailure: true,
@@ -49,6 +50,19 @@ function integerIn(value, fallback, min, max) {
 }
 function level(value, fallback) {
   return LEVELS.has(value) ? value : fallback;
+}
+function endpointUrl(value, fallback) {
+  if (typeof value !== "string" || !value.trim()) return fallback;
+  try {
+    const parsed = new URL(value.trim());
+    if (parsed.username || parsed.password) return fallback;
+    if (parsed.protocol === "https:") return parsed.toString().replace(/\/$/, "");
+    const loopback = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
+    if (parsed.protocol === "http:" && loopback.has(parsed.hostname)) {
+      return parsed.toString().replace(/\/$/, "");
+    }
+  } catch {}
+  return fallback;
 }
 
 function normalizeOptimizationSettings(value) {
@@ -99,6 +113,7 @@ function normalizeOptimizationSettings(value) {
     },
     jev: {
       enabled: bool(jev.enabled, DEFAULT_OPTIMIZATION_SETTINGS.jev.enabled),
+      baseUrl: endpointUrl(jev.baseUrl, DEFAULT_OPTIMIZATION_SETTINGS.jev.baseUrl),
       costWeight: numberIn(jev.costWeight, DEFAULT_OPTIMIZATION_SETTINGS.jev.costWeight, 0, 1),
       adaptiveThinking: bool(jev.adaptiveThinking, DEFAULT_OPTIMIZATION_SETTINGS.jev.adaptiveThinking),
       reassessAfterToolFailure: bool(
