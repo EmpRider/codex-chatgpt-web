@@ -9,6 +9,7 @@ const { decodeGitHubText, installTextSnapshot } = require("./provisioner.cjs");
 const { installRtkRelease } = require("./rtk-manager.cjs");
 const { HeadroomService, ensureHeadroom } = require("./headroom-manager.cjs");
 const { provisionJev } = require("./jev-manager.cjs");
+const { ensureOptimizationPaths, optimizationPaths } = require("./runtime-paths.cjs");
 
 const USER_AGENT = "codex-web-gpt-optimization-manager";
 const MAX_METADATA_BYTES = 2 * 1024 * 1024;
@@ -84,10 +85,10 @@ function mergeSettings(current, patch) {
 }
 
 function createOptimizationController({ coreHome, stateStore, logger, secretStore, runtimeExecutable, publish }) {
-  const root = path.join(coreHome, "optimization");
-  const settingsPath = path.join(root, "settings.json");
-  const versionsPath = path.join(root, "versions.json");
-  fs.mkdirSync(root, { recursive: true, mode: 0o700 });
+  const paths = ensureOptimizationPaths(optimizationPaths(coreHome));
+  const root = paths.runtimeRoot;
+  const settingsPath = paths.settingsPath;
+  const versionsPath = paths.versionsPath;
   const headroomService = new HeadroomService({ root, logger });
 
   function settings() {
