@@ -5,6 +5,8 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+import { shouldRetireTurnBindingAfterInvocationFailure } from "../src/adapters/chatgpt-web/mcp-server";
+import { TurnBrokerTimeoutError } from "../src/adapters/chatgpt-web/turn-broker";
   CHATGPT_WEB_MCP_CONTEXT_CHUNK_CHARS,
   CHATGPT_WEB_MCP_PROMPT_JSON_BYTE_THRESHOLD,
   CHATGPT_WEB_MCP_CONTEXT_READ_WIRE_NAME,
@@ -296,4 +298,13 @@ test("large compaction reads complete history over MCP before summarizing", () =
   expect(compiled.text).toContain("Produce the requested checkpoint summary");
   expect(compiled.text).not.toContain("Execute the latest active user request");
   expect(compiled.text).not.toContain("Do not call local or ChatGPT-native tools");
+});
+
+
+test("MCP transport timeout or cancellation does not retire the whole ChatGPT turn binding", () => {
+  expect(shouldRetireTurnBindingAfterInvocationFailure(new TurnBrokerTimeoutError())).toBeFalse();
+  expect(shouldRetireTurnBindingAfterInvocationFailure(
+    new DOMException("transport cancelled", "AbortError"),
+  )).toBeFalse();
+  expect(shouldRetireTurnBindingAfterInvocationFailure(new Error("broker state failure"))).toBeTrue();
 });
