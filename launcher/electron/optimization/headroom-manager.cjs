@@ -340,7 +340,7 @@ class HeadroomService {
       HEADROOM_WORKSPACE_DIR: workspace,
       HEADROOM_TELEMETRY: "off",
       HEADROOM_LOG_LEVEL: "warning",
-      ...(mlEnabled ? {} : { HEADROOM_DISABLE_KOMPRESS: "1" }),
+      HEADROOM_DISABLE_KOMPRESS: mlEnabled ? "0" : "1",
     };
     const child = spawn(executable, args, {
       env, cwd: workspace, windowsHide: true, stdio: ["ignore", "ignore", "pipe"],
