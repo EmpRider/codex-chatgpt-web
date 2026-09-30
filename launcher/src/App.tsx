@@ -1915,6 +1915,7 @@ function OptimizationSettingsPanel({
 }) {
   const [optimization, setOptimization] = useState<OptimizationSnapshot>(snapshot.optimization);
   const [busy, setBusy] = useState(false);
+  const [jevKey, setJevKey] = useState("");
   useEffect(() => setOptimization(snapshot.optimization), [snapshot.optimization]);
 
   const patch = async (value: Partial<OptimizationSettings>) => {
@@ -2059,6 +2060,48 @@ function OptimizationSettingsPanel({
             disabled={busy}
             onChange={(enabled) => void updateFeature("jev", { enabled })}
           />
+        </SettingRow>
+        <SettingRow
+          body={optimization.secrets.jevApiKeyConfigured
+            ? "A TypeSafe key is stored with OS encryption. Saving a new value replaces it."
+            : "Optional TypeSafe System One key. It is encrypted by the OS and never written to optimizer settings or Codex."}
+          label="Jev / TypeSafe API key"
+        >
+          <div className="optimization-secret">
+            <input
+              aria-label="Jev / TypeSafe API key"
+              autoComplete="off"
+              disabled={busy || !optimization.secrets.encryptionAvailable}
+              onChange={(event) => setJevKey(event.target.value)}
+              placeholder={optimization.secrets.jevApiKeyConfigured ? "••••••••••••" : "Enter API key"}
+              type="password"
+              value={jevKey}
+            />
+            <SecondaryButton
+              disabled={busy || !optimization.secrets.encryptionAvailable || !jevKey.trim()}
+              onClick={() => {
+                setBusy(true);
+                setError(null);
+                void api!.setJevApiKey(jevKey)
+                  .then(value => { setOptimization(value); setJevKey(""); })
+                  .catch(cause => setError(messageOf(cause)))
+                  .finally(() => setBusy(false));
+              }}
+            >Save</SecondaryButton>
+            {optimization.secrets.jevApiKeyConfigured ? (
+              <SecondaryButton
+                disabled={busy}
+                onClick={() => {
+                  setBusy(true);
+                  setError(null);
+                  void api!.setJevApiKey(null)
+                    .then(value => { setOptimization(value); setJevKey(""); })
+                    .catch(cause => setError(messageOf(cause)))
+                    .finally(() => setBusy(false));
+                }}
+              >Clear</SecondaryButton>
+            ) : null}
+          </div>
         </SettingRow>
       </div>
       <div className="optimization-update-row">
