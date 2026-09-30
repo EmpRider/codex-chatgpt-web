@@ -2039,6 +2039,16 @@ function OptimizationSettingsPanel({
           />
         </SettingRow>
         <SettingRow
+          body="Ask RTK to use its most aggressive supported compact representation for eligible command output."
+          label="RTK ultra compact"
+        >
+          <Switch
+            checked={optimization.settings.rtk.ultraCompact}
+            disabled={busy || !optimization.settings.rtk.enabled}
+            onChange={(enabled) => void updateFeature("rtk", { ultraCompact: enabled })}
+          />
+        </SettingRow>
+        <SettingRow
           body="Compress large context locally through the app-owned Headroom service."
           label="Headroom context compression"
         >
