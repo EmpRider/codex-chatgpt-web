@@ -125,7 +125,9 @@ async function callSystemOne(
       "user-agent": "codex-chatgpt-web-jev/1",
     },
     body: JSON.stringify(body),
-    signal: signal ?? AbortSignal.timeout(timeoutMs),
+    signal: signal
+      ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)])
+      : AbortSignal.timeout(timeoutMs),
   });
   if (!response.ok) throw new Error(`TypeSafe HTTP ${response.status}`);
   return response.json() as Promise<TypeSafeResponse>;
