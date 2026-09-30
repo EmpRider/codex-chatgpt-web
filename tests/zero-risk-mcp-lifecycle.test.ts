@@ -409,4 +409,50 @@ describe("Zero Risk public MCP ABI", () => {
       await broker.close();
     }
   }, 30_000);
+
+  test("late native result after a timed-out Zero Risk tool is ignored after safe completion", async () => {
+    const socketPath = endpoint("late-after-safe-completion");
+    const broker = TurnBroker.forSocket(socketPath);
+    try {
+      const requestId = await broker.registerSafe(environment(), nonceA, undefined, "safe-late-timeout");
+      broker.confirmSafeTurnSent(requestId, nonceA);
+      broker.startSafeTurn(requestId);
+
+      const activityId = "activity_safeLateTimeout123456789";
+      const claimed = await callTurnBroker<{ bindingId: string }>(socketPath, {
+        method: "claim",
+        token: requestId,
+        activityId,
+        contract: "safe",
+      });
+      const invocation = callTurnBroker(socketPath, {
+        method: "invoke",
+        bindingId: claimed.bindingId,
+        wireName: "exec_command",
+        arguments: { cmd: "slow-safe-tool" },
+      }, 25);
+      const [request] = await broker.nextToolBatch(requestId);
+      expect(request).toBeDefined();
+
+      await expect(invocation).rejects.toThrow("timed out");
+      await Bun.sleep(25);
+      await callTurnBroker(socketPath, {
+        method: "activity_complete",
+        token: requestId,
+        activityId,
+      });
+      expect(broker.completeSafeTurn(requestId, "completed after timeout")).toEqual({
+        completed: true,
+        duplicate: false,
+      });
+
+      expect(() => broker.completeTool(requestId, request!.callId, toolResult({
+        output: "late native result",
+      }))).not.toThrow();
+      await expect(broker.waitForSafeCompletion(requestId)).resolves.toBe("completed after timeout");
+    } finally {
+      await broker.close();
+    }
+  });
+
 });
