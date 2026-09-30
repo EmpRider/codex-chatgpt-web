@@ -9,6 +9,7 @@ const PYTHON_VERSION = "3.13";
 
 function uvAssetName(platform = process.platform, arch = process.arch) {
   if (platform === "win32" && arch === "x64") return "uv-x86_64-pc-windows-msvc.zip";
+  if (platform === "win32" && arch === "arm64") return "uv-aarch64-pc-windows-msvc.zip";
   if (platform === "darwin" && arch === "x64") return "uv-x86_64-apple-darwin.tar.gz";
   if (platform === "darwin" && arch === "arm64") return "uv-aarch64-apple-darwin.tar.gz";
   if (platform === "linux" && arch === "x64") return "uv-x86_64-unknown-linux-musl.tar.gz";
