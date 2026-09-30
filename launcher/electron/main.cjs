@@ -1285,7 +1285,7 @@ async function start() {
   if (!launcherSmokeTest) {
     void updateController.checkOnce();
     void optimizationController.ensureActive()
-      .then(() => optimizationController.checkUpdates())
+      .then(() => optimizationController.checkUpdates({ startup: true }))
       .catch((error) => {
         logger.warn("optimization.startup_reconcile_failed", {
           message: error instanceof Error ? error.message : String(error),
