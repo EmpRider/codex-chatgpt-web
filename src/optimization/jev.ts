@@ -40,7 +40,28 @@ interface TypeSafeResponse {
     task_complexity?: { score?: number };
     reasoning_required?: { score?: number };
     tool_complexity?: { score?: number };
+    lease?: TypeSafeChoiceAnswer;
+    effort?: TypeSafeChoiceAnswer;
   };
+}
+
+interface JevLease {
+  route: string;
+  effort: ChatGptWebCodexEffort;
+  remaining: number;
+}
+
+const leases = new Map<string, JevLease>();
+
+function rememberLease(key: string | undefined, value: JevLease): void {
+  if (!key) return;
+  leases.delete(key);
+  leases.set(key, value);
+  while (leases.size > 1024) {
+    const oldest = leases.keys().next().value as string | undefined;
+    if (!oldest) break;
+    leases.delete(oldest);
+  }
 }
 
 function text(message: CodexMessage): string {
@@ -159,6 +180,19 @@ function requestBody(parsed: CodexParsedRequest, candidates: readonly Candidate[
         instructions: [TASK_CONTEXT, "How complex is the tool use required by the latest request?"],
         criteria: scoreCriteria(),
       },
+      lease: {
+        type: "choice",
+        instructions: [
+          TASK_CONTEXT,
+          "For how many upcoming model generations, including the first one, is the required reasoning depth likely to stay stable? A tool failure ends the lease early.",
+        ],
+        criteria: {
+          "1": "Reassess after the first generation because new evidence may change the required depth.",
+          "2": "Two generations are likely to need the same reasoning depth.",
+          "5": "A predictable phase is likely to remain stable for five generations.",
+          "10": "A sustained predictable phase is likely to remain stable for ten generations.",
+        },
+      },
     },
   };
 }
@@ -200,6 +234,103 @@ function choose(
   })[0]!;
 }
 
+function parseLease(answer: TypeSafeChoiceAnswer | undefined): number {
+  const value = Number(answer?.choice);
+  return value === 1 || value === 2 || value === 5 || value === 10 ? value : 1;
+}
+
+function lastToolFailed(parsed: CodexParsedRequest): boolean {
+  for (let index = parsed.context.messages.length - 1; index >= 0; index -= 1) {
+    const message = parsed.context.messages[index]!;
+    if (message.role === "toolResult") return message.isError === true;
+    if (message.role === "user") return false;
+  }
+  return false;
+}
+
+function routeForSlug(
+  capabilities: ChatGptWebAccountCapabilities,
+  slug: string,
+): ChatGptWebModelRoute | undefined {
+  return availableChatGptWebModelRoutes(capabilities, false).find(route => route.slug === slug);
+}
+
+async function reassessEffort(
+  parsed: CodexParsedRequest,
+  capabilities: ChatGptWebAccountCapabilities,
+  lease: JevLease,
+  settings: ReturnType<typeof loadOptimizationSettings>,
+  fetchImpl: typeof fetch,
+): Promise<JevLease> {
+  const route = routeForSlug(capabilities, lease.route);
+  if (!route || route.interactionMode !== "automatic") return lease;
+  const efforts = chatGptWebRouteEfforts(route, capabilities);
+  if (efforts.length < 2) return { ...lease, remaining: 9 };
+  const { prompt, recentContext } = routingContext(parsed);
+  const criteria = Object.fromEntries(efforts.map(effort => [
+    effort,
+    `Use ${effort} reasoning for the next generation on ${route.displayName}.`,
+  ]));
+  const recentTools = parsed.context.messages
+    .filter(message => message.role === "toolResult")
+    .slice(-6)
+    .map(message => ({
+      tool: message.role === "toolResult" ? message.toolName : "",
+      error: message.role === "toolResult" ? message.isError : false,
+      result: message.role === "toolResult" ? text(message).slice(0, 4000) : "",
+    }));
+  const response = await fetchImpl("https://api.typesafe.ai/v1/systemone", {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${process.env.JEV_API_KEY?.trim() ?? ""}`,
+      accept: "application/json",
+      "content-type": "application/json",
+      "user-agent": "codex-chatgpt-web-jev/1",
+    },
+    body: JSON.stringify({
+      model: "jev-latest",
+      state: {
+        request: prompt,
+        recent_conversation: recentContext,
+        current_route: lease.route,
+        current_effort: lease.effort,
+        recent_tool_calls: recentTools,
+      },
+      questions: {
+        effort: {
+          type: "choice",
+          instructions: [
+            "Choose the lowest reasoning effort sufficient for the NEXT generation. The model route must not change.",
+            "Use completed tool results as evidence. A failed command alone does not automatically justify higher effort.",
+          ],
+          criteria,
+        },
+        lease: {
+          type: "choice",
+          instructions: "For how many upcoming generations, including the next one, is this reasoning depth likely to remain stable?",
+          criteria: {
+            "1": "Reassess after the next generation.",
+            "2": "Keep it for two generations.",
+            "5": "Keep it for five generations.",
+            "10": "Keep it for ten generations.",
+          },
+        },
+      },
+    }),
+    signal: AbortSignal.timeout(settings.jev.decisionTimeoutMs),
+  });
+  if (!response.ok) throw new Error(`TypeSafe HTTP ${response.status}`);
+  const payload = await response.json() as TypeSafeResponse;
+  const effort = payload.answers?.effort?.choice;
+  if (!efforts.includes(effort as ChatGptWebCodexEffort)) throw new Error("Invalid Jev effort reassessment");
+  const leaseLength = parseLease(payload.answers?.lease);
+  return {
+    route: lease.route,
+    effort: effort as ChatGptWebCodexEffort,
+    remaining: Math.max(0, leaseLength - 1),
+  };
+}
+
 export interface JevRoutingResult {
   attempted: boolean;
   applied: boolean;
@@ -214,6 +345,7 @@ export async function optimizeRouteWithJev(
   parsed: CodexParsedRequest,
   capabilities: ChatGptWebAccountCapabilities,
   fetchImpl: typeof fetch = fetch,
+  leaseKey?: string,
 ): Promise<JevRoutingResult> {
   const settings = loadOptimizationSettings();
   if (!settings.jev.enabled) return { attempted: false, applied: false, reason: "disabled" };
@@ -223,6 +355,33 @@ export async function optimizeRouteWithJev(
   if (parsed._compactionRequest) return { attempted: false, applied: false, reason: "compaction" };
   const apiKey = process.env.JEV_API_KEY?.trim();
   if (!apiKey) return { attempted: false, applied: false, reason: "missing-key" };
+
+  const existingLease = leaseKey ? leases.get(leaseKey) : undefined;
+  if (existingLease) {
+    let active = existingLease;
+    const shouldReassess = settings.jev.adaptiveThinking
+      && (active.remaining <= 0
+        || (settings.jev.reassessAfterToolFailure && lastToolFailed(parsed)));
+    if (shouldReassess) {
+      try {
+        active = await reassessEffort(parsed, capabilities, active, settings, fetchImpl);
+      } catch {
+        active = { ...active, remaining: 0 };
+      }
+    } else {
+      active = { ...active, remaining: Math.max(0, active.remaining - 1) };
+    }
+    rememberLease(leaseKey, active);
+    parsed.modelId = active.route;
+    parsed.options.reasoning = active.effort;
+    return {
+      attempted: shouldReassess,
+      applied: true,
+      reason: shouldReassess ? "jev-reassess" : "jev-lease",
+      route: active.route,
+      effort: active.effort,
+    };
+  }
 
   const candidates = candidateList(capabilities);
   if (candidates.length < 2) return { attempted: false, applied: false, reason: "single-candidate" };
@@ -246,6 +405,12 @@ export async function optimizeRouteWithJev(
       ? payload.answers.standalone.noul
       : 0;
     const selected = choose(candidates, probabilities, settings.jev.costWeight, standalone);
+    const leaseLength = parseLease(payload.answers?.lease);
+    rememberLease(leaseKey, {
+      route: selected.route.slug,
+      effort: selected.effort,
+      remaining: Math.max(0, leaseLength - 1),
+    });
     parsed.modelId = selected.route.slug;
     parsed.options.reasoning = selected.effort;
     const confidence = typeof payload.answers?.model?.confidence === "number"
@@ -275,4 +440,5 @@ export const jevInternals = {
   choose,
   requestBody,
   validateDistribution,
+  clearLeases: () => leases.clear(),
 };
