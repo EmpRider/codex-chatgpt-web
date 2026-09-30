@@ -16,14 +16,20 @@ afterEach(() => {
   for (const home of homes.splice(0)) rmSync(home, { recursive: true, force: true });
 });
 
-function configure() {
+function configure(overrides: Record<string, unknown> = {}) {
   const home = mkdtempSync(join(tmpdir(), "jev-opt-test-"));
   homes.push(home);
   process.env.CODEX_CHATGPT_WEB_HOME = home;
   process.env.JEV_API_KEY = "test-key";
   mkdirSync(join(home, "optimization"), { recursive: true });
   writeFileSync(join(home, "optimization", "settings.json"), JSON.stringify({
-    jev: { enabled: true, costWeight: 0, decisionTimeoutMs: 4500 },
+    jev: {
+      enabled: true,
+      baseUrl: "https://api.typesafe.ai",
+      costWeight: 0,
+      decisionTimeoutMs: 4500,
+      ...overrides,
+    },
   }));
 }
 
@@ -48,7 +54,7 @@ const automatic = {
 
 describe("Jev route optimization", () => {
   test("applies the highest-probability eligible route before normal route resolution", async () => {
-    configure();
+    configure({ baseUrl: "http://127.0.0.1:9911/custom" });
     const request = parsed();
     const candidates = jevInternals.candidateList(automatic) as any[];
     const selected = candidates.find(candidate =>
@@ -56,6 +62,7 @@ describe("Jev route optimization", () => {
     expect(selected).toBeTruthy();
     const probabilities = Object.fromEntries(candidates.map(candidate => [candidate.key, candidate === selected ? 1 : 0]));
     const result = await optimizeRouteWithJev(request, automatic, (async (_url: any, init: any) => {
+      expect(String(_url)).toBe("http://127.0.0.1:9911/custom/v1/systemone");
       expect(init.headers.authorization).toBe("Bearer test-key");
       const body = JSON.parse(init.body);
       expect(body.state.request).toContain("cross-module");
@@ -139,6 +146,13 @@ describe("Jev route optimization", () => {
     expect(result.reason).toBe("manual-mode");
     expect(called).toBe(false);
     expect(request.modelId).toBe("chatgpt-web/gpt-5.6-sol");
+  });
+
+  test("accepts a full System One endpoint without appending it twice", () => {
+    expect(jevInternals.systemOneEndpoint("https://example.com/v1/systemone"))
+      .toBe("https://example.com/v1/systemone");
+    expect(jevInternals.systemOneEndpoint("https://example.com/custom/"))
+      .toBe("https://example.com/custom/v1/systemone");
   });
 
   test("cost weight can prefer a lower-effort near tie", () => {
