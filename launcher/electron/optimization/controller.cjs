@@ -83,7 +83,7 @@ function mergeSettings(current, patch) {
   return normalizeOptimizationSettings(next);
 }
 
-function createOptimizationController({ coreHome, stateStore, logger, secretStore, runtimeExecutable }) {
+function createOptimizationController({ coreHome, stateStore, logger, secretStore, runtimeExecutable, publish }) {
   const root = path.join(coreHome, "optimization");
   const settingsPath = path.join(root, "settings.json");
   const versionsPath = path.join(root, "versions.json");
@@ -104,6 +104,12 @@ function createOptimizationController({ coreHome, stateStore, logger, secretStor
 
   function persistRuntimeSettings(value = settings()) {
     writePrivateFileAtomic(settingsPath, `${JSON.stringify(value, null, 2)}\n`);
+  }
+
+  function notify() {
+    const value = snapshot();
+    publish?.(value);
+    return value;
   }
 
   function snapshot() {
@@ -423,14 +429,14 @@ function createOptimizationController({ coreHome, stateStore, logger, secretStor
     } else {
       await headroomService.stop();
     }
-    logger?.info("optimization.update_check_completed", { manual: force });
-    return snapshot();
+    logger?.info("optimization.update_check_completed", { manual: force, startup });
+    return notify();
   }
 
   function setJevApiKey(value) {
     if (!secretStore) throw new Error("Optimization secret store is unavailable");
     secretStore.setJevApiKey(value);
-    return snapshot();
+    return notify();
   }
 
   function jevApiKey() {
