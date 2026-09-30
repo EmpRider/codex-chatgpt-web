@@ -2275,7 +2275,10 @@ function OptimizationSettingsPanel({
           <div className="optimization-component" key={component.id}>
             <span>
               <strong>{component.name}</strong>
-              <small>{component.status}</small>
+              <small title={component.lastError ?? undefined}>
+                {component.status}
+                {component.lastError ? ` · ${component.lastError.slice(0, 120)}` : ""}
+              </small>
             </span>
             <code>
               {component.installedVersion ?? "not installed"}
