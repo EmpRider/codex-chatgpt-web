@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { compressCommandResultWithRtk, rtkFilterForCommand } from "../src/optimization/rtk";
+import { hasCommandSessionMetadata } from "../src/optimization/tool-results";
 import type { BrokerToolResult } from "../src/adapters/chatgpt-web/turn-broker";
 
 const previousHome = process.env.CODEX_CHATGPT_WEB_HOME;
@@ -38,6 +39,13 @@ function result(text: string, extra: Partial<BrokerToolResult> = {}): BrokerTool
 }
 
 describe("RTK native command-result compression", () => {
+  test("preserves long-running command session metadata byte-exact", () => {
+    expect(hasCommandSessionMetadata(result("Process running with session_id: 42"))).toBe(true);
+    expect(hasCommandSessionMetadata(result("Process is still running; session ID 73"))).toBe(true);
+    expect(hasCommandSessionMetadata(result("ordinary completed output"))).toBe(false);
+    expect(hasCommandSessionMetadata(result("output", { structuredContent: { session_id: 42 } }))).toBe(true);
+  });
+
   test("applies managed RTK pipe output when it is smaller", async () => {
     configure({ ultraCompact: true });
     const raw = "verbose line\n".repeat(100);
