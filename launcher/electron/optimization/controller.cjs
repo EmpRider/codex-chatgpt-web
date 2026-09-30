@@ -194,16 +194,33 @@ function createOptimizationController({ coreHome, stateStore, logger, secretStor
       },
     });
 
-    const headroomChanged = JSON.stringify(current.headroom) !== JSON.stringify(next.headroom);
-    if (headroomChanged) {
-      if (!next.headroom.enabled) await headroomService.stop();
-      else {
-        const installed = versions();
-        const record = installedRecord(installed, "headroom");
-        const version = record?.availableVersion || record?.version;
-        if (version) {
-          try {
-            const result = await provisionHeadroom(version, next);
+    const headroomPackageChanged = next.headroom.enabled && (
+      !current.headroom.enabled
+      || current.headroom.codeEnabled !== next.headroom.codeEnabled
+      || current.headroom.mlEnabled !== next.headroom.mlEnabled
+    );
+    const headroomServiceChanged = next.headroom.enabled && (
+      headroomPackageChanged
+      || current.headroom.port !== next.headroom.port
+    );
+    if (current.headroom.enabled && !next.headroom.enabled) {
+      await headroomService.stop();
+    } else if (headroomPackageChanged || headroomServiceChanged) {
+      const installed = versions();
+      const record = installedRecord(installed, "headroom");
+      const version = record?.availableVersion || record?.version;
+      if (version) {
+        try {
+          const result = headroomPackageChanged
+            ? await provisionHeadroom(version, next)
+            : {
+                version: record.version,
+                path: record.path,
+                headroom: record.executable,
+                python: record.python,
+              };
+          if (!result.headroom) throw new Error("Managed Headroom executable is unavailable");
+          if (headroomPackageChanged) {
             installed.components.headroom = {
               ...record,
               version: result.version,
@@ -219,17 +236,17 @@ function createOptimizationController({ coreHome, stateStore, logger, secretStor
               updatedAt: new Date().toISOString(),
             };
             writePrivateFileAtomic(versionsPath, `${JSON.stringify(installed, null, 2)}\n`);
-            await headroomService.start({
-              executable: result.headroom,
-              port: next.headroom.port,
-              codeEnabled: next.headroom.codeEnabled,
-              mlEnabled: next.headroom.mlEnabled,
-            });
-          } catch (error) {
-            logger?.warn("optimization.headroom_reconfigure_failed", {
-              message: error instanceof Error ? error.message : String(error),
-            });
           }
+          await headroomService.start({
+            executable: result.headroom,
+            port: next.headroom.port,
+            codeEnabled: next.headroom.codeEnabled,
+            mlEnabled: next.headroom.mlEnabled,
+          });
+        } catch (error) {
+          logger?.warn("optimization.headroom_reconfigure_failed", {
+            message: error instanceof Error ? error.message : String(error),
+          });
         }
       }
     }
