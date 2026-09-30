@@ -565,7 +565,9 @@ function registerIpc({ logger, stateStore }) {
     smokePassed: smokePassedThisSession || smokePassedForCurrentVersion(stateStore.read()),
     operation: lastOperation,
     update: updateController?.getState() ?? { status: "disabled" },
-    optimization: typeof optimizationController !== "undefined" && optimizationController\n      ? optimizationController.snapshot()\n      : null,
+    optimization: typeof optimizationController !== "undefined" && optimizationController
+      ? optimizationController.snapshot()
+      : null,
   }));
 
   handle("launcher:optimization-snapshot", () => {
