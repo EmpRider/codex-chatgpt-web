@@ -289,23 +289,27 @@ test("parallel identical timeouts stay ambiguous without poisoning unrelated wor
     const claimA = await claim(h.socketPath, token, activityA);
     await claim(h.socketPath, token, activityB);
 
+    // Install the outer Codex waiter before starting the MCP calls. The test is about parallel
+    // calls that were actually delivered and then lost their consumers, not about scheduler races
+    // between queueing and a deliberately short transport deadline.
+    const batchPromise = h.broker.nextToolBatch(token);
     const invokeA = callTurnBroker(h.socketPath, {
       method: "invoke",
       bindingId: claimA.bindingId,
       activityId: activityA,
       wireName: "exec_command",
       arguments: { cmd: "same-concurrent-side-effect" },
-    }, 80);
+    }, 150);
     const invokeB = callTurnBroker(h.socketPath, {
       method: "invoke",
       bindingId: claimA.bindingId,
       activityId: activityB,
       wireName: "exec_command",
       arguments: { cmd: "same-concurrent-side-effect" },
-    }, 80);
+    }, 150);
     const invokeATimedOut = expect(invokeA).rejects.toThrow("timed out");
     const invokeBTimedOut = expect(invokeB).rejects.toThrow("timed out");
-    const batch = await h.broker.nextToolBatch(token);
+    const batch = await batchPromise;
     expect(batch).toHaveLength(2);
     await Promise.all([invokeATimedOut, invokeBTimedOut]);
     await Bun.sleep(25);
