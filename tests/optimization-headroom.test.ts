@@ -7,6 +7,7 @@ import {
   compressParsedContextWithHeadroom,
   headroomEligibleMessages,
 } from "../src/optimization/headroom";
+import { effectiveHeadroomPort, loadOptimizationSettings } from "../src/optimization/config";
 import type { CodexParsedRequest } from "../src/types";
 
 const previousHome = process.env.CODEX_CHATGPT_WEB_HOME;
@@ -140,5 +141,43 @@ describe("Headroom live command-result compression", () => {
       throw new Error("offline");
     }) as unknown as typeof fetch);
     expect((unavailable.content[0] as any).text).toBe(raw);
+  });
+});
+
+describe("Headroom runtime port selection", () => {
+  test("uses the launcher-published effective port when the preferred port is occupied", async () => {
+    configureHeadroom({ port: 8787, minTokens: 50 });
+    const home = process.env.CODEX_CHATGPT_WEB_HOME!;
+    writeFileSync(join(home, "optimization", "runtime.json"), JSON.stringify({
+      version: 1,
+      headroom: {
+        running: true,
+        ready: true,
+        port: 8788,
+        preferredPort: 8787,
+        portConflict: true,
+      },
+    }));
+
+    expect(effectiveHeadroomPort(loadOptimizationSettings())).toBe(8788);
+
+    const raw = "repeated runtime output ".repeat(1000);
+    let calledUrl = "";
+    const result = await compressCommandResultWithHeadroom({
+      content: [{ type: "text", text: raw }],
+    }, (async (url: any) => {
+      calledUrl = String(url);
+      return new Response(JSON.stringify({
+        messages: [{ role: "assistant", content: "compressed" }],
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    }) as typeof fetch);
+
+    expect(calledUrl).toBe("http://127.0.0.1:8788/v1/compress");
+    expect((result.content[0] as any).text).toBe("compressed");
+  });
+
+  test("falls back to the preferred port when no ready runtime state exists", () => {
+    configureHeadroom({ port: 8799 });
+    expect(effectiveHeadroomPort(loadOptimizationSettings())).toBe(8799);
   });
 });
