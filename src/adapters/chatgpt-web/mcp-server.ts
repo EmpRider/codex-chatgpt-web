@@ -573,18 +573,20 @@ export async function runChatGptMcpServer(options: {
   }
 
   const invoke = async (
-    bindingId: string,
-    bound: ChatGptTurnEnvironment & { expiresAt?: number },
+    claimed: ClaimedTurn,
     tool: CodexTool,
     payload: { arguments?: Record<string, unknown>; input?: string },
     signal?: AbortSignal,
     commandOptimization?: { command?: string },
   ) => {
+    const bindingId = claimed.bindingId;
+    const bound = claimed.environment;
     const timeoutMs = chatGptMcpInvocationTimeout(bound);
     try {
       const response = await callTurnBroker<BrokerToolResult>(options.brokerSocketPath, {
         method: "invoke",
         bindingId,
+        activityId: claimed.activityId,
         wireName: wireName(tool),
         freeform: tool.freeform === true,
         ...(tool.freeform ? { input: payload.input ?? "" } : { arguments: payload.arguments ?? {} }),
@@ -629,19 +631,19 @@ export async function runChatGptMcpServer(options: {
   };
 
   const invokeNestedNative = (
-    bindingId: string,
-    bound: ChatGptTurnEnvironment & { expiresAt?: number },
+    claimed: ClaimedTurn,
     nestedToolName: string,
     freeform: boolean,
     payload: { arguments?: Record<string, unknown>; input?: string },
     signal?: AbortSignal,
     commandOptimization?: { command?: string },
   ) => {
+    const bound = claimed.environment;
     const gateway = execGateway(bound);
     if (!gateway) {
       throw new Error(`This Codex turn did not advertise ${nestedToolName} or the native exec gateway`);
     }
-    return invoke(bindingId, bound, gateway, {
+    return invoke(claimed, gateway, {
       input: execGatewayProgram(nestedToolName, freeform, payload, bound.tools.map(wireName)),
     }, signal, commandOptimization);
   };
@@ -704,8 +706,7 @@ export async function runChatGptMcpServer(options: {
           }
           const args = tool.name === "exec_command" ? execCommandArguments : shellCommandArguments;
           return invoke(
-            claimed.bindingId,
-            bound,
+            claimed,
             tool,
             { arguments: args },
             extra.signal,
@@ -718,7 +719,7 @@ export async function runChatGptMcpServer(options: {
         }
         // The gateway can flatten nested protocol metadata (including session identifiers) into
         // text. Keep that envelope byte-exact; direct native command surfaces are optimized above.
-        return invoke(claimed.bindingId, bound, gateway, {
+        return invoke(claimed, gateway, {
           input: execCommandGatewayProgram(execCommandArguments, shellCommandArguments),
         }, extra.signal);
       },
@@ -754,8 +755,8 @@ export async function runChatGptMcpServer(options: {
           ...(max_output_tokens !== undefined ? { max_output_tokens } : {}),
         } };
         return tool
-          ? invoke(claimed.bindingId, bound, tool, payload, extra.signal, {})
-          : invokeNestedNative(claimed.bindingId, bound, "write_stdin", false, payload, extra.signal);
+          ? invoke(claimed, tool, payload, extra.signal, {})
+          : invokeNestedNative(claimed, "write_stdin", false, payload, extra.signal);
       },
     ),
   );
@@ -776,10 +777,10 @@ export async function runChatGptMcpServer(options: {
         const { patch } = input;
         const bound = claimed.environment;
         const tool = exactTool(bound, "apply_patch");
-        if (!tool) return invokeNestedNative(claimed.bindingId, bound, "apply_patch", true, { input: patch }, extra.signal);
+        if (!tool) return invokeNestedNative(claimed, "apply_patch", true, { input: patch }, extra.signal);
         return tool.freeform
-          ? invoke(claimed.bindingId, bound, tool, { input: patch }, extra.signal)
-          : invoke(claimed.bindingId, bound, tool, { arguments: { input: patch } }, extra.signal);
+          ? invoke(claimed, tool, { input: patch }, extra.signal)
+          : invoke(claimed, tool, { arguments: { input: patch } }, extra.signal);
       },
     ),
   );
@@ -806,8 +807,8 @@ export async function runChatGptMcpServer(options: {
         const tool = exactTool(bound, "view_image");
         const payload = { arguments: { path, ...(detail ? { detail } : {}) } };
         return tool
-          ? invoke(claimed.bindingId, bound, tool, payload, extra.signal)
-          : invokeNestedNative(claimed.bindingId, bound, "view_image", false, payload, extra.signal);
+          ? invoke(claimed, tool, payload, extra.signal)
+          : invokeNestedNative(claimed, "view_image", false, payload, extra.signal);
       },
     ),
   );
@@ -905,7 +906,7 @@ export async function runChatGptMcpServer(options: {
           const excludedGatewayNames = bound.tools.map(wireName);
           const nestedOffset = Math.max(0, offset - localMatches.length);
           const nestedLimit = Math.max(0, limit - directPage.length);
-          const response = await invoke(claimed.bindingId, bound, gateway, {
+          const response = await invoke(claimed, gateway, {
             input: gatewayToolCatalogProgram({
               query,
               offset: nestedOffset,
@@ -1036,7 +1037,7 @@ export async function runChatGptMcpServer(options: {
           }
           const invocationArguments = args ?? {};
           assertGatewayToolArguments(wire_name, invocationArguments);
-          return invoke(claimed.bindingId, bound, gateway, {
+          return invoke(claimed, gateway, {
             input: execGatewayProgram(wire_name, input !== undefined, {
               ...(input !== undefined ? { input } : { arguments: invocationArguments }),
             }, bound.tools.map(wireName)),
@@ -1045,7 +1046,7 @@ export async function runChatGptMcpServer(options: {
         if (tool.freeform) {
           if (input === undefined) throw new Error(`Freeform Codex tool ${wire_name} requires input`);
           if (args && Object.keys(args).length > 0) throw new Error(`Freeform Codex tool ${wire_name} does not accept arguments`);
-          return invoke(claimed.bindingId, bound, tool, {
+          return invoke(claimed, tool, {
             input: tool === execGateway(bound) ? transportBoundRawExecProgram(input, wireName(tool)) : input,
           }, extra.signal);
         }
@@ -1053,8 +1054,7 @@ export async function runChatGptMcpServer(options: {
         const invocationArguments = args ?? {};
         assertBrowserToolArguments(tool, invocationArguments);
         return invoke(
-          claimed.bindingId,
-          bound,
+          claimed,
           tool,
           { arguments: invocationArguments },
           extra.signal,
