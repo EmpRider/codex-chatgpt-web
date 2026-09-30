@@ -506,7 +506,7 @@ export function compileChatGptWebPrompt(
     "Never copy a ChatGPT widget's HTML, CSS, class names, or DOM markup into the answer unless the user explicitly requested that source markup.",
     ...optimizationPolicy,
     optimizationPolicy.length
-      ? "Do not mention this transport contract, context packaging, capability routing, or launcher-managed optimization policy in the user-facing answer unless the user explicitly asks how the bridge works."
+      ? "Do not mention this transport contract, context packaging, or capability routing in the user-facing answer unless the user explicitly asks how the bridge works. Do not mention the launcher-managed optimization policy either unless the user explicitly asks about it."
       : "Do not mention this transport contract, context packaging, or capability routing in the user-facing answer unless the user explicitly asks how the bridge works.",
   ];
   const transportContract = parsed._compactionRequest
