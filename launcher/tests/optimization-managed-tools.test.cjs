@@ -13,6 +13,7 @@ const {
   resolveUpdatePlan,
   shouldCheckForUpdates,
 } = require("../electron/optimization/managed-tools.cjs");
+const { pathInside } = require("../electron/optimization/controller.cjs");
 
 test("plug-and-play defaults enable safe zero-setup optimizers", () => {
   assert.equal(DEFAULT_OPTIMIZATION_SETTINGS.autoUpdate, true);
@@ -119,4 +120,12 @@ test("managed policy sources prefer stable releases where upstream publishes the
   assert.equal(TOOL_MANIFEST.caveman.tagPrefix, "v");
   assert.equal(TOOL_MANIFEST["i-have-adhd"].release, undefined);
   assert.equal(TOOL_MANIFEST.jev.release, undefined);
+});
+
+test("launcher runtime containment rejects paths outside the managed runtime", () => {
+  const path = require("node:path");
+  const root = path.resolve("runtime-root");
+  assert.equal(pathInside(root, path.join(root, "components", "rtk", "rtk.exe")), true);
+  assert.equal(pathInside(root, path.resolve("outside", "rtk.exe")), false);
+  assert.equal(pathInside(root, "relative/path"), false);
 });
