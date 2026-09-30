@@ -9,6 +9,7 @@ const DEFAULT_OPTIMIZATION_SETTINGS = Object.freeze({
   }),
   rtk: Object.freeze({
     enabled: true,
+    ultraCompact: false,
   }),
   headroom: Object.freeze({
     enabled: true,
@@ -68,6 +69,7 @@ function normalizeOptimizationSettings(value) {
     },
     rtk: {
       enabled: bool(rtk.enabled, DEFAULT_OPTIMIZATION_SETTINGS.rtk.enabled),
+      ultraCompact: bool(rtk.ultraCompact, DEFAULT_OPTIMIZATION_SETTINGS.rtk.ultraCompact),
     },
     headroom: {
       enabled: bool(headroom.enabled, DEFAULT_OPTIMIZATION_SETTINGS.headroom.enabled),
