@@ -142,6 +142,21 @@ function run(executable, args, options = {}) {
   });
 }
 
+function verifyVersionCommand(executable, expectedVersion, runner = spawnSync) {
+  const result = runner(executable, ["--version"], {
+    encoding: "utf8",
+    timeout: 15_000,
+    windowsHide: true,
+  });
+  if (result?.error) throw result.error;
+  if (result?.status !== 0) throw new Error(`${path.basename(executable)} health check failed`);
+  const output = `${result?.stdout || ""}\n${result?.stderr || ""}`.trim();
+  if (expectedVersion && !output.includes(expectedVersion)) {
+    throw new Error(`${path.basename(executable)} returned unexpected version: ${output.slice(0, 200)}`);
+  }
+  return output;
+}
+
 async function ensureUv(root, { platform = process.platform, arch = process.arch, dependencies = {} } = {}) {
   const release = await (dependencies.json || json)("https://api.github.com/repos/astral-sh/uv/releases/latest");
   const version = String(release?.tag_name || "").replace(/^v/, "");
@@ -158,7 +173,14 @@ async function ensureUv(root, { platform = process.platform, arch = process.arch
   const installRoot = path.join(root, "runtimes", "uv", version);
   const executableName = platform === "win32" ? "uv.exe" : "uv";
   const installed = path.join(installRoot, executableName);
-  if (fs.statSync(installed, { throwIfNoEntry: false })?.isFile()) return installed;
+  if (fs.statSync(installed, { throwIfNoEntry: false })?.isFile()) {
+    try {
+      (dependencies.verifyUv || verifyVersionCommand)(installed, version);
+      return installed;
+    } catch {
+      fs.rmSync(installRoot, { recursive: true, force: true });
+    }
+  }
 
   const staging = `${installRoot}.staging-${process.pid}-${Date.now()}`;
   fs.rmSync(staging, { recursive: true, force: true });
@@ -174,6 +196,7 @@ async function ensureUv(root, { platform = process.platform, arch = process.arch
     fs.mkdirSync(installRoot, { recursive: true, mode: 0o700 });
     fs.copyFileSync(found, installed);
     if (platform !== "win32") fs.chmodSync(installed, 0o755);
+    (dependencies.verifyUv || verifyVersionCommand)(installed, version);
     return installed;
   } catch (error) {
     fs.rmSync(installRoot, { recursive: true, force: true });
@@ -210,13 +233,16 @@ async function ensureHeadroom({
   const runCommand = dependencies.run || run;
   if (fs.statSync(executables.headroom, { throwIfNoEntry: false })?.isFile()) {
     try {
-      await runCommand(executables.headroom, ["--version"], {
+      const health = await runCommand(executables.headroom, ["--version"], {
         env: {
           ...process.env,
           UV_PYTHON_INSTALL_DIR: path.join(root, "runtimes", "python"),
           UV_CACHE_DIR: path.join(root, "cache", "uv"),
         },
       });
+      if (!`${health.stdout || ""}\n${health.stderr || ""}`.includes(version)) {
+        throw new Error("Headroom runtime version does not match its managed version");
+      }
       return { version, path: installRoot, ...executables };
     } catch {
       fs.rmSync(installRoot, { recursive: true, force: true });
@@ -237,7 +263,10 @@ async function ensureHeadroom({
       "pip", "install", "--python", executables.python,
       `headroom-ai[${extras}]==${version}`,
     ], { env });
-    await runCommand(executables.headroom, ["--version"], { env });
+    const health = await runCommand(executables.headroom, ["--version"], { env });
+    if (!`${health.stdout || ""}\n${health.stderr || ""}`.includes(version)) {
+      throw new Error("Headroom install returned an unexpected version");
+    }
     return { version, path: installRoot, ...executables };
   } catch (error) {
     fs.rmSync(installRoot, { recursive: true, force: true });
@@ -333,4 +362,5 @@ module.exports = {
   headroomExtras,
   uvAssetName,
   venvExecutables,
+  verifyVersionCommand,
 };
