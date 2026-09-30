@@ -111,3 +111,12 @@ test("background update cadence remains bounded between explicit startup checks"
   assert.equal(shouldCheckForUpdates("2026-09-30T05:00:01Z", now), false);
   assert.equal(shouldCheckForUpdates("2026-09-30T03:59:59Z", now), true);
 });
+
+test("managed policy sources prefer stable releases where upstream publishes them", () => {
+  assert.equal(TOOL_MANIFEST.ponytail.release, true);
+  assert.equal(TOOL_MANIFEST.ponytail.tagPrefix, "v");
+  assert.equal(TOOL_MANIFEST.caveman.release, true);
+  assert.equal(TOOL_MANIFEST.caveman.tagPrefix, "v");
+  assert.equal(TOOL_MANIFEST["i-have-adhd"].release, undefined);
+  assert.equal(TOOL_MANIFEST.jev.release, undefined);
+});
