@@ -818,9 +818,12 @@ test("an unresolved timed-out invocation cannot be replayed as an identical nati
       token,
       activityId: secondActivity,
     });
-    // Once the original native operation reports its eventual result, the ambiguity is cleared.
+    // If the original native operation eventually finishes, ChatGPT still never received that
+    // result. Keep the outcome and replay it to an identical retry instead of executing the
+    // side effect a second time.
     expect(() => broker.completeTool(token, firstRequest!.callId, {
       content: [{ type: "text", text: "original completed late" }],
+      structuredContent: { source: "original" },
     })).not.toThrow();
 
     const thirdActivity = "activity_ambiguousthird123456789";
@@ -834,15 +837,19 @@ test("an unresolved timed-out invocation cannot be replayed as an identical nati
       bindingId: claimed.bindingId,
       wireName: "exec_command",
       arguments: { cmd: "perform-side-effect", cwd: root },
-    }, 2_000);
-    const [retryRequest] = await broker.nextToolBatch(token);
-    expect(retryRequest).toBeDefined();
-    broker.completeTool(token, retryRequest!.callId, {
-      content: [{ type: "text", text: "retry completed" }],
-    });
+    }, 500);
     await expect(retry).resolves.toMatchObject({
-      content: [{ type: "text", text: "retry completed" }],
+      content: [{ type: "text", text: "original completed late" }],
+      structuredContent: { source: "original" },
     });
+
+    const noReplayAbort = new AbortController();
+    const noReplayTimer = setTimeout(() => noReplayAbort.abort(), 50);
+    try {
+      await expect(broker.nextToolBatch(token, noReplayAbort.signal)).rejects.toThrow("tool wait aborted");
+    } finally {
+      clearTimeout(noReplayTimer);
+    }
     await callTurnBroker(socketPath, {
       method: "activity_complete",
       token,
