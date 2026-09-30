@@ -161,6 +161,38 @@ export function loadOptimizationSettings(): OptimizationSettings {
   }
 }
 
+export interface OptimizationRuntimeState {
+  version: 1;
+  headroom?: {
+    running?: boolean;
+    ready?: boolean;
+    port?: number | null;
+    preferredPort?: number | null;
+    portConflict?: boolean;
+  };
+}
+
+export function loadOptimizationRuntimeState(): OptimizationRuntimeState | undefined {
+  const path = join(optimizationRoot(), "runtime.json");
+  if (!existsSync(path)) return undefined;
+  try {
+    const value = JSON.parse(readFileSync(path, "utf8")) as OptimizationRuntimeState;
+    return value?.version === 1 ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export function effectiveHeadroomPort(settings = loadOptimizationSettings()): number {
+  const runtime = loadOptimizationRuntimeState()?.headroom;
+  return runtime?.ready === true
+    && Number.isInteger(runtime.port)
+    && Number(runtime.port) >= 1024
+    && Number(runtime.port) <= 65535
+    ? Number(runtime.port)
+    : settings.headroom.port;
+}
+
 export interface ManagedComponentRecord {
   version?: string;
   path?: string;
