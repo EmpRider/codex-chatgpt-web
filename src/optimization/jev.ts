@@ -371,7 +371,6 @@ function scoreCriteria(): string[] {
 function requestBody(parsed: CodexParsedRequest, candidates: readonly Candidate[]) {
   const { prompt, recentContext } = routingContext(parsed);
   return {
-    model: "jev-latest",
     state: {
       request: prompt,
       recent_conversation: recentContext,
@@ -540,7 +539,6 @@ async function reassessEffort(
     apiKey,
     settings.jev.model,
     {
-      model: "jev-latest",
       state: {
         request: prompt,
         recent_conversation: recentContext,
