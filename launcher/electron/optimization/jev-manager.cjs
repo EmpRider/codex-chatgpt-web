@@ -49,6 +49,12 @@ function runBun(runtimeExecutable, args, cwd, timeout = 120_000) {
   return result;
 }
 
+function activateStagedVersion(staging, versionRoot) {
+  fs.mkdirSync(path.dirname(versionRoot), { recursive: true, mode: 0o700 });
+  fs.rmSync(versionRoot, { recursive: true, force: true });
+  fs.renameSync(staging, versionRoot);
+}
+
 async function provisionJev({
   root,
   version,
@@ -113,9 +119,7 @@ async function provisionJev({
     }, null, 2)}\n`);
     writePrivateFileAtomic(path.join(staging, ".ready"), "ok\n");
 
-    fs.mkdirSync(path.dirname(versionRoot), { recursive: true, mode: 0o700 });
-    if (fs.existsSync(versionRoot)) fs.rmSync(staging, { recursive: true, force: true });
-    else fs.renameSync(staging, versionRoot);
+    activateStagedVersion(staging, versionRoot);
     return { version: commit, path: versionRoot };
   } catch (error) {
     fs.rmSync(staging, { recursive: true, force: true });
@@ -124,6 +128,7 @@ async function provisionJev({
 }
 
 module.exports = {
+  activateStagedVersion,
   JEV_FILES,
   lockedTypeSafeSdkVersion,
   provisionJev,
