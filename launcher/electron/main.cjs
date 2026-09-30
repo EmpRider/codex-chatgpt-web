@@ -1529,6 +1529,7 @@ void start().catch(async (error) => {
     // Browser bootstrap can fail before the renderer is loaded. Keep the error reachable
     // through the existing instance, and release browser resources before a user retry.
     const cleanupErrors = [];
+    try { await optimizationController?.shutdown(); } catch (caught) { cleanupErrors.push(String(caught)); }
     try { browserHost?.destroy(); } catch (caught) { cleanupErrors.push(String(caught)); }
     try { await browserControl?.close(); } catch (caught) { cleanupErrors.push(String(caught)); }
     if (process.argv.includes("--launcher-smoke-test")) return;
