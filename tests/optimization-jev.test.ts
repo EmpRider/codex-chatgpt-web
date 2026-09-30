@@ -106,7 +106,7 @@ describe("Jev route optimization", () => {
     }) as typeof fetch);
 
     expect(result.applied).toBe(true);
-    expect(result.reason).toBe("jev");
+    expect(result.reason).toBe("jev-managed");
     expect(result.confidence).toBe(0.77);
     expect(fallbackCalled).toBe(false);
   });
