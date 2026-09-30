@@ -293,17 +293,35 @@ function localGetJson(port, route) {
 }
 
 class HeadroomService {
-  constructor({ root, logger }) {
+  constructor({ root, logger, onStateChange }) {
     this.root = root;
     this.logger = logger;
+    this.onStateChange = onStateChange;
     this.child = null;
     this.port = null;
+    this.ready = false;
+    this.lastError = null;
+  }
+
+  state() {
+    return {
+      running: Boolean(this.child && this.child.exitCode === null),
+      ready: this.ready,
+      port: this.port,
+      lastError: this.lastError,
+    };
+  }
+
+  publishState() {
+    try { this.onStateChange?.(this.state()); } catch {}
   }
 
   async stop() {
     const child = this.child;
     this.child = null;
     this.port = null;
+    this.ready = false;
+    this.publishState();
     if (!child || child.exitCode !== null) return;
     child.kill();
     await new Promise(resolve => {
@@ -329,22 +347,44 @@ class HeadroomService {
     });
     this.child = child;
     this.port = port;
+    this.ready = false;
+    this.lastError = null;
+    this.publishState();
     let stderr = "";
+    let spawnError = null;
     child.stderr.on("data", chunk => {
       stderr = (stderr + chunk.toString()).slice(-8000);
+    });
+    child.once("error", error => {
+      spawnError = error;
+      if (this.child === child) {
+        this.lastError = error.message;
+        this.ready = false;
+        this.publishState();
+      }
+      this.logger?.warn("optimization.headroom_spawn_failed", { message: error.message });
     });
     child.once("exit", code => {
       if (this.child === child) {
         this.child = null;
         this.port = null;
+        this.ready = false;
+        if (code !== 0 && !this.lastError) {
+          this.lastError = stderr.trim().slice(-1000) || `Headroom exited with code ${code}`;
+        }
         if (code !== 0) this.logger?.warn("optimization.headroom_exited", { code, detail: stderr.trim().slice(-1000) });
+        this.publishState();
       }
     });
     for (let attempt = 0; attempt < 40; attempt += 1) {
+      if (spawnError) throw spawnError;
       if (child.exitCode !== null) throw new Error(`Headroom exited during startup: ${stderr.trim()}`);
       try {
         const health = await localGetJson(port, "/readyz");
         if (health?.ready === true || health?.status === "healthy") {
+          this.ready = true;
+          this.lastError = null;
+          this.publishState();
           this.logger?.info("optimization.headroom_ready", { port });
           return health;
         }
@@ -352,7 +392,9 @@ class HeadroomService {
       await new Promise(resolve => setTimeout(resolve, 250));
     }
     await this.stop();
-    throw new Error("Headroom did not become ready");
+    this.lastError = "Headroom did not become ready";
+    this.publishState();
+    throw new Error(this.lastError);
   }
 }
 
