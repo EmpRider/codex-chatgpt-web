@@ -45,7 +45,7 @@ import {
 } from "./responses/compaction";
 import { parseRequest } from "./responses/parser";
 import { expandPreviousResponseInput, flushResponseState, rememberResponseState } from "./responses/state";
-import { namespacedToolName, type AdapterEvent, type CodexParsedRequest } from "./types";\nimport { compressParsedContextWithHeadroom } from "./optimization/headroom";
+import { namespacedToolName, type AdapterEvent, type CodexParsedRequest } from "./types";\nimport { compressParsedContextWithHeadroom } from "./optimization/headroom";\nimport { optimizeRouteWithJev } from "./optimization/jev";
 import type { CodexProviderConfig } from "./types";
 import type { ProviderAdapter } from "./adapters/base";
 import { VERSION } from "./version";
@@ -520,6 +520,7 @@ export async function responseRequest(
   let route: ChatGptWebModelRoute;
   try {
     parsed = parseRequest(expanded);
+    await optimizeRouteWithJev(parsed, config);
     route = routeChatGptWebRequest(parsed, config);
     await compressParsedContextWithHeadroom(parsed);
     const identity = extractChatGptTurnIdentity(parsed);
