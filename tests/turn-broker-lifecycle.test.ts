@@ -1041,3 +1041,35 @@ test("native result racing ahead of broker socket-close is still recoverable aft
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+
+test("turn broker close does not wait forever for an attached transport socket", async () => {
+  const root = mkdtempSync(join(tmpdir(), "cgw-close-sock-"));
+  const socketPath = defaultBrokerEndpoint(root);
+  const broker = TurnBroker.forSocket(socketPath);
+  let socket: Socket | undefined;
+  try {
+    await broker.register({
+      cwd: root,
+      roots: [root],
+      writableRoots: [root],
+      sandboxPolicy: { type: "dangerFullAccess" },
+      tools: [],
+    }, undefined, "close-active-transport");
+
+    socket = createConnection(socketPath);
+    await new Promise<void>((resolve, reject) => {
+      socket!.once("connect", resolve);
+      socket!.once("error", reject);
+    });
+
+    await expect(Promise.race([
+      broker.close().then(() => "closed"),
+      Bun.sleep(1_000).then(() => "timed-out"),
+    ])).resolves.toBe("closed");
+  } finally {
+    socket?.destroy();
+    await broker.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+}, 5_000);
