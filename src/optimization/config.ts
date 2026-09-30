@@ -159,6 +159,7 @@ export function loadManagedComponent(id: string): ManagedComponentRecord | undef
     };
     const record = versions.components?.[id];
     if (!record || typeof record !== "object") return undefined;
+    if (record.status !== "ready") return undefined;
     if (record.path && !isManagedRuntimePath(record.path)) return undefined;
     if (record.executable && !isManagedRuntimePath(record.executable)) return undefined;
     return record;

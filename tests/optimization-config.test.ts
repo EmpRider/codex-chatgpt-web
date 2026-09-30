@@ -53,6 +53,21 @@ describe("managed optimization runtime paths", () => {
     expect(loadManagedComponent("rtk")).toBeUndefined();
   });
 
+  test("rejects managed records that are not ready yet", () => {
+    const root = home();
+    const component = join(root, "optimization-runtime", "components", "rtk", "1.0.0");
+    const executable = join(component, process.platform === "win32" ? "rtk.exe" : "rtk");
+    mkdirSync(component, { recursive: true });
+    writeFileSync(executable, "");
+    writeFileSync(join(root, "optimization", "versions.json"), JSON.stringify({
+      version: 1,
+      components: {
+        rtk: { version: "1.0.0", path: component, executable, status: "repair-needed" },
+      },
+    }));
+    expect(loadManagedComponent("rtk")).toBeUndefined();
+  });
+
   test("accepts app-owned component and executable paths", () => {
     const root = home();
     const component = join(root, "optimization-runtime", "components", "rtk", "1.0.0");
