@@ -260,6 +260,7 @@ export interface LauncherApi {
   onWindowStateChanged(listener: (state: { fullScreen: boolean; maximized: boolean }) => void): () => void;
   onConnectorNamesChanged(listener: (names: Pick<LauncherSnapshot, "connectorName" | "connectorNames">) => void): () => void;
   onStateChanged(listener: (state: LauncherState) => void): () => void;
+  onOptimizationChanged(listener: (snapshot: OptimizationSnapshot) => void): () => void;
   onBrowserState(listener: (state: BrowserState) => void): () => void;
   onOperation(listener: (state: OperationState) => void): () => void;
   onLog(listener: (record: LogRecord) => void): () => void;
