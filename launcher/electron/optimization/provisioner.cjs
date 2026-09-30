@@ -42,8 +42,15 @@ function installTextSnapshot({ root, id, version, sourcePath, content, licenseCo
       installedAt: new Date().toISOString(),
     }, null, 2)}\n`);
     fs.mkdirSync(path.dirname(versionRoot), { recursive: true, mode: 0o700 });
-    if (fs.existsSync(versionRoot)) fs.rmSync(temporary, { recursive: true, force: true });
-    else fs.renameSync(temporary, versionRoot);
+    const existingSkill = path.join(versionRoot, "SKILL.md");
+    const existingValid = fs.statSync(existingSkill, { throwIfNoEntry: false })?.isFile()
+      && fs.readFileSync(existingSkill, "utf8").trim().length > 0;
+    if (existingValid) {
+      fs.rmSync(temporary, { recursive: true, force: true });
+    } else {
+      fs.rmSync(versionRoot, { recursive: true, force: true });
+      fs.renameSync(temporary, versionRoot);
+    }
     return versionRoot;
   } catch (error) {
     fs.rmSync(temporary, { recursive: true, force: true });
