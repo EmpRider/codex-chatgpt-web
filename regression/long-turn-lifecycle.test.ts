@@ -379,6 +379,9 @@ test("MCP timeout cleanup does not publish turn retirement to the browser owner"
     const retirementAbort = new AbortController();
     const retirement = h.broker.waitForRetirement(token, retirementAbort.signal);
 
+    // Install the native waiter before starting the short MCP deadline. This scenario is about a
+    // call that was definitely delivered and then lost its MCP consumer, not an undelivered queue race.
+    const batchPromise = h.broker.nextToolBatch(token);
     const invocation = callTurnBroker(h.socketPath, {
       method: "invoke",
       bindingId: claimed.bindingId,
@@ -387,7 +390,7 @@ test("MCP timeout cleanup does not publish turn retirement to the browser owner"
       arguments: { cmd: "slow-retirement-check" },
     }, 80);
     const invocationTimedOut = expect(invocation).rejects.toThrow("timed out");
-    const [request] = await h.broker.nextToolBatch(token);
+    const [request] = await batchPromise;
     await invocationTimedOut;
     await Bun.sleep(40);
     await completeActivity(h.socketPath, token, activityId, true);
