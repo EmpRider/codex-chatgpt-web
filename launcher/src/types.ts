@@ -13,7 +13,6 @@ export interface OptimizationSettings {
   adhd: {
     enabled: boolean;
     activationMode: "always" | "on-demand";
-    restoreAfterCompaction: boolean;
   };
   rtk: {
     enabled: boolean;
