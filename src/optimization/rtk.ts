@@ -23,7 +23,44 @@ export type RtkFilterRunner = (
   executable: string,
   input: string,
   ultraCompact: boolean,
+  filterName?: string,
 ) => Promise<RtkFilterResult>;
+
+const RTK_FILTER_PATTERNS: Array<[RegExp, string]> = [
+  [/^git\s+(?:-[^\s]+\s+)*status\b/i, "git-status"],
+  [/^git\s+(?:-[^\s]+\s+)*log\b/i, "git-log"],
+  [/^git\s+(?:-[^\s]+\s+)*diff\b/i, "git-diff"],
+  [/^(?:rg|ripgrep)\b/i, "rg"],
+  [/^grep\b/i, "grep"],
+  [/^fd\b/i, "fd"],
+  [/^find\b/i, "find"],
+  [/^(?:python(?:3)?\s+-m\s+)?pytest\b/i, "pytest"],
+  [/^cargo\s+test\b/i, "cargo-test"],
+  [/^go\s+test\b/i, "go-test"],
+  [/^go\s+build\b/i, "go-build"],
+  [/^ctest\b/i, "ctest"],
+  [/^(?:npx\s+|bunx\s+|pnpm\s+exec\s+)?tsc\b/i, "tsc"],
+  [/^(?:npx\s+|bunx\s+|pnpm\s+exec\s+)?vitest\b/i, "vitest"],
+  [/^mypy\b/i, "mypy"],
+  [/^ruff\s+check\b/i, "ruff-check"],
+  [/^ruff\s+format\b/i, "ruff-format"],
+  [/^(?:npx\s+|bunx\s+|pnpm\s+exec\s+)?prettier\b/i, "prettier"],
+  [/^(?:php\s+)?phpunit\b/i, "phpunit"],
+  [/^phpstan\b/i, "phpstan"],
+];
+
+export function rtkFilterForCommand(command?: string): string | undefined {
+  if (!command) return undefined;
+  const normalized = command.trim()
+    .replace(/^(?:cmd(?:\.exe)?\s+\/c\s+|powershell(?:\.exe)?\s+(?:-[^\s]+\s+)*-Command\s+)/i, "")
+    .replace(/^(?:bash|sh|zsh)\s+-lc\s+/i, "")
+    .replace(/^["']|["']$/g, "")
+    .trim();
+  for (const [pattern, filter] of RTK_FILTER_PATTERNS) {
+    if (pattern.test(normalized)) return filter;
+  }
+  return undefined;
+}
 
 function singleTextBlock(result: BrokerToolResult): TextBlock | undefined {
   if (!Array.isArray(result.content) || result.content.length !== 1) return undefined;
@@ -39,9 +76,14 @@ export function runRtkPipe(
   executable: string,
   input: string,
   ultraCompact: boolean,
+  filterName?: string,
 ): Promise<RtkFilterResult> {
   return new Promise((resolve, reject) => {
-    const args = [...(ultraCompact ? ["--ultra-compact"] : []), "pipe"];
+    const args = [
+      ...(ultraCompact ? ["--ultra-compact"] : []),
+      "pipe",
+      ...(filterName ? ["--filter", filterName] : []),
+    ];
     const child = spawn(executable, args, {
       windowsHide: true,
       stdio: ["pipe", "pipe", "pipe"],
@@ -97,6 +139,7 @@ export function runRtkPipe(
 export async function compressCommandResultWithRtk(
   result: BrokerToolResult,
   runner: RtkFilterRunner = runRtkPipe,
+  command?: string,
 ): Promise<BrokerToolResult> {
   const settings = loadOptimizationSettings();
   if (!settings.rtk.enabled || result.isError || result.structuredContent !== undefined) return result;
@@ -111,7 +154,12 @@ export async function compressCommandResultWithRtk(
   if (!component?.executable || !existsSync(component.executable)) return result;
 
   try {
-    const filtered = await runner(component.executable, raw, settings.rtk.ultraCompact);
+    const filtered = await runner(
+      component.executable,
+      raw,
+      settings.rtk.ultraCompact,
+      rtkFilterForCommand(command),
+    );
     // RTK's own pipe mode is fail-open via never_worse. Keep the same invariant at our boundary
     // in case an upstream version changes formatting or emits diagnostic text to stdout.
     if (!filtered.output || Buffer.byteLength(filtered.output) >= bytes) return result;
@@ -127,5 +175,6 @@ export async function compressCommandResultWithRtk(
 export const rtkInternals = {
   RTK_MAX_INPUT_BYTES,
   RTK_MIN_INPUT_CHARS,
+  RTK_FILTER_PATTERNS,
   singleTextBlock,
 };
