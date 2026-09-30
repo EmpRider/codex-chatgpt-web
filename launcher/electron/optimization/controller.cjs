@@ -241,12 +241,18 @@ function createOptimizationController({ coreHome, stateStore, logger, secretStor
       },
     });
 
-    const headroomPackageChanged = next.headroom.enabled && (
-      !current.headroom.enabled
-      || current.headroom.codeEnabled !== next.headroom.codeEnabled
+    const newlyEnabled = toolIds().filter(id =>
+      !componentEnabled(current, id) && componentEnabled(next, id)
+    );
+    if (newlyEnabled.length) {
+      await checkUpdates({ force: true, ids: newlyEnabled });
+    }
+
+    const headroomPackageChanged = next.headroom.enabled && current.headroom.enabled && (
+      current.headroom.codeEnabled !== next.headroom.codeEnabled
       || current.headroom.mlEnabled !== next.headroom.mlEnabled
     );
-    const headroomServiceChanged = next.headroom.enabled && (
+    const headroomServiceChanged = next.headroom.enabled && current.headroom.enabled && (
       headroomPackageChanged
       || current.headroom.port !== next.headroom.port
     );
@@ -297,7 +303,7 @@ function createOptimizationController({ coreHome, stateStore, logger, secretStor
         }
       }
     }
-    return { state, optimization: snapshot() };
+    return { state: stateStore.read(), optimization: snapshot() };
   }
 
   async function githubFile(definition, sourcePath, ref) {
@@ -467,18 +473,24 @@ function createOptimizationController({ coreHome, stateStore, logger, secretStor
     return commit.sha;
   }
 
-  async function performUpdateCheck({ force = false, startup = false } = {}) {
+  async function performUpdateCheck({ force = false, startup = false, ids = null } = {}) {
     const currentState = stateStore.read();
     const currentSettings = settings();
     const now = Date.now();
     if (!force && !currentSettings.autoUpdate) return snapshot();
-    if (!force && !startup && !shouldCheckForUpdates(currentState.optimizationLastUpdateCheckAt, now)) {
+    if (!force && !startup && !ids && !shouldCheckForUpdates(currentState.optimizationLastUpdateCheckAt, now)) {
       return snapshot();
     }
 
+    const allIds = toolIds();
+    const selectedIds = Array.isArray(ids)
+      ? allIds.filter(id => ids.includes(id))
+      : allIds;
+    if (!selectedIds.length) return snapshot();
+
     const installed = versions();
     installed.components ||= {};
-    await Promise.all(toolIds().map(async id => {
+    await Promise.all(selectedIds.map(async id => {
       const definition = TOOL_MANIFEST[id];
       const record = installedRecord(installed, id) || {};
       const healthyBeforeCheck = localComponentHealthy(id, record, paths.runtimeRoot)
@@ -491,6 +503,17 @@ function createOptimizationController({ coreHome, stateStore, logger, secretStor
           remoteVersion: availableVersion,
           remoteError: null,
         });
+        const canProvision = componentEnabled(currentSettings, id) || Boolean(record.version);
+        if (!canProvision && (plan.action === "install" || plan.action === "update")) {
+          installed.components[id] = {
+            ...record,
+            availableVersion,
+            updateAction: "install",
+            status: "not-installed",
+            lastError: null,
+          };
+          return;
+        }
         if (definition.kind === "skill" && (plan.action === "install" || plan.action === "update")) {
           const installedPath = await provisionSkill(id, definition, availableVersion);
           installed.components[id] = {
@@ -581,13 +604,21 @@ function createOptimizationController({ coreHome, stateStore, logger, secretStor
     }));
 
     writePrivateFileAtomic(versionsPath, `${JSON.stringify(installed, null, 2)}\n`);
-    stateStore.update({ optimizationLastUpdateCheckAt: new Date(now).toISOString() });
-    if (currentSettings.headroom.enabled) {
-      await activateHeadroomWithRollback(installed, currentSettings, "optimization.headroom_start_failed");
-    } else {
-      await headroomService.stop();
+    if (!ids || selectedIds.length === allIds.length) {
+      stateStore.update({ optimizationLastUpdateCheckAt: new Date(now).toISOString() });
     }
-    logger?.info("optimization.update_check_completed", { manual: force, startup });
+    if (selectedIds.includes("headroom")) {
+      if (currentSettings.headroom.enabled) {
+        await activateHeadroomWithRollback(installed, currentSettings, "optimization.headroom_start_failed");
+      } else {
+        await headroomService.stop();
+      }
+    }
+    logger?.info("optimization.update_check_completed", {
+      manual: force,
+      startup,
+      components: selectedIds,
+    });
     return notify();
   }
 
