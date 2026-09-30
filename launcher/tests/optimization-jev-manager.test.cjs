@@ -1,6 +1,10 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { validateCommit, JEV_FILES } = require("../electron/optimization/jev-manager.cjs");
+const {
+  validateCommit,
+  JEV_FILES,
+  lockedTypeSafeSdkVersion,
+} = require("../electron/optimization/jev-manager.cjs");
 
 test("managed Jev pins an exact upstream commit", () => {
   const sha = "a".repeat(40);
@@ -17,6 +21,9 @@ test("managed Jev includes the router contract and attribution files", () => {
 });
 
 test("managed Jev requires an exact locked TypeSafe SDK version", () => {
-  const valid = { packages: { "node_modules/@typesafe-ai/sdk": { version: "0.6.0" } } };
-  assert.equal(valid.packages["node_modules/@typesafe-ai/sdk"].version, "0.6.0");
+  const pkg = { dependencies: { "@typesafe-ai/sdk": "^0.6.0" } };
+  const lock = { packages: { "node_modules/@typesafe-ai/sdk": { version: "0.6.0" } } };
+  assert.equal(lockedTypeSafeSdkVersion(pkg, lock), "0.6.0");
+  assert.throws(() => lockedTypeSafeSdkVersion(pkg, { packages: {} }), /does not pin/);
+  assert.throws(() => lockedTypeSafeSdkVersion({ dependencies: {} }, lock), /does not declare/);
 });
