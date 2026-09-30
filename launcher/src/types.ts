@@ -39,6 +39,7 @@ export interface OptimizationSettings {
   jev: {
     enabled: boolean;
     baseUrl: string;
+    model: string;
     costWeight: number;
     adaptiveThinking: boolean;
     reassessAfterToolFailure: boolean;
