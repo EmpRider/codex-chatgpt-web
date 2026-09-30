@@ -686,9 +686,11 @@ export async function runChatGptMcpServer(options: {
         if (!gateway) {
           throw new Error("This Codex turn did not advertise a native command tool or the native exec gateway");
         }
+        // The gateway can flatten nested protocol metadata (including session identifiers) into
+        // text. Keep that envelope byte-exact; direct native command surfaces are optimized above.
         return invoke(claimed.bindingId, bound, gateway, {
           input: execCommandGatewayProgram(execCommandArguments, shellCommandArguments),
-        }, extra.signal, true);
+        }, extra.signal);
       },
     ),
   );
@@ -723,7 +725,7 @@ export async function runChatGptMcpServer(options: {
         } };
         return tool
           ? invoke(claimed.bindingId, bound, tool, payload, extra.signal, true)
-          : invokeNestedNative(claimed.bindingId, bound, "write_stdin", false, payload, extra.signal, true);
+          : invokeNestedNative(claimed.bindingId, bound, "write_stdin", false, payload, extra.signal);
       },
     ),
   );
