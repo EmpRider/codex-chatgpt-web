@@ -49,22 +49,56 @@ test("Headroom service state distinguishes installed runtime from live process",
   });
 });
 
-test("Headroom selects the next free loopback port when the preferred port is busy", async () => {
+test("Headroom uses only the configured loopback port", async () => {
   const checked = [];
   const selected = await findAvailableHeadroomPort(8787, {
-    attempts: 4,
     canBind: async (port) => {
       checked.push(port);
-      return port === 8789;
+      return true;
     },
   });
-  assert.equal(selected, 8789);
-  assert.deepEqual(checked, [8787, 8788, 8789]);
+  assert.equal(selected, 8787);
+  assert.deepEqual(checked, [8787]);
 });
 
-test("Headroom reports an error when no nearby loopback port is available", async () => {
+test("Headroom tells the user to change the configured port when it is occupied", async () => {
   await assert.rejects(
-    () => findAvailableHeadroomPort(8787, { attempts: 2, canBind: async () => false }),
-    /No free loopback port/,
+    () => findAvailableHeadroomPort(8787, { canBind: async () => false }),
+    /Headroom port 8787 is already in use\. Change the Headroom port in Settings and try again\./,
   );
+});
+
+test("Headroom reuses an already healthy service on the configured port", async () => {
+  let resolverCalled = false;
+  const service = new HeadroomService({
+    root: process.cwd(),
+    logger: null,
+    portResolver: async () => {
+      resolverCalled = true;
+      throw new Error("must not resolve a new port");
+    },
+    healthCheck: async (port, route) => {
+      assert.equal(port, 8787);
+      assert.equal(route, "/readyz");
+      return { ready: true };
+    },
+  });
+
+  const health = await service.start({
+    executable: "unused-headroom",
+    port: 8787,
+    codeEnabled: true,
+    mlEnabled: false,
+  });
+
+  assert.deepEqual(health, { ready: true });
+  assert.equal(resolverCalled, false);
+  assert.deepEqual(service.state(), {
+    running: true,
+    ready: true,
+    port: 8787,
+    preferredPort: 8787,
+    portConflict: false,
+    lastError: null,
+  });
 });
