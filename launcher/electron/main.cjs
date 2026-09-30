@@ -16,6 +16,7 @@ const {
   nativeTheme,
   screen,
   session,
+  safeStorage,
   shell,
   Tray,
 } = require("electron");
@@ -38,6 +39,7 @@ const { DEVELOPMENT_PROFILE, resolveLauncherProfile } = require("./profile.cjs")
 const { runtimeBundlePaths } = require("./runtime-command.cjs");
 const { createUpdateController } = require("./update.cjs");
 const { createOptimizationController } = require("./optimization/controller.cjs");
+const { createOptimizationSecretStore } = require("./optimization/secrets.cjs");
 const {
   createStateStore,
   nextSessionRefreshReminderAt,
@@ -579,6 +581,15 @@ function registerIpc({ logger, stateStore }) {
   handle("launcher:optimization-check-updates", async () => {
     if (!optimizationController) throw new Error("Optimization manager is not initialized");
     return optimizationController.checkUpdates({ force: true });
+  });
+  handle("launcher:optimization-jev-key", async (_event, value) => {
+    if (!optimizationController) throw new Error("Optimization manager is not initialized");
+    if (browserHost?.activeTraceId || runtimeHost?.currentOperation()) {
+      throw new Error("Finish or cancel the active task before changing the Jev API key");
+    }
+    const snapshot = optimizationController.setJevApiKey(value);
+    if (runtimeSupervisor?.readConfig()) await runtimeSupervisor.restart();
+    return snapshot;
   });
 
   handle("launcher:set-language", (_event, language) => {
@@ -1156,10 +1167,15 @@ async function start() {
     filePath: path.join(app.getPath("logs"), "launcher.jsonl"),
     publish: (record) => send("launcher:log", record),
   });
+  const optimizationSecretStore = createOptimizationSecretStore({
+    filePath: path.join(app.getPath("userData"), "optimization-secrets.json"),
+    safeStorage,
+  });
   optimizationController = createOptimizationController({
     coreHome: CORE_HOME,
     stateStore,
     logger,
+    secretStore: optimizationSecretStore,
   });
   const startHidden = process.argv.includes("--hidden") && stateStore.read().onboardingComplete;
   nativeTheme.themeSource = "system";
@@ -1186,6 +1202,10 @@ async function start() {
     browserDescriptorPath: BROWSER_DESCRIPTOR_PATH,
     launcherProfile: LAUNCHER_PROFILE.kind,
     publishOperation,
+    runtimeEnvironment: () => {
+      const jevApiKey = optimizationController?.jevApiKey();
+      return jevApiKey ? { JEV_API_KEY: jevApiKey } : {};
+    },
     onConfigRead: config => {
       // Setup may read an intermediate config before rollback. The setting IPC commits
       // its change only after the existing setup transaction has succeeded.
