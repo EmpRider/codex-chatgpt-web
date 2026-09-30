@@ -1213,7 +1213,9 @@ async function start() {
     publishOperation,
     runtimeEnvironment: () => {
       const jevApiKey = optimizationController?.jevApiKey();
-      return jevApiKey ? { JEV_API_KEY: jevApiKey } : {};
+      // The launcher-managed secret is authoritative. An ambient machine-level JEV_API_KEY must
+      // not silently bypass the GUI's configured/not-configured state.
+      return { JEV_API_KEY: jevApiKey || "" };
     },
     onConfigRead: config => {
       // Setup may read an intermediate config before rollback. The setting IPC commits
