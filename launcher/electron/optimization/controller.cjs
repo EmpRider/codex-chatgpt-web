@@ -119,6 +119,12 @@ function localComponentHealthy(id, record, runtimeRoot) {
   }
 }
 
+function headroomFlavorMatches(record, optimizationSettings) {
+  return Boolean(record)
+    && record.codeEnabled === optimizationSettings.headroom.codeEnabled
+    && record.mlEnabled === optimizationSettings.headroom.mlEnabled;
+}
+
 function mergeSettings(current, patch) {
   const next = { ...current, ...(patch && typeof patch === "object" ? patch : {}) };
   for (const key of ["adhd", "rtk", "headroom", "caveman", "ponytail", "jev"]) {
@@ -296,8 +302,7 @@ function createOptimizationController({ coreHome, stateStore, logger, secretStor
     const installed = versions();
     const record = installedRecord(installed, "headroom");
     if (!record?.executable
-      || record.codeEnabled !== currentSettings.headroom.codeEnabled
-      || record.mlEnabled !== currentSettings.headroom.mlEnabled
+      || !headroomFlavorMatches(record, currentSettings)
       || !pathInside(paths.runtimeRoot, record.path)
       || !pathInside(paths.runtimeRoot, record.executable)
       || !fs.statSync(record.executable, { throwIfNoEntry: false })?.isFile()) {
@@ -388,9 +393,7 @@ function createOptimizationController({ coreHome, stateStore, logger, secretStor
       const definition = TOOL_MANIFEST[id];
       const record = installedRecord(installed, id) || {};
       const healthyBeforeCheck = localComponentHealthy(id, record, paths.runtimeRoot)
-        && (id !== "headroom"
-          || (record.codeEnabled === currentSettings.headroom.codeEnabled
-            && record.mlEnabled === currentSettings.headroom.mlEnabled));
+        && (id !== "headroom" || headroomFlavorMatches(record, currentSettings));
       try {
         const availableVersion = await remoteVersion(definition);
         const plan = resolveUpdatePlan({
@@ -537,6 +540,7 @@ function createOptimizationController({ coreHome, stateStore, logger, secretStor
 
 module.exports = {
   createOptimizationController,
+  headroomFlavorMatches,
   localComponentHealthy,
   pathInside,
   mergeSettings,
