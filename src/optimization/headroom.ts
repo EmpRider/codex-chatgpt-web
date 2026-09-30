@@ -91,6 +91,46 @@ function applyCompressedContent(
   return true;
 }
 
+export async function compressCommandResultWithHeadroom(
+  result: import("../adapters/chatgpt-web/turn-broker").BrokerToolResult,
+  fetchImpl: typeof fetch = fetch,
+): Promise<import("../adapters/chatgpt-web/turn-broker").BrokerToolResult> {
+  const settings = loadOptimizationSettings();
+  if (!settings.headroom.enabled || result.isError || result.structuredContent !== undefined) return result;
+  if (!Array.isArray(result.content) || result.content.length !== 1) return result;
+  const block = result.content[0];
+  if (!block || typeof block !== "object" || Array.isArray(block)) return result;
+  const candidate = block as Record<string, unknown>;
+  if (candidate.type !== "text" || typeof candidate.text !== "string") return result;
+  const raw = candidate.text;
+  if (estimateTokens(raw) < settings.headroom.minTokens) return result;
+
+  try {
+    const response = await fetchImpl(`http://127.0.0.1:${settings.headroom.port}/v1/compress`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        messages: [{ role: "assistant", content: raw }],
+        model: "gpt-5.6-sol",
+        config: { mode: "lossy_inline", frozen_message_count: 0 },
+      }),
+      signal: AbortSignal.timeout(3_000),
+    });
+    if (!response.ok) return result;
+    const payload = await response.json() as HeadroomCompressResponse;
+    if (!Array.isArray(payload.messages) || payload.messages.length !== 1) return result;
+    const compressed = payload.messages[0];
+    if (compressed?.role !== "assistant" || typeof compressed.content !== "string") return result;
+    if (!compressed.content || Buffer.byteLength(compressed.content) >= Buffer.byteLength(raw)) return result;
+    return {
+      ...result,
+      content: [{ ...candidate, text: compressed.content }],
+    };
+  } catch {
+    return result;
+  }
+}
+
 export interface HeadroomOptimizationResult {
   attempted: boolean;
   applied: boolean;
