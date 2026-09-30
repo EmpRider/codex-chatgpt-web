@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { compressCommandResultWithRtk } from "../src/optimization/rtk";
+import { compressCommandResultWithRtk, rtkFilterForCommand } from "../src/optimization/rtk";
 import type { BrokerToolResult } from "../src/adapters/chatgpt-web/turn-broker";
 
 const previousHome = process.env.CODEX_CHATGPT_WEB_HOME;
@@ -41,14 +41,43 @@ describe("RTK native command-result compression", () => {
   test("applies managed RTK pipe output when it is smaller", async () => {
     configure({ ultraCompact: true });
     const raw = "verbose line\n".repeat(100);
-    let invocation: { executable: string; input: string; ultra: boolean } | undefined;
-    const output = await compressCommandResultWithRtk(result(raw), async (executable, input, ultra) => {
-      invocation = { executable, input, ultra };
+    let invocation: { executable: string; input: string; ultra: boolean; filter?: string } | undefined;
+    const output = await compressCommandResultWithRtk(result(raw), async (executable, input, ultra, filter) => {
+      invocation = { executable, input, ultra, filter };
       return { output: "10 lines summarized\n", stderr: "" };
     });
     expect(invocation?.input).toBe(raw);
     expect(invocation?.ultra).toBe(true);
+    expect(invocation?.filter).toBeUndefined();
     expect((output.content[0] as any).text).toBe("10 lines summarized\n");
+  });
+
+  test("selects exact RTK filters for recognized native commands", async () => {
+    configure();
+    const raw = "commit abc123\n".repeat(100);
+    let filter: string | undefined;
+    await compressCommandResultWithRtk(
+      result(raw),
+      async (_executable, _input, _ultra, selected) => {
+        filter = selected;
+        return { output: "compact\n", stderr: "" };
+      },
+      "git log --oneline -20",
+    );
+    expect(filter).toBe("git-log");
+    expect(rtkFilterForCommand("git status --short")).toBe("git-status");
+    expect(rtkFilterForCommand("git diff --stat")).toBe("git-diff");
+    expect(rtkFilterForCommand("rg TODO src")).toBe("rg");
+    expect(rtkFilterForCommand("python -m pytest -q")).toBe("pytest");
+    expect(rtkFilterForCommand("cargo test --all")).toBe("cargo-test");
+    expect(rtkFilterForCommand("mvn test")).toBeUndefined();
+  });
+
+  test("recognizes common shell wrappers without guessing arbitrary commands", () => {
+    expect(rtkFilterForCommand('cmd /c "git status --short"')).toBe("git-status");
+    expect(rtkFilterForCommand("bash -lc 'git diff --stat'")).toBe("git-diff");
+    expect(rtkFilterForCommand("powershell.exe -NoProfile -Command rg TODO src")).toBe("rg");
+    expect(rtkFilterForCommand("echo git status")).toBeUndefined();
   });
 
   test("keeps raw output when RTK fails or does not reduce bytes", async () => {
