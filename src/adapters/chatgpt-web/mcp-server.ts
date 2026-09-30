@@ -19,6 +19,7 @@ import { optimizeNativeCommandResult } from "../../optimization/tool-results";
 interface ClaimedTurn {
   bindingId: string;
   activityId: string;
+  activityAbandoned?: boolean;
   environment: ChatGptTurnEnvironment & { expiresAt?: number };
   contextTransport?: ChatGptWebMcpContextManifest;
 }
@@ -509,7 +510,11 @@ export async function runChatGptMcpServer(options: {
     }
   };
 
-  const settleTurnActivity = async (turnToken: string, activityId: string): Promise<void> => {
+  const settleTurnActivity = async (
+    turnToken: string,
+    activityId: string,
+    activityAbandoned = false,
+  ): Promise<void> => {
     let firstError: unknown;
     for (let attempt = 0; attempt < 2; attempt += 1) {
       try {
@@ -517,6 +522,7 @@ export async function runChatGptMcpServer(options: {
           method: "activity_complete",
           token: turnToken,
           activityId,
+          ...(activityAbandoned ? { activityAbandoned: true } : {}),
         }, 5_000);
         return;
       } catch (error) {
@@ -542,7 +548,7 @@ export async function runChatGptMcpServer(options: {
       // The broker's terminal fence treats even a fully local inventory lookup as live MCP work.
       // Settle the lease without the request AbortSignal: cancellation must not strand activity
       // and silently prevent every later completion candidate from committing.
-      await settleTurnActivity(turnToken, claimed.activityId);
+      await settleTurnActivity(turnToken, claimed.activityId, claimed.activityAbandoned === true);
     }
   };
 
@@ -596,6 +602,12 @@ export async function runChatGptMcpServer(options: {
         : response;
       return asMcpResult(optimized);
     } catch (error) {
+      if (error instanceof TurnBrokerTimeoutError
+        || (error instanceof DOMException && error.name === "AbortError")) {
+        // This exact MCP activity no longer has a consumer for the broker result. Carry that fact
+        // into activity_complete so a result racing ahead of socket-close can be recovered safely.
+        claimed.activityAbandoned = true;
+      }
       // The broker ties each invocation to its request socket. A transport timeout/cancel therefore
       // retires only that abandoned invocation; the accepted ChatGPT browser turn remains valid.
       // Structural broker failures still retire the whole binding because its state is no longer
