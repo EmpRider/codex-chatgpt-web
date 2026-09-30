@@ -22,7 +22,6 @@ export interface RtkFilterResult {
 export type RtkFilterRunner = (
   executable: string,
   input: string,
-  ultraCompact: boolean,
   filterName?: string,
 ) => Promise<RtkFilterResult>;
 
@@ -78,12 +77,10 @@ function singleTextBlock(result: BrokerToolResult): TextBlock | undefined {
 export function runRtkPipe(
   executable: string,
   input: string,
-  ultraCompact: boolean,
   filterName?: string,
 ): Promise<RtkFilterResult> {
   return new Promise((resolve, reject) => {
     const args = [
-      ...(ultraCompact ? ["--ultra-compact"] : []),
       "pipe",
       ...(filterName ? ["--filter", filterName] : []),
     ];
@@ -160,7 +157,6 @@ export async function compressCommandResultWithRtk(
     const filtered = await runner(
       component.executable,
       raw,
-      settings.rtk.ultraCompact,
       rtkFilterForCommand(command),
     );
     // RTK's own pipe mode is fail-open via never_worse. Keep the same invariant at our boundary
