@@ -835,6 +835,7 @@ test("an unresolved timed-out invocation cannot be replayed as an identical nati
     const retry = callTurnBroker(socketPath, {
       method: "invoke",
       bindingId: claimed.bindingId,
+      activityId: thirdActivity,
       wireName: "exec_command",
       arguments: { cmd: "perform-side-effect", cwd: root },
     }, 500);
@@ -854,6 +855,35 @@ test("an unresolved timed-out invocation cannot be replayed as an identical nati
       method: "activity_complete",
       token,
       activityId: thirdActivity,
+    });
+
+    // The late result is a one-recovery cache, not a permanent memoization entry. Once the
+    // recovering activity settles, a later intentional identical operation must be allowed to run.
+    const fourthActivity = "activity_ambiguousfourth12345678";
+    await callTurnBroker(socketPath, {
+      method: "claim",
+      token,
+      activityId: fourthActivity,
+    });
+    const intentionalRepeat = callTurnBroker(socketPath, {
+      method: "invoke",
+      bindingId: claimed.bindingId,
+      activityId: fourthActivity,
+      wireName: "exec_command",
+      arguments: { cmd: "perform-side-effect", cwd: root },
+    }, 2_000);
+    const [repeatRequest] = await broker.nextToolBatch(token);
+    expect(repeatRequest).toBeDefined();
+    broker.completeTool(token, repeatRequest!.callId, {
+      content: [{ type: "text", text: "intentional repeat completed" }],
+    });
+    await expect(intentionalRepeat).resolves.toMatchObject({
+      content: [{ type: "text", text: "intentional repeat completed" }],
+    });
+    await callTurnBroker(socketPath, {
+      method: "activity_complete",
+      token,
+      activityId: fourthActivity,
     });
   } finally {
     await broker.close();
