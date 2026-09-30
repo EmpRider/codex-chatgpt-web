@@ -61,6 +61,10 @@ export interface OptimizationSnapshot {
   settings: OptimizationSettings;
   root: string;
   lastUpdateCheckAt: string | null;
+  secrets: {
+    jevApiKeyConfigured: boolean;
+    encryptionAvailable: boolean;
+  };
   components: OptimizationComponentStatus[];
 }
 
@@ -237,6 +241,7 @@ export interface LauncherApi {
     optimization: OptimizationSnapshot;
   }>;
   checkOptimizationUpdates(): Promise<OptimizationSnapshot>;
+  setJevApiKey(value: string | null): Promise<OptimizationSnapshot>;
   setBrowserInteractionMode(mode: BrowserInteractionMode): Promise<{
     state: LauncherState;
     credentialsRequired: boolean;
