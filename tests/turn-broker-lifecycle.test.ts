@@ -600,6 +600,9 @@ test("late native result after MCP timeout is ignored without poisoning the surv
     expect(() => broker.completeTool(token, request!.callId, {
       content: [{ type: "text", text: "late native result" }],
     })).not.toThrow();
+    expect(() => broker.completeTool(token, "call_unknown_late_result", {
+      content: [{ type: "text", text: "unknown" }],
+    })).toThrow("tool call is not pending");
 
     const nextActivity = "activity_afterlate1234567890";
     await expect(callTurnBroker<{ bindingId: string }>(socketPath, {
@@ -645,6 +648,9 @@ test("timed-out undelivered MCP invocation is removed from the next tool batch",
       wireName: "exec_command",
       arguments: { cmd: "never-delivered" },
     }, 25)).rejects.toThrow("timed out");
+    // The client timeout destroys its socket; allow the broker close event to retire the queued
+    // invocation before asking for the next batch.
+    await Bun.sleep(25);
 
     const waitAbort = new AbortController();
     const timer = setTimeout(() => waitAbort.abort(), 40);
