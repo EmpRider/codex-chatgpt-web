@@ -84,6 +84,7 @@ interface TurnChannel {
   abandonedInvocations: Map<string, {
     fingerprint: string;
     result?: BrokerToolResult;
+    replayActivityId?: string;
   }>;
   invocations: Map<string, PendingInvocation>;
   waiters: Set<ToolWaiter>;
@@ -1220,6 +1221,14 @@ export class TurnBroker implements TurnBrokerOwner {
           "AbortError",
         ));
       }
+      // A cached late result is scoped to one recovery MCP activity. Keep it stable throughout
+      // that activity so duplicate calls cannot race a second native side effect, then expire it
+      // when the activity settles so a later intentional identical operation can run normally.
+      for (const [callId, abandoned] of [...channel.abandonedInvocations]) {
+        if (abandoned.replayActivityId === request.activityId) {
+          channel.abandonedInvocations.delete(callId);
+        }
+      }
       // A cleanup that overtakes an ambiguously delivered claim is still a causal event. Its
       // tombstone makes the delayed claim fail instead of resurrecting activity after a fence.
       channel.activityRevision += 1;
@@ -1294,19 +1303,34 @@ export class TurnBroker implements TurnBrokerOwner {
       ...(request.freeform === true ? { input: request.input ?? "" } : { arguments: request.arguments ?? {} }),
     };
     const fingerprint = brokerInvocationFingerprint(toolRequest);
-    const matchingAbandoned = [...binding.channel.abandonedInvocations.values()]
-      .filter(abandoned => abandoned.fingerprint === fingerprint);
+    const matchingAbandoned = [...binding.channel.abandonedInvocations.entries()]
+      .filter(([, abandoned]) => abandoned.fingerprint === fingerprint);
     if (matchingAbandoned.length > 0) {
       const resolved = matchingAbandoned.filter(
-        (abandoned): abandoned is { fingerprint: string; result: BrokerToolResult } => abandoned.result !== undefined,
+        (entry): entry is [string, { fingerprint: string; result: BrokerToolResult; replayActivityId?: string }] =>
+          entry[1].result !== undefined,
       );
       if (matchingAbandoned.length === 1 && resolved.length === 1) {
-        // ChatGPT never received this result because its original MCP request detached. Replaying
-        // the cached result is the only way to let the model recover without executing the same
-        // side effect a second time.
-        return structuredClone(resolved[0].result);
+        const [abandonedCallId, abandoned] = resolved[0];
+        // ChatGPT never received this result because its original MCP request detached. Reserve the
+        // cached result for one recovery activity: every duplicate from that same activity is
+        // idempotently replayed, while another concurrent activity remains blocked from executing
+        // the side effect again. The reservation is cleared by activity_complete.
+        if (request.activityId) {
+          if (abandoned.replayActivityId === undefined) {
+            abandoned.replayActivityId = request.activityId;
+          }
+          if (abandoned.replayActivityId === request.activityId) {
+            return structuredClone(abandoned.result);
+          }
+        } else if (abandoned.replayActivityId === undefined) {
+          // Legacy/direct broker callers have no durable activity boundary. Consume their cached
+          // result exactly once so it cannot permanently memoize an otherwise valid future call.
+          binding.channel.abandonedInvocations.delete(abandonedCallId);
+          return structuredClone(abandoned.result);
+        }
       }
-      const message = "An identical Codex tool invocation timed out and its native outcome is still unknown. Do not replay the same operation until the original result is observed or the turn ends.";
+      const message = "An identical Codex tool invocation timed out and its native outcome is still unknown or is already being recovered by another MCP activity. Do not replay the same operation until that recovery settles.";
       return {
         content: [{ type: "text", text: message }],
         structuredContent: {
