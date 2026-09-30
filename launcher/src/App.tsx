@@ -25,6 +25,9 @@ import type {
   LauncherState,
   LogRecord,
   OperationState,
+  OptimizationLevel,
+  OptimizationSettings,
+  OptimizationSnapshot,
   Surface,
 } from "./types";
 
@@ -1599,6 +1602,193 @@ function ActivitySurface({
   );
 }
 
+function OptimizationSettingsPanel({
+  setError,
+  snapshot,
+  updateState,
+}: {
+  setError: (error: string | null) => void;
+  snapshot: LauncherSnapshot;
+  updateState: (state: LauncherState) => void;
+}) {
+  const [optimization, setOptimization] = useState<OptimizationSnapshot>(snapshot.optimization);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => setOptimization(snapshot.optimization), [snapshot.optimization]);
+
+  const patch = async (value: Partial<OptimizationSettings>) => {
+    setBusy(true);
+    setError(null);
+    try {
+      const result = await api!.setOptimizationSettings(value);
+      updateState(result.state);
+      setOptimization(result.optimization);
+    } catch (cause) {
+      setError(messageOf(cause));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const updateFeature = async <Key extends keyof OptimizationSettings>(
+    key: Key,
+    value: Partial<OptimizationSettings[Key]>,
+  ) => patch({ [key]: value } as Partial<OptimizationSettings>);
+
+  const checkUpdates = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      setOptimization(await api!.checkOptimizationUpdates());
+    } catch (cause) {
+      setError(messageOf(cause));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const modeSelect = (
+    key: "caveman" | "ponytail",
+    value: OptimizationLevel,
+  ) => (
+    <select
+      aria-label={`${key} mode`}
+      className="optimization-select"
+      disabled={busy}
+      onChange={(event) => void updateFeature(key, {
+        level: event.target.value as OptimizationLevel,
+        enabled: event.target.value !== "off",
+      })}
+      value={value}
+    >
+      <option value="off">Off</option>
+      <option value="lite">Lite</option>
+      <option value="full">Full</option>
+      <option value="ultra">Ultra</option>
+    </select>
+  );
+
+  const updateCount = optimization.components.filter(component =>
+    component.availableVersion
+      && component.availableVersion !== component.installedVersion
+  ).length;
+
+  return (
+    <>
+      <SectionHeading label="Optimization stack" spaced />
+      <div className="settings-list">
+        <SettingRow
+          body="The launcher owns provisioning and updates. Codex configuration and Codex plugin files are never modified."
+          label="Automatic optimizer updates"
+        >
+          <Switch
+            checked={optimization.settings.autoUpdate}
+            disabled={busy}
+            onChange={(enabled) => void patch({ autoUpdate: enabled })}
+          />
+        </SettingRow>
+        <SettingRow
+          body="Action-first, low-distraction response organization. Managed from the upstream i-have-adhd rules."
+          label="i-have-adhd"
+        >
+          <Switch
+            checked={optimization.settings.adhd.enabled}
+            disabled={busy}
+            onChange={(enabled) => void updateFeature("adhd", { enabled })}
+          />
+        </SettingRow>
+        <SettingRow
+          body="Compress supported command and tool output before it is added to ChatGPT Web context."
+          label="RTK tool compression"
+        >
+          <Switch
+            checked={optimization.settings.rtk.enabled}
+            disabled={busy}
+            onChange={(enabled) => void updateFeature("rtk", { enabled })}
+          />
+        </SettingRow>
+        <SettingRow
+          body="Compress large context locally through the app-owned Headroom service."
+          label="Headroom context compression"
+        >
+          <Switch
+            checked={optimization.settings.headroom.enabled}
+            disabled={busy}
+            onChange={(enabled) => void updateFeature("headroom", { enabled })}
+          />
+        </SettingRow>
+        <SettingRow
+          body="Use AST-aware compression for supported source languages."
+          label="Headroom code compression"
+        >
+          <Switch
+            checked={optimization.settings.headroom.codeEnabled}
+            disabled={busy || !optimization.settings.headroom.enabled}
+            onChange={(enabled) => void updateFeature("headroom", { codeEnabled: enabled })}
+          />
+        </SettingRow>
+        <SettingRow
+          body="Enable the optional Kompress ML package. This is a large additional download and remains off by default."
+          label="Headroom ML compression"
+        >
+          <Switch
+            checked={optimization.settings.headroom.mlEnabled}
+            disabled={busy || !optimization.settings.headroom.enabled}
+            onChange={(enabled) => void updateFeature("headroom", { mlEnabled: enabled })}
+          />
+        </SettingRow>
+        <SettingRow
+          body="Reduce response ceremony while preserving exact code, errors, and requested document content."
+          label="Caveman output style"
+        >
+          {modeSelect("caveman", optimization.settings.caveman.level)}
+        </SettingRow>
+        <SettingRow
+          body="Bias implementation toward YAGNI, reuse, standard libraries, and deletion before addition."
+          label="Ponytail minimal-code mode"
+        >
+          {modeSelect("ponytail", optimization.settings.ponytail.level)}
+        </SettingRow>
+        <SettingRow
+          body="Use the app-owned Jev decision layer for model/reasoning optimization. It fails open to the existing route."
+          label="Jev decision optimization"
+        >
+          <Switch
+            checked={optimization.settings.jev.enabled}
+            disabled={busy}
+            onChange={(enabled) => void updateFeature("jev", { enabled })}
+          />
+        </SettingRow>
+      </div>
+      <div className="optimization-update-row">
+        <span>
+          <strong>Managed components</strong>
+          <small>
+            {updateCount > 0
+              ? `${updateCount} update${updateCount === 1 ? "" : "s"} available`
+              : optimization.lastUpdateCheckAt
+                ? "Latest versions checked"
+                : "Not checked yet"}
+          </small>
+        </span>
+        <SecondaryButton disabled={busy} onClick={() => void checkUpdates()}>
+          {busy ? "Checking…" : "Check updates"}
+        </SecondaryButton>
+      </div>
+      <div className="optimization-component-list">
+        {optimization.components.map(component => (
+          <div className="optimization-component" key={component.id}>
+            <span>
+              <strong>{component.name}</strong>
+              <small>{component.status}</small>
+            </span>
+            <code>{component.installedVersion ?? "not installed"}</code>
+          </div>
+        ))}
+      </div>
+    </>
+  );
+}
+
 function SettingsSurface({
   configureInteractionMode,
   copy,
@@ -1851,6 +2041,12 @@ function SettingsSurface({
           {copy.restartCodex}
         </NoticeRow>
       ) : null}
+
+      <OptimizationSettingsPanel
+        setError={setError}
+        snapshot={snapshot}
+        updateState={updateState}
+      />
 
       <SectionHeading label={copy.diagnostics} spaced />
       <button className="diagnostic-row" disabled={busy} onClick={() => void runDoctor()} type="button">
