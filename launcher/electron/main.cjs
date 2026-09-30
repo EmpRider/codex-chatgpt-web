@@ -1182,6 +1182,7 @@ async function start() {
     logger,
     secretStore: optimizationSecretStore,
     runtimeExecutable: optimizerRuntimeExecutable,
+    publish: value => send("launcher:optimization-changed", value),
   });
   const startHidden = process.argv.includes("--hidden") && stateStore.read().onboardingComplete;
   nativeTheme.themeSource = "system";
