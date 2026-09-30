@@ -8,6 +8,7 @@ const { resolveUpdatePlan, shouldCheckForUpdates } = require("./managed-tools.cj
 const { decodeGitHubText, installTextSnapshot } = require("./provisioner.cjs");
 const { installRtkRelease } = require("./rtk-manager.cjs");
 const { HeadroomService, ensureHeadroom } = require("./headroom-manager.cjs");
+const { provisionJev } = require("./jev-manager.cjs");
 
 const USER_AGENT = "codex-web-gpt-optimization-manager";
 const MAX_METADATA_BYTES = 2 * 1024 * 1024;
@@ -82,7 +83,7 @@ function mergeSettings(current, patch) {
   return normalizeOptimizationSettings(next);
 }
 
-function createOptimizationController({ coreHome, stateStore, logger, secretStore }) {
+function createOptimizationController({ coreHome, stateStore, logger, secretStore, runtimeExecutable }) {
   const root = path.join(coreHome, "optimization");
   const settingsPath = path.join(root, "settings.json");
   const versionsPath = path.join(root, "versions.json");
@@ -196,6 +197,16 @@ function createOptimizationController({ coreHome, stateStore, logger, secretStor
     return requestJson(
       `https://api.github.com/repos/${definition.repository}/contents/${encodedPath}?ref=${encodeURIComponent(ref)}`,
     );
+  }
+
+  async function provisionManagedJev(version) {
+    const definition = TOOL_MANIFEST.jev;
+    return provisionJev({
+      root,
+      version,
+      runtimeExecutable,
+      fetchFile: (sourcePath, ref) => githubFile(definition, sourcePath, ref),
+    });
   }
 
   async function provisionHeadroom(version, currentSettings) {
@@ -344,6 +355,19 @@ function createOptimizationController({ coreHome, stateStore, logger, secretStor
             python: result.python,
             codeEnabled: currentSettings.headroom.codeEnabled,
             mlEnabled: currentSettings.headroom.mlEnabled,
+            availableVersion,
+            updateAction: "none",
+            status: "ready",
+            lastError: null,
+            updatedAt: new Date().toISOString(),
+          };
+          logger?.info("optimization.component_updated", { id, version: result.version });
+        } else if (id === "jev" && (plan.action === "install" || plan.action === "update")) {
+          const result = await provisionManagedJev(availableVersion);
+          installed.components[id] = {
+            ...record,
+            version: result.version,
+            path: result.path,
             availableVersion,
             updateAction: "none",
             status: "ready",
