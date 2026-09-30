@@ -125,6 +125,18 @@ function headroomFlavorMatches(record, optimizationSettings) {
     && record.mlEnabled === optimizationSettings.headroom.mlEnabled;
 }
 
+function headroomRuntimeRecord(record) {
+  if (!record?.version || !record?.path || !record?.executable) return null;
+  return {
+    version: record.version,
+    path: record.path,
+    executable: record.executable,
+    ...(record.python ? { python: record.python } : {}),
+    codeEnabled: record.codeEnabled,
+    mlEnabled: record.mlEnabled,
+  };
+}
+
 function mergeSettings(current, patch) {
   const next = { ...current, ...(patch && typeof patch === "object" ? patch : {}) };
   for (const key of ["adhd", "rtk", "headroom", "caveman", "ponytail", "jev"]) {
@@ -310,6 +322,69 @@ function createOptimizationController({ coreHome, stateStore, logger, secretStor
     });
   }
 
+  async function activateHeadroomWithRollback(installed, currentSettings, eventName) {
+    const record = installedRecord(installed, "headroom");
+    if (!record) return false;
+    let failure = null;
+    const currentHealthy = localComponentHealthy("headroom", record, paths.runtimeRoot)
+      && headroomFlavorMatches(record, currentSettings);
+    if (currentHealthy) {
+      try {
+        await headroomService.start({
+          executable: record.executable,
+          port: currentSettings.headroom.port,
+          codeEnabled: currentSettings.headroom.codeEnabled,
+          mlEnabled: currentSettings.headroom.mlEnabled,
+        });
+        return true;
+      } catch (error) {
+        failure = error;
+      }
+    } else {
+      failure = new Error("Managed Headroom runtime is unavailable or has the wrong install flavor");
+    }
+
+    const previous = record.previous;
+    const fallbackHealthy = previous
+      && localComponentHealthy("headroom", previous, paths.runtimeRoot)
+      && headroomFlavorMatches(previous, currentSettings);
+    if (!fallbackHealthy) {
+      logger?.warn(eventName, {
+        message: failure instanceof Error ? failure.message : String(failure),
+      });
+      return false;
+    }
+
+    try {
+      await headroomService.start({
+        executable: previous.executable,
+        port: currentSettings.headroom.port,
+        codeEnabled: currentSettings.headroom.codeEnabled,
+        mlEnabled: currentSettings.headroom.mlEnabled,
+      });
+      installed.components.headroom = {
+        ...previous,
+        availableVersion: record.availableVersion ?? record.version,
+        updateAction: "update",
+        status: "rollback-active",
+        lastError: `Headroom ${record.version} failed to start; restored ${previous.version}: ${failure instanceof Error ? failure.message : String(failure)}`,
+        previous: null,
+        updatedAt: new Date().toISOString(),
+      };
+      writePrivateFileAtomic(versionsPath, `${JSON.stringify(installed, null, 2)}\n`);
+      logger?.warn("optimization.headroom_rolled_back", {
+        failedVersion: record.version,
+        restoredVersion: previous.version,
+      });
+      return true;
+    } catch (rollbackError) {
+      logger?.warn(eventName, {
+        message: `Headroom ${record.version} failed and rollback ${previous.version} also failed: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`,
+      });
+      return false;
+    }
+  }
+
   async function ensureActive() {
     const currentSettings = settings();
     if (!currentSettings.headroom.enabled) {
@@ -317,26 +392,7 @@ function createOptimizationController({ coreHome, stateStore, logger, secretStor
       return notify();
     }
     const installed = versions();
-    const record = installedRecord(installed, "headroom");
-    if (!record?.executable
-      || !headroomFlavorMatches(record, currentSettings)
-      || !pathInside(paths.runtimeRoot, record.path)
-      || !pathInside(paths.runtimeRoot, record.executable)
-      || !fs.statSync(record.executable, { throwIfNoEntry: false })?.isFile()) {
-      return notify();
-    }
-    try {
-      await headroomService.start({
-        executable: record.executable,
-        port: currentSettings.headroom.port,
-        codeEnabled: currentSettings.headroom.codeEnabled,
-        mlEnabled: currentSettings.headroom.mlEnabled,
-      });
-    } catch (error) {
-      logger?.warn("optimization.headroom_start_failed", {
-        message: error instanceof Error ? error.message : String(error),
-      });
-    }
+    await activateHeadroomWithRollback(installed, currentSettings, "optimization.headroom_start_failed");
     return notify();
   }
 
@@ -472,6 +528,9 @@ function createOptimizationController({ coreHome, stateStore, logger, secretStor
             updateAction: "none",
             status: "ready",
             lastError: null,
+            previous: healthyBeforeCheck && record.version !== result.version
+              ? headroomRuntimeRecord(record)
+              : record.previous ?? null,
             updatedAt: new Date().toISOString(),
           };
           logger?.info("optimization.component_updated", { id, version: result.version });
@@ -520,21 +579,7 @@ function createOptimizationController({ coreHome, stateStore, logger, secretStor
     writePrivateFileAtomic(versionsPath, `${JSON.stringify(installed, null, 2)}\n`);
     stateStore.update({ optimizationLastUpdateCheckAt: new Date(now).toISOString() });
     if (currentSettings.headroom.enabled) {
-      const record = installedRecord(installed, "headroom");
-      if (record?.executable) {
-        try {
-          await headroomService.start({
-            executable: record.executable,
-            port: currentSettings.headroom.port,
-            codeEnabled: currentSettings.headroom.codeEnabled,
-            mlEnabled: currentSettings.headroom.mlEnabled,
-          });
-        } catch (error) {
-          logger?.warn("optimization.headroom_start_failed", {
-            message: error instanceof Error ? error.message : String(error),
-          });
-        }
-      }
+      await activateHeadroomWithRollback(installed, currentSettings, "optimization.headroom_start_failed");
     } else {
       await headroomService.stop();
     }
@@ -581,6 +626,7 @@ function createOptimizationController({ coreHome, stateStore, logger, secretStor
 module.exports = {
   createOptimizationController,
   headroomFlavorMatches,
+  headroomRuntimeRecord,
   localComponentHealthy,
   pathInside,
   mergeSettings,
