@@ -118,6 +118,23 @@ function findRtkBinary(root, platform = process.platform) {
   throw new Error("RTK archive did not contain the expected executable");
 }
 
+function verifyRtkBinary(executable, expectedVersion, runner = spawnSync) {
+  const result = runner(executable, ["--version"], {
+    encoding: "utf8",
+    timeout: 15_000,
+    windowsHide: true,
+  });
+  if (result?.error) throw result.error;
+  if (result?.status !== 0) {
+    throw new Error(`RTK health check failed with exit ${result?.status ?? "unknown"}`);
+  }
+  const output = `${result?.stdout || ""}\n${result?.stderr || ""}`.trim();
+  if (expectedVersion && !output.includes(expectedVersion)) {
+    throw new Error(`RTK health check returned an unexpected version: ${output.slice(0, 200)}`);
+  }
+  return output;
+}
+
 async function installRtkRelease({
   root,
   release,
@@ -157,6 +174,7 @@ async function installRtkRelease({
     fs.mkdirSync(versionRoot, { recursive: true, mode: 0o700 });
     fs.copyFileSync(binary, finalBinary);
     if (platform !== "win32") fs.chmodSync(finalBinary, 0o755);
+    (dependencies.verifyBinary || verifyRtkBinary)(finalBinary, version);
     return { version, path: versionRoot, executable: finalBinary };
   } catch (error) {
     fs.rmSync(versionRoot, { recursive: true, force: true });
@@ -171,4 +189,5 @@ module.exports = {
   fileSha256,
   installRtkRelease,
   rtkAssetName,
+  verifyRtkBinary,
 };
