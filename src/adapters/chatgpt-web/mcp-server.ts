@@ -234,6 +234,13 @@ export function shouldRetireTurnBindingAfterInvocationFailure(error: unknown): b
   return !(error instanceof DOMException && error.name === "AbortError");
 }
 
+export function mcpActivityAbandonedAtSettlement(
+  alreadyAbandoned: boolean,
+  signal?: AbortSignal,
+): boolean {
+  return alreadyAbandoned || signal?.aborted === true;
+}
+
 export function chatGptMcpInvocationTimeout(
   environment: ChatGptTurnEnvironment & { expiresAt?: number },
   now = Date.now(),
@@ -545,10 +552,18 @@ export async function runChatGptMcpServer(options: {
     try {
       return await action(claimed);
     } finally {
+      // Cancellation can arrive after the native result has already crossed the broker boundary,
+      // including while RTK/Headroom post-processes that result. The MCP SDK discards a handler
+      // result after cancellation, so the settlement signal is the final authority on whether
+      // ChatGPT actually had a consumer for the native outcome.
+      claimed.activityAbandoned = mcpActivityAbandonedAtSettlement(
+        claimed.activityAbandoned === true,
+        extra.signal,
+      );
       // The broker's terminal fence treats even a fully local inventory lookup as live MCP work.
       // Settle the lease without the request AbortSignal: cancellation must not strand activity
       // and silently prevent every later completion candidate from committing.
-      await settleTurnActivity(turnToken, claimed.activityId, claimed.activityAbandoned === true);
+      await settleTurnActivity(turnToken, claimed.activityId, claimed.activityAbandoned);
     }
   };
 
