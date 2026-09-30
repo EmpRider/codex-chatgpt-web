@@ -6,6 +6,7 @@ const { TOOL_MANIFEST, toolIds } = require("./manifest.cjs");
 const { normalizeOptimizationSettings } = require("./settings.cjs");
 const { resolveUpdatePlan, shouldCheckForUpdates } = require("./managed-tools.cjs");
 const { decodeGitHubText, installTextSnapshot } = require("./provisioner.cjs");
+const { installRtkRelease } = require("./rtk-manager.cjs");
 
 const USER_AGENT = "codex-web-gpt-optimization-manager";
 const MAX_METADATA_BYTES = 2 * 1024 * 1024;
@@ -151,6 +152,15 @@ function createOptimizationController({ coreHome, stateStore, logger }) {
     );
   }
 
+  async function provisionRtk(version) {
+    const release = await requestJson("https://api.github.com/repos/rtk-ai/rtk/releases/latest");
+    const result = await installRtkRelease({ root, release });
+    if (result.version !== version) {
+      throw new Error(`RTK release changed during provisioning (${version} -> ${result.version})`);
+    }
+    return result;
+  }
+
   async function provisionSkill(id, definition, version) {
     const sourcePayload = await githubFile(definition, definition.sourcePath, version);
     const content = decodeGitHubText(sourcePayload, definition.sourcePath);
@@ -229,6 +239,20 @@ function createOptimizationController({ coreHome, stateStore, logger }) {
             updatedAt: new Date().toISOString(),
           };
           logger?.info("optimization.component_updated", { id, version: availableVersion });
+        } else if (id === "rtk" && (plan.action === "install" || plan.action === "update")) {
+          const result = await provisionRtk(availableVersion);
+          installed.components[id] = {
+            ...record,
+            version: result.version,
+            path: result.path,
+            executable: result.executable,
+            availableVersion,
+            updateAction: "none",
+            status: "ready",
+            lastError: null,
+            updatedAt: new Date().toISOString(),
+          };
+          logger?.info("optimization.component_updated", { id, version: result.version });
         } else {
           installed.components[id] = {
             ...record,
