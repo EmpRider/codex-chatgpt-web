@@ -52,6 +52,7 @@ contextBridge.exposeInMainWorld("codexWebLauncher", {
   optimizationSnapshot: () => ipcRenderer.invoke("launcher:optimization-snapshot"),
   setOptimizationSettings: (patch) => ipcRenderer.invoke("launcher:optimization-settings", patch),
   checkOptimizationUpdates: () => ipcRenderer.invoke("launcher:optimization-check-updates"),
+  setJevApiKey: (value) => ipcRenderer.invoke("launcher:optimization-jev-key", value),
   setBrowserInteractionMode: (mode) => ipcRenderer.invoke("launcher:browser-interaction-mode", mode),
   setPreference: (key, value) => ipcRenderer.invoke("launcher:set-preference", key, value),
   setSidebarState: (state) => ipcRenderer.invoke("launcher:sidebar-state", state),
