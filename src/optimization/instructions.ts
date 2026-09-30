@@ -1,4 +1,5 @@
 import type { CodexMessage, CodexParsedRequest } from "../types";
+import { extractChatGptTurnIdentity } from "../adapters/chatgpt-web/environment";
 import { loadManagedText, loadOptimizationSettings } from "./config";\nimport { rtkToolPolicy } from "./rtk";
 
 const FALLBACK_ADHD = [
@@ -60,7 +61,10 @@ export function optimizationPolicyForRequest(parsed: CodexParsedRequest): string
       "</optimization_i_have_adhd>",
     );
   }
-  if (settings.ponytail.enabled && settings.ponytail.level !== "off") {
+  const identity = extractChatGptTurnIdentity(parsed);
+  const subagentTurn = Boolean(identity.parentThreadId || identity.subagentKind);
+  if (settings.ponytail.enabled && settings.ponytail.level !== "off"
+    && (!subagentTurn || settings.ponytail.applyToSubagents)) {
     parts.push(
       "<optimization_ponytail>",
       `Selected mode: ${settings.ponytail.level}. Apply this only to implementation choices, never to remove required correctness, validation, security, accessibility, or explicitly requested functionality.`,
