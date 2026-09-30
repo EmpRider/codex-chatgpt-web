@@ -6,7 +6,7 @@ export type OptimizationLevel = "off" | "lite" | "full" | "ultra";
 
 export interface OptimizationSettings {
   autoUpdate: boolean;
-  adhd: { enabled: boolean; activationMode: "always" | "on-demand"; restoreAfterCompaction: boolean };
+  adhd: { enabled: boolean; activationMode: "always" | "on-demand" };
   rtk: { enabled: boolean; ultraCompact: boolean };
   headroom: {
     enabled: boolean;
@@ -29,7 +29,7 @@ export interface OptimizationSettings {
 
 export const DEFAULT_OPTIMIZATION_SETTINGS: OptimizationSettings = {
   autoUpdate: true,
-  adhd: { enabled: true, activationMode: "always", restoreAfterCompaction: true },
+  adhd: { enabled: true, activationMode: "always" },
   rtk: { enabled: true, ultraCompact: false },
   headroom: {
     enabled: true,
@@ -85,7 +85,6 @@ export function normalizeOptimizationSettings(value: unknown): OptimizationSetti
     adhd: {
       enabled: bool(adhd.enabled, true),
       activationMode: adhd.activationMode === "on-demand" ? "on-demand" : "always",
-      restoreAfterCompaction: bool(adhd.restoreAfterCompaction, true),
     },
     rtk: {
       enabled: bool(rtk.enabled, true),
