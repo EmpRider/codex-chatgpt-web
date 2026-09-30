@@ -140,6 +140,7 @@ function createOptimizationController({ coreHome, stateStore, logger, secretStor
   const root = paths.runtimeRoot;
   const settingsPath = paths.settingsPath;
   const versionsPath = paths.versionsPath;
+  let updatePromise = null;
   const headroomService = new HeadroomService({
     root,
     logger,
@@ -394,7 +395,7 @@ function createOptimizationController({ coreHome, stateStore, logger, secretStor
     return commit.sha;
   }
 
-  async function checkUpdates({ force = false, startup = false } = {}) {
+  async function performUpdateCheck({ force = false, startup = false } = {}) {
     const currentState = stateStore.read();
     const currentSettings = settings();
     const now = Date.now();
@@ -527,6 +528,17 @@ function createOptimizationController({ coreHome, stateStore, logger, secretStor
     }
     logger?.info("optimization.update_check_completed", { manual: force, startup });
     return notify();
+  }
+
+  async function checkUpdates(options = {}) {
+    if (updatePromise) return updatePromise;
+    const current = performUpdateCheck(options);
+    updatePromise = current;
+    try {
+      return await current;
+    } finally {
+      if (updatePromise === current) updatePromise = null;
+    }
   }
 
   function setJevApiKey(value) {
