@@ -20,6 +20,7 @@ export interface OptimizationSettings {
   ponytail: { enabled: boolean; level: OptimizationLevel; applyToSubagents: boolean };
   jev: {
     enabled: boolean;
+    baseUrl: string;
     costWeight: number;
     adaptiveThinking: boolean;
     reassessAfterToolFailure: boolean;
@@ -43,6 +44,7 @@ export const DEFAULT_OPTIMIZATION_SETTINGS: OptimizationSettings = {
   ponytail: { enabled: true, level: "full", applyToSubagents: true },
   jev: {
     enabled: false,
+    baseUrl: "https://api.typesafe.ai",
     costWeight: 0.02,
     adaptiveThinking: true,
     reassessAfterToolFailure: true,
@@ -62,6 +64,20 @@ function bool(value: unknown, fallback: boolean): boolean {
 
 function level(value: unknown, fallback: OptimizationLevel): OptimizationLevel {
   return value === "off" || value === "lite" || value === "full" || value === "ultra" ? value : fallback;
+}
+
+function endpointUrl(value: unknown, fallback: string): string {
+  if (typeof value !== "string" || !value.trim()) return fallback;
+  try {
+    const parsed = new URL(value.trim());
+    if (parsed.username || parsed.password) return fallback;
+    if (parsed.protocol === "https:") return parsed.toString().replace(/\/$/, "");
+    const loopback = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
+    if (parsed.protocol === "http:" && loopback.has(parsed.hostname)) {
+      return parsed.toString().replace(/\/$/, "");
+    }
+  } catch {}
+  return fallback;
 }
 
 function int(value: unknown, fallback: number, min: number, max: number): number {
@@ -110,6 +126,7 @@ export function normalizeOptimizationSettings(value: unknown): OptimizationSetti
     },
     jev: {
       enabled: bool(jev.enabled, false),
+      baseUrl: endpointUrl(jev.baseUrl, "https://api.typesafe.ai"),
       costWeight: finite(jev.costWeight, 0.02, 0, 1),
       adaptiveThinking: bool(jev.adaptiveThinking, true),
       reassessAfterToolFailure: bool(jev.reassessAfterToolFailure, true),
