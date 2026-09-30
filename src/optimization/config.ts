@@ -1,5 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { isAbsolute, join, relative, resolve } from "node:path";
 import { getConfigDir } from "../config";
 
 export type OptimizationLevel = "off" | "lite" | "full" | "ultra";
@@ -123,6 +123,18 @@ export function optimizationRoot(): string {
   return join(getConfigDir(), "optimization");
 }
 
+export function optimizationRuntimeRoot(): string {
+  return join(getConfigDir(), "optimization-runtime");
+}
+
+export function isManagedRuntimePath(candidate: string): boolean {
+  if (!isAbsolute(candidate)) return false;
+  const root = resolve(optimizationRuntimeRoot());
+  const target = resolve(candidate);
+  const rel = relative(root, target);
+  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+}
+
 export function loadOptimizationSettings(): OptimizationSettings {
   const path = join(optimizationRoot(), "settings.json");
   if (!existsSync(path)) return DEFAULT_OPTIMIZATION_SETTINGS;
@@ -147,7 +159,10 @@ export function loadManagedComponent(id: string): ManagedComponentRecord | undef
       components?: Record<string, ManagedComponentRecord>;
     };
     const record = versions.components?.[id];
-    return record && typeof record === "object" ? record : undefined;
+    if (!record || typeof record !== "object") return undefined;
+    if (record.path && !isManagedRuntimePath(record.path)) return undefined;
+    if (record.executable && !isManagedRuntimePath(record.executable)) return undefined;
+    return record;
   } catch {
     return undefined;
   }
