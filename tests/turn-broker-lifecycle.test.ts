@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { ChatGptTextFeed, ChatGptTraceFeed, ChatGptTurnSessions } from "../src/adapters/chatgpt-web/turn-execution";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, statSync } from "node:fs";
-import { createServer, type Socket } from "node:net";
+import { createConnection, createServer, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { callTurnBroker, TurnBroker } from "../src/adapters/chatgpt-web/turn-broker";
@@ -935,6 +935,100 @@ test("activity completion abandons its delivered invocation without waiting for 
       content: [{ type: "text", text: "late result" }],
     })).not.toThrow();
   } finally {
+    await broker.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+
+test("native result racing ahead of broker socket-close is still recoverable after client abandonment", async () => {
+  const root = mkdtempSync(join(tmpdir(), "cgw-close-race-"));
+  const socketPath = process.platform === "win32"
+    ? defaultBrokerEndpoint(root)
+    : join(tmpdir(), `cgw-close-race-${process.pid}.sock`);
+  const broker = TurnBroker.forSocket(socketPath);
+  let invokeSocket: Socket | undefined;
+  try {
+    const token = await broker.register({
+      cwd: root,
+      roots: [root],
+      writableRoots: [root],
+      sandboxPolicy: { type: "dangerFullAccess" },
+      tools: [],
+    }, undefined, "close-race-turn");
+    const activityId = "activity_closerace123456789012";
+    const claimed = await callTurnBroker<{ bindingId: string }>(socketPath, {
+      method: "claim",
+      token,
+      activityId,
+    });
+
+    // Use a raw broker socket so client abandonment and the server's close observation are separate
+    // events. Destroy locally, then complete the native call synchronously before the broker's
+    // socket-close callback has a chance to run.
+    invokeSocket = createConnection(socketPath);
+    await new Promise<void>((resolve, reject) => {
+      invokeSocket!.once("connect", resolve);
+      invokeSocket!.once("error", reject);
+    });
+    invokeSocket.write(`${JSON.stringify({
+      id: "request_close_race",
+      method: "invoke",
+      bindingId: claimed.bindingId,
+      activityId,
+      wireName: "exec_command",
+      arguments: { cmd: "single-side-effect" },
+    })}\n`);
+
+    const [request] = await broker.nextToolBatch(token);
+    expect(request).toBeDefined();
+    invokeSocket.destroy();
+    broker.completeTool(token, request!.callId, {
+      content: [{ type: "text", text: "completed during close race" }],
+      structuredContent: { source: "raced-original" },
+    });
+    await Bun.sleep(25);
+
+    // The MCP activity now reports that its consumer is gone. The result above must be converted
+    // into recoverable abandoned state rather than forgotten as a successful delivery.
+    await callTurnBroker(socketPath, {
+      method: "activity_complete",
+      token,
+      activityId,
+    });
+
+    const recoveryActivity = "activity_closeracerecover1234567";
+    await callTurnBroker(socketPath, {
+      method: "claim",
+      token,
+      activityId: recoveryActivity,
+    });
+    const recovery = callTurnBroker(socketPath, {
+      method: "invoke",
+      bindingId: claimed.bindingId,
+      activityId: recoveryActivity,
+      wireName: "exec_command",
+      arguments: { cmd: "single-side-effect" },
+    }, 500);
+    await expect(recovery).resolves.toMatchObject({
+      content: [{ type: "text", text: "completed during close race" }],
+      structuredContent: { source: "raced-original" },
+    });
+
+    const noSecondDispatch = new AbortController();
+    const noSecondTimer = setTimeout(() => noSecondDispatch.abort(), 50);
+    try {
+      await expect(broker.nextToolBatch(token, noSecondDispatch.signal)).rejects.toThrow("tool wait aborted");
+    } finally {
+      clearTimeout(noSecondTimer);
+    }
+    await callTurnBroker(socketPath, {
+      method: "activity_complete",
+      token,
+      activityId: recoveryActivity,
+    });
+  } finally {
+    invokeSocket?.destroy();
     await broker.close();
     rmSync(root, { recursive: true, force: true });
   }
