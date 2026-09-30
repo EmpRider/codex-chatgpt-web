@@ -140,7 +140,15 @@ function createOptimizationController({ coreHome, stateStore, logger, secretStor
   const root = paths.runtimeRoot;
   const settingsPath = paths.settingsPath;
   const versionsPath = paths.versionsPath;
-  const headroomService = new HeadroomService({ root, logger });
+  const headroomService = new HeadroomService({
+    root,
+    logger,
+    onStateChange: () => {
+      // Runtime health is ephemeral and intentionally not persisted into versions.json.
+      // Publish a fresh snapshot so the GUI can distinguish installed from actually running.
+      try { publish?.(snapshot()); } catch {}
+    },
+  });
 
   function settings() {
     return normalizeOptimizationSettings(stateStore.read().optimization);
@@ -177,15 +185,23 @@ function createOptimizationController({ coreHome, stateStore, logger, secretStor
       },
       components: toolIds().map(id => {
         const record = installedRecord(installed, id);
+        const enabled = componentEnabled(current, id);
+        const service = id === "headroom" ? headroomService.state() : null;
+        let status = record?.status ?? (record?.version ? "ready" : "not-installed");
+        let lastError = record?.lastError ?? null;
+        if (id === "headroom" && enabled && record?.version && status === "ready") {
+          status = service?.ready ? "running" : service?.running ? "starting" : service?.lastError ? "service-error" : "stopped";
+          lastError = service?.lastError ?? lastError;
+        }
         return {
           id,
           name: TOOL_MANIFEST[id].name,
           kind: TOOL_MANIFEST[id].kind,
-          enabled: componentEnabled(current, id),
+          enabled,
           installedVersion: record?.version ?? null,
           availableVersion: record?.availableVersion ?? null,
-          status: record?.status ?? (record?.version ? "ready" : "not-installed"),
-          lastError: record?.lastError ?? null,
+          status,
+          lastError,
         };
       }),
     };
@@ -297,7 +313,7 @@ function createOptimizationController({ coreHome, stateStore, logger, secretStor
     const currentSettings = settings();
     if (!currentSettings.headroom.enabled) {
       await headroomService.stop();
-      return snapshot();
+      return notify();
     }
     const installed = versions();
     const record = installedRecord(installed, "headroom");
@@ -306,7 +322,7 @@ function createOptimizationController({ coreHome, stateStore, logger, secretStor
       || !pathInside(paths.runtimeRoot, record.path)
       || !pathInside(paths.runtimeRoot, record.executable)
       || !fs.statSync(record.executable, { throwIfNoEntry: false })?.isFile()) {
-      return snapshot();
+      return notify();
     }
     try {
       await headroomService.start({
@@ -320,7 +336,7 @@ function createOptimizationController({ coreHome, stateStore, logger, secretStor
         message: error instanceof Error ? error.message : String(error),
       });
     }
-    return snapshot();
+    return notify();
   }
 
   async function provisionRtk(version) {
