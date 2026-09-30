@@ -6,7 +6,6 @@ const DEFAULT_OPTIMIZATION_SETTINGS = Object.freeze({
   adhd: Object.freeze({
     enabled: true,
     activationMode: "always",
-    restoreAfterCompaction: true,
   }),
   rtk: Object.freeze({
     enabled: true,
@@ -67,10 +66,6 @@ function normalizeOptimizationSettings(value) {
       enabled: bool(adhd.enabled, DEFAULT_OPTIMIZATION_SETTINGS.adhd.enabled),
       activationMode: ADHD_MODES.has(adhd.activationMode)
         ? adhd.activationMode : DEFAULT_OPTIMIZATION_SETTINGS.adhd.activationMode,
-      restoreAfterCompaction: bool(
-        adhd.restoreAfterCompaction,
-        DEFAULT_OPTIMIZATION_SETTINGS.adhd.restoreAfterCompaction,
-      ),
     },
     rtk: {
       enabled: bool(rtk.enabled, DEFAULT_OPTIMIZATION_SETTINGS.rtk.enabled),
