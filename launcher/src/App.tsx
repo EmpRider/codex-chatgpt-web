@@ -1917,6 +1917,13 @@ function OptimizationSettingsPanel({
   const [busy, setBusy] = useState(false);
   const [jevKey, setJevKey] = useState("");
   useEffect(() => setOptimization(snapshot.optimization), [snapshot.optimization]);
+  useEffect(() => {
+    let active = true;
+    void api!.optimizationSnapshot()
+      .then(value => { if (active) setOptimization(value); })
+      .catch(cause => { if (active) setError(messageOf(cause)); });
+    return () => { active = false; };
+  }, [setError]);
 
   const patch = async (value: Partial<OptimizationSettings>) => {
     setBusy(true);
