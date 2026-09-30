@@ -570,9 +570,9 @@ function registerIpc({ logger, stateStore }) {
     if (!optimizationController) throw new Error("Optimization manager is not initialized");
     return optimizationController.snapshot();
   });
-  handle("launcher:optimization-settings", (_event, patch) => {
+  handle("launcher:optimization-settings", async (_event, patch) => {
     if (!optimizationController) throw new Error("Optimization manager is not initialized");
-    const result = optimizationController.setSettings(patch);
+    const result = await optimizationController.setSettings(patch);
     send("launcher:state-changed", result.state);
     return result;
   });
@@ -1067,6 +1067,7 @@ async function requestQuit() {
       throw new Error(`Wait for ${activeOperation} to finish before quitting Codex Web GPT`);
     }
     await runtimeSupervisor?.shutdown({ cancelActiveTurns: true, force: true });
+    await optimizationController?.shutdown();
     stopCatalogVerificationMonitor();
     quitting = true;
     await browserHost?.persistSession();
@@ -1257,6 +1258,11 @@ async function start() {
   await loadRenderer(mainWindow);
   if (!launcherSmokeTest) {
     void updateController.checkOnce();
+    void optimizationController.ensureActive().catch((error) => {
+      logger.warn("optimization.startup_activation_failed", {
+        message: error instanceof Error ? error.message : String(error),
+      });
+    });
     void optimizationController.checkUpdates().catch((error) => {
       logger.warn("optimization.startup_update_check_failed", {
         message: error instanceof Error ? error.message : String(error),
