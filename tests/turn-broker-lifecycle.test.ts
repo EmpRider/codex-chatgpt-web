@@ -504,3 +504,52 @@ test("turn broker names the finished turn that owns a replayed handle", async ()
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+
+test("timed-out MCP invocation retires only that invocation and keeps the browser turn capability alive", async () => {
+  const root = mkdtempSync(join(tmpdir(), "cgw-broker-invoke-timeout-"));
+  const socketPath = defaultBrokerEndpoint(root);
+  const broker = TurnBroker.forSocket(socketPath);
+  try {
+    const token = await broker.register({
+      cwd: root,
+      roots: [root],
+      writableRoots: [root],
+      sandboxPolicy: { type: "dangerFullAccess" },
+      tools: [],
+    }, undefined, "long-browser-turn");
+    const activityId = "activity_timeoutcleanup1234567890";
+    const claimed = await callTurnBroker<{ bindingId: string }>(socketPath, {
+      method: "claim",
+      token,
+      activityId,
+    });
+
+    const invocation = callTurnBroker(socketPath, {
+      method: "invoke",
+      bindingId: claimed.bindingId,
+      wireName: "exec_command",
+      arguments: { cmd: "long-running-command" },
+    }, 25);
+    const [request] = await broker.nextToolBatch(token);
+    expect(request?.wireName).toBe("exec_command");
+    await expect(invocation).rejects.toThrow("timed out");
+
+    await Bun.sleep(25);
+    await callTurnBroker(socketPath, {
+      method: "activity_complete",
+      token,
+      activityId,
+    });
+
+    expect(broker.beginCompletionFence(token)).toBeDefined();
+    await expect(callTurnBroker<{ bindingId: string }>(socketPath, {
+      method: "claim",
+      token,
+      activityId: "activity_aftertimeout1234567890",
+    })).resolves.toMatchObject({ bindingId: claimed.bindingId });
+  } finally {
+    await broker.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
