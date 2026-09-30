@@ -558,7 +558,7 @@ export async function runChatGptMcpServer(options: {
     tool: CodexTool,
     payload: { arguments?: Record<string, unknown>; input?: string },
     signal?: AbortSignal,
-    optimizeCommandOutput = false,
+    commandOptimization?: { command?: string },
   ) => {
     const timeoutMs = chatGptMcpInvocationTimeout(bound);
     try {
@@ -569,8 +569,8 @@ export async function runChatGptMcpServer(options: {
         freeform: tool.freeform === true,
         ...(tool.freeform ? { input: payload.input ?? "" } : { arguments: payload.arguments ?? {} }),
       }, timeoutMs, signal);
-      const optimized = optimizeCommandOutput
-        ? await optimizeNativeCommandResult(response)
+      const optimized = commandOptimization
+        ? await optimizeNativeCommandResult(response, commandOptimization.command)
         : response;
       return asMcpResult(optimized);
     } catch (error) {
@@ -612,7 +612,7 @@ export async function runChatGptMcpServer(options: {
     freeform: boolean,
     payload: { arguments?: Record<string, unknown>; input?: string },
     signal?: AbortSignal,
-    optimizeCommandOutput = false,
+    commandOptimization?: { command?: string },
   ) => {
     const gateway = execGateway(bound);
     if (!gateway) {
@@ -620,7 +620,7 @@ export async function runChatGptMcpServer(options: {
     }
     return invoke(bindingId, bound, gateway, {
       input: execGatewayProgram(nestedToolName, freeform, payload, bound.tools.map(wireName)),
-    }, signal, optimizeCommandOutput);
+    }, signal, commandOptimization);
   };
 
   server.registerTool(
@@ -680,7 +680,14 @@ export async function runChatGptMcpServer(options: {
             }
           }
           const args = tool.name === "exec_command" ? execCommandArguments : shellCommandArguments;
-          return invoke(claimed.bindingId, bound, tool, { arguments: args }, extra.signal, true);
+          return invoke(
+            claimed.bindingId,
+            bound,
+            tool,
+            { arguments: args },
+            extra.signal,
+            { command: cmd },
+          );
         }
         const gateway = execGateway(bound);
         if (!gateway) {
@@ -724,7 +731,7 @@ export async function runChatGptMcpServer(options: {
           ...(max_output_tokens !== undefined ? { max_output_tokens } : {}),
         } };
         return tool
-          ? invoke(claimed.bindingId, bound, tool, payload, extra.signal, true)
+          ? invoke(claimed.bindingId, bound, tool, payload, extra.signal, {})
           : invokeNestedNative(claimed.bindingId, bound, "write_stdin", false, payload, extra.signal);
       },
     ),
