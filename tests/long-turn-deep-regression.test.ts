@@ -350,3 +350,48 @@ test("parallel identical timeouts stay ambiguous without poisoning unrelated wor
     await h.close();
   }
 });
+
+
+test("MCP timeout cleanup does not publish turn retirement to the browser owner", async () => {
+  const h = harness("retirement-signal");
+  try {
+    const token = await h.broker.register(h.environment, undefined, "deep-retirement-signal");
+    const activityId = "activity_deepretirement001";
+    const claimed = await claim(h.socketPath, token, activityId);
+
+    const retirementAbort = new AbortController();
+    const retirement = h.broker.waitForRetirement(token, retirementAbort.signal);
+
+    const invocation = callTurnBroker(h.socketPath, {
+      method: "invoke",
+      bindingId: claimed.bindingId,
+      activityId,
+      wireName: "exec_command",
+      arguments: { cmd: "slow-retirement-check" },
+    }, 20);
+    const [request] = await h.broker.nextToolBatch(token);
+    await expect(invocation).rejects.toThrow("timed out");
+    await Bun.sleep(20);
+    await completeActivity(h.socketPath, token, activityId, true);
+
+    const state = await Promise.race([
+      retirement.then(() => "retired", () => "aborted"),
+      Bun.sleep(80).then(() => "still-active"),
+    ]);
+    expect(state).toBe("still-active");
+
+    h.broker.completeTool(token, request!.callId, {
+      content: [{ type: "text", text: "late result while turn remains active" }],
+    });
+    const afterLateResult = await Promise.race([
+      retirement.then(() => "retired", () => "aborted"),
+      Bun.sleep(80).then(() => "still-active"),
+    ]);
+    expect(afterLateResult).toBe("still-active");
+
+    retirementAbort.abort();
+    await expect(retirement).rejects.toMatchObject({ name: "AbortError" });
+  } finally {
+    await h.close();
+  }
+});
