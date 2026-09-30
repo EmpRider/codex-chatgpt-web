@@ -15,3 +15,8 @@ test("managed Jev includes the router contract and attribution files", () => {
   assert.ok(JEV_FILES.includes("LICENSE"));
   assert.ok(JEV_FILES.includes("NOTICE"));
 });
+
+test("managed Jev requires an exact locked TypeSafe SDK version", () => {
+  const valid = { packages: { "node_modules/@typesafe-ai/sdk": { version: "0.6.0" } } };
+  assert.equal(valid.packages["node_modules/@typesafe-ai/sdk"].version, "0.6.0");
+});
