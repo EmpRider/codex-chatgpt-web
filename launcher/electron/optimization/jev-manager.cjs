@@ -18,6 +18,18 @@ function validateCommit(value) {
   return sha.toLowerCase();
 }
 
+function lockedTypeSafeSdkVersion(upstreamPackage, upstreamLock) {
+  const sdkRange = upstreamPackage?.dependencies?.["@typesafe-ai/sdk"];
+  if (typeof sdkRange !== "string" || !sdkRange.trim()) {
+    throw new Error("Jev upstream package does not declare @typesafe-ai/sdk");
+  }
+  const sdkVersion = upstreamLock?.packages?.["node_modules/@typesafe-ai/sdk"]?.version;
+  if (typeof sdkVersion !== "string" || !/^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(sdkVersion)) {
+    throw new Error("Jev package-lock does not pin an exact @typesafe-ai/sdk version");
+  }
+  return sdkVersion;
+}
+
 function runBun(runtimeExecutable, args, cwd, timeout = 120_000) {
   if (!runtimeExecutable) throw new Error("Managed Jev requires the launcher-owned Bun runtime");
   const result = spawnSync(runtimeExecutable, args, {
@@ -69,14 +81,7 @@ async function provisionJev({
       fetchFile("package-lock.json", commit)
         .then(payload => JSON.parse(decodeGitHubText(payload, "package-lock.json"))),
     ]);
-    const sdkRange = upstreamPackage?.dependencies?.["@typesafe-ai/sdk"];
-    if (typeof sdkRange !== "string" || !sdkRange.trim()) {
-      throw new Error("Jev upstream package does not declare @typesafe-ai/sdk");
-    }
-    const sdkVersion = upstreamLock?.packages?.["node_modules/@typesafe-ai/sdk"]?.version;
-    if (typeof sdkVersion !== "string" || !/^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(sdkVersion)) {
-      throw new Error("Jev package-lock does not pin an exact @typesafe-ai/sdk version");
-    }
+    const sdkVersion = lockedTypeSafeSdkVersion(upstreamPackage, upstreamLock);
 
     await Promise.all(JEV_FILES.map(async relative => {
       const content = decodeGitHubText(await fetchFile(relative, commit), relative);
@@ -120,6 +125,7 @@ async function provisionJev({
 
 module.exports = {
   JEV_FILES,
+  lockedTypeSafeSdkVersion,
   provisionJev,
   validateCommit,
 };
