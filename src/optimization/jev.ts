@@ -268,7 +268,7 @@ async function managedReassessment(
   apiKey: string,
   costWeight: number,
   baseUrl: string,
-  model: string,
+  jevModel: string,
   fetchImpl: typeof fetch,
   timeoutMs: number,
 ): Promise<JevLease | null> {
@@ -304,7 +304,7 @@ async function managedReassessment(
 
   const router = new module.Router(
     { typesafeKey: apiKey, costWeight },
-    { client: managedTypeSafeClient(fetchImpl, baseUrl, apiKey, model, timeoutMs) },
+    { client: managedTypeSafeClient(fetchImpl, baseUrl, apiKey, jevModel, timeoutMs) },
   );
   const result = await router.reassess({
     request: prompt,
@@ -538,6 +538,7 @@ async function reassessEffort(
     fetchImpl,
     settings.jev.baseUrl,
     apiKey,
+    settings.jev.model,
     {
       model: "jev-latest",
       state: {
