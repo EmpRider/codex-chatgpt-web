@@ -299,6 +299,11 @@ async function findAvailableHeadroomPort(preferredPort, { canBind = canBindLoopb
   throw new Error(`Headroom port ${preferred} is already in use. Change the Headroom port in Settings and try again.`);
 }
 
+function isHeadroomHealth(health) {
+  return health?.service === "headroom-proxy"
+    && (health?.ready === true || health?.status === "healthy");
+}
+
 function localGetJson(port, route) {
   return new Promise((resolve, reject) => {
     const req = require("node:http").get({
@@ -376,8 +381,7 @@ class HeadroomService {
 
     try {
       const existingHealth = await this.healthCheck(port, "/readyz");
-      if (existingHealth?.service === "headroom-proxy"
-        && (existingHealth?.ready === true || existingHealth?.status === "healthy")) {
+      if (isHeadroomHealth(existingHealth)) {
         this.ready = true;
         this.lastError = null;
         this.publishState();
@@ -447,7 +451,7 @@ class HeadroomService {
       if (child.exitCode !== null) throw new Error(`Headroom exited during startup: ${stderr.trim()}`);
       try {
         const health = await this.healthCheck(effectivePort, "/readyz");
-        if (health?.ready === true || health?.status === "healthy") {
+        if (isHeadroomHealth(health)) {
           this.ready = true;
           this.lastError = null;
           this.publishState();
@@ -475,6 +479,7 @@ module.exports = {
   headroomExtras,
   canBindLoopbackPort,
   findAvailableHeadroomPort,
+  isHeadroomHealth,
   uvAssetName,
   venvExecutables,
   verifyVersionCommand,
