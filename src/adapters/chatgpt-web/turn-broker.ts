@@ -39,6 +39,8 @@ interface PendingInvocation {
   request: BrokerToolRequest;
   resolve: (result: BrokerToolResult) => void;
   reject: (error: Error) => void;
+  signal?: AbortSignal;
+  onAbort?: () => void;
 }
 
 interface ToolWaiter {
@@ -467,6 +469,9 @@ export class TurnBroker implements TurnBrokerOwner {
       throw new Error(`tool call was completed before it was delivered: ${callId}`);
     }
     channel.invocations.delete(callId);
+    if (invocation.signal && invocation.onAbort) {
+      invocation.signal.removeEventListener("abort", invocation.onAbort);
+    }
     console.info(`[chatgpt-web] broker trace=${channel.traceId} completed call=${callId.slice(0, 17)} pending=${channel.invocations.size}`);
     invocation.resolve(result);
   }
@@ -1219,7 +1224,27 @@ export class TurnBroker implements TurnBrokerOwner {
       ...(request.freeform === true ? { input: request.input ?? "" } : { arguments: request.arguments ?? {} }),
     };
     return new Promise<BrokerToolResult>((resolveInvoke, rejectInvoke) => {
-      binding.channel.invocations.set(callId, { request: toolRequest, resolve: resolveInvoke, reject: rejectInvoke });
+      const invocation: PendingInvocation = {
+        request: toolRequest,
+        resolve: resolveInvoke,
+        reject: rejectInvoke,
+        ...(socketSignal ? { signal: socketSignal } : {}),
+      };
+      if (socketSignal) {
+        invocation.onAbort = () => {
+          if (binding.channel.invocations.get(callId) !== invocation) return;
+          binding.channel.invocations.delete(callId);
+          binding.channel.queuedCallIds = binding.channel.queuedCallIds.filter(id => id !== callId);
+          binding.channel.deliveredCallIds.delete(callId);
+          rejectInvoke(new DOMException("Codex Native invocation transport disconnected", "AbortError"));
+        };
+        socketSignal.addEventListener("abort", invocation.onAbort, { once: true });
+        if (socketSignal.aborted) {
+          invocation.onAbort();
+          return;
+        }
+      }
+      binding.channel.invocations.set(callId, invocation);
       binding.channel.queuedCallIds.push(callId);
       console.info(
         `[chatgpt-web] broker trace=${binding.channel.traceId} queued call=${callId.slice(0, 17)} tool=${wireName} waiters=${binding.channel.waiters.size}`,
@@ -1278,7 +1303,12 @@ export class TurnBroker implements TurnBrokerOwner {
       waiter.reject(error);
     }
     channel.waiters.clear();
-    for (const invocation of channel.invocations.values()) invocation.reject(error);
+    for (const invocation of channel.invocations.values()) {
+      if (invocation.signal && invocation.onAbort) {
+        invocation.signal.removeEventListener("abort", invocation.onAbort);
+      }
+      invocation.reject(error);
+    }
     channel.invocations.clear();
     channel.queuedCallIds = [];
     channel.deliveredCallIds.clear();
