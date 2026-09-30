@@ -112,6 +112,7 @@ async function callSystemOne(
   fetchImpl: typeof fetch,
   baseUrl: string,
   apiKey: string,
+  model: string,
   body: unknown,
   timeoutMs: number,
   signal?: AbortSignal,
@@ -124,7 +125,12 @@ async function callSystemOne(
       "content-type": "application/json",
       "user-agent": "codex-chatgpt-web-jev/1",
     },
-    body: JSON.stringify(body),
+    body: JSON.stringify({
+      ...(body && typeof body === "object" && !Array.isArray(body)
+        ? body as Record<string, unknown>
+        : {}),
+      model,
+    }),
     signal: signal
       ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)])
       : AbortSignal.timeout(timeoutMs),
@@ -137,11 +143,12 @@ function managedTypeSafeClient(
   fetchImpl: typeof fetch,
   baseUrl: string,
   apiKey: string,
+  model: string,
   timeoutMs: number,
 ) {
   return {
     systemOne: (body: unknown, options: { signal?: AbortSignal } = {}) =>
-      callSystemOne(fetchImpl, baseUrl, apiKey, body, timeoutMs, options.signal),
+      callSystemOne(fetchImpl, baseUrl, apiKey, model, body, timeoutMs, options.signal),
   };
 }
 
@@ -214,6 +221,7 @@ async function managedInitialDecision(
   apiKey: string,
   costWeight: number,
   baseUrl: string,
+  model: string,
   fetchImpl: typeof fetch,
   timeoutMs: number,
 ): Promise<{ route: ChatGptWebModelRoute; effort: ChatGptWebCodexEffort; lease: number; confidence: number | null } | null> {
@@ -224,7 +232,7 @@ async function managedInitialDecision(
   const { prompt, recentContext } = routingContext(parsed);
   const router = new module.Router(
     { typesafeKey: apiKey, costWeight },
-    { client: managedTypeSafeClient(fetchImpl, baseUrl, apiKey, timeoutMs) },
+    { client: managedTypeSafeClient(fetchImpl, baseUrl, apiKey, model, timeoutMs) },
   );
   const result = await router.route({
     prompt,
@@ -260,6 +268,7 @@ async function managedReassessment(
   apiKey: string,
   costWeight: number,
   baseUrl: string,
+  model: string,
   fetchImpl: typeof fetch,
   timeoutMs: number,
 ): Promise<JevLease | null> {
@@ -295,7 +304,7 @@ async function managedReassessment(
 
   const router = new module.Router(
     { typesafeKey: apiKey, costWeight },
-    { client: managedTypeSafeClient(fetchImpl, baseUrl, apiKey, timeoutMs) },
+    { client: managedTypeSafeClient(fetchImpl, baseUrl, apiKey, model, timeoutMs) },
   );
   const result = await router.reassess({
     request: prompt,
@@ -500,6 +509,7 @@ async function reassessEffort(
       apiKey,
       settings.jev.costWeight,
       settings.jev.baseUrl,
+      settings.jev.model,
       fetchImpl,
       settings.jev.decisionTimeoutMs,
     );
@@ -633,6 +643,7 @@ export async function optimizeRouteWithJev(
       apiKey,
       settings.jev.costWeight,
       settings.jev.baseUrl,
+      settings.jev.model,
       fetchImpl,
       settings.jev.decisionTimeoutMs,
     );
@@ -663,6 +674,7 @@ export async function optimizeRouteWithJev(
       fetchImpl,
       settings.jev.baseUrl,
       apiKey,
+      settings.jev.model,
       requestBody(parsed, candidates),
       settings.jev.decisionTimeoutMs,
     );
