@@ -1919,10 +1919,16 @@ function OptimizationSettingsPanel({
   useEffect(() => setOptimization(snapshot.optimization), [snapshot.optimization]);
   useEffect(() => {
     let active = true;
+    const unsubscribe = api!.onOptimizationChanged(value => {
+      if (active) setOptimization(value);
+    });
     void api!.optimizationSnapshot()
       .then(value => { if (active) setOptimization(value); })
       .catch(cause => { if (active) setError(messageOf(cause)); });
-    return () => { active = false; };
+    return () => {
+      active = false;
+      unsubscribe();
+    };
   }, [setError]);
 
   const patch = async (value: Partial<OptimizationSettings>) => {
