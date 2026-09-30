@@ -521,15 +521,17 @@ export async function runChatGptMcpServer(options: {
     turnToken: string,
     activityId: string,
     activityAbandoned = false,
+    requestSignal?: AbortSignal,
   ): Promise<void> => {
     let firstError: unknown;
     for (let attempt = 0; attempt < 2; attempt += 1) {
       try {
+        const abandonedAtSend = mcpActivityAbandonedAtSettlement(activityAbandoned, requestSignal);
         await callTurnBroker(options.brokerSocketPath, {
           method: "activity_complete",
           token: turnToken,
           activityId,
-          ...(activityAbandoned ? { activityAbandoned: true } : {}),
+          ...(abandonedAtSend ? { activityAbandoned: true } : {}),
         }, 5_000);
         return;
       } catch (error) {
@@ -563,7 +565,12 @@ export async function runChatGptMcpServer(options: {
       // The broker's terminal fence treats even a fully local inventory lookup as live MCP work.
       // Settle the lease without the request AbortSignal: cancellation must not strand activity
       // and silently prevent every later completion candidate from committing.
-      await settleTurnActivity(turnToken, claimed.activityId, claimed.activityAbandoned);
+      await settleTurnActivity(
+        turnToken,
+        claimed.activityId,
+        claimed.activityAbandoned,
+        extra.signal,
+      );
     }
   };
 
