@@ -1917,8 +1917,10 @@ function OptimizationSettingsPanel({
   const [busy, setBusy] = useState(false);
   const [jevKey, setJevKey] = useState("");
   const [jevBaseUrl, setJevBaseUrl] = useState(snapshot.optimization.settings.jev.baseUrl);
+  const [jevModel, setJevModel] = useState(snapshot.optimization.settings.jev.model);
   useEffect(() => setOptimization(snapshot.optimization), [snapshot.optimization]);
   useEffect(() => setJevBaseUrl(optimization.settings.jev.baseUrl), [optimization.settings.jev.baseUrl]);
+  useEffect(() => setJevModel(optimization.settings.jev.model), [optimization.settings.jev.model]);
   useEffect(() => {
     let active = true;
     const unsubscribe = api!.onOptimizationChanged(value => {
@@ -2163,6 +2165,26 @@ function OptimizationSettingsPanel({
             disabled={busy}
             onChange={(enabled) => void updateFeature("jev", { enabled })}
           />
+        </SettingRow>
+        <SettingRow
+          body="TypeSafe / Jev model sent with System One requests. For example: jev-latest or jev-1.13."
+          label="Jev model"
+        >
+          <div className="optimization-secret">
+            <input
+              aria-label="Jev model"
+              autoComplete="off"
+              disabled={busy}
+              onChange={(event) => setJevModel(event.target.value)}
+              placeholder="jev-latest"
+              type="text"
+              value={jevModel}
+            />
+            <SecondaryButton
+              disabled={busy || !jevModel.trim()}
+              onClick={() => void updateFeature("jev", { model: jevModel.trim() })}
+            >Save</SecondaryButton>
+          </div>
         </SettingRow>
         <SettingRow
           body="Base URL for TypeSafe System One. Remote endpoints must use HTTPS; localhost HTTP endpoints are allowed. /v1/systemone is appended automatically when omitted."
