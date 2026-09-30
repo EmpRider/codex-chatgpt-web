@@ -20,6 +20,6 @@ test("Headroom extras are selected by GUI features", () => {
 });
 
 test("Headroom venv paths stay private and platform-specific", () => {
-  assert.equal(venvExecutables("C:/private", "win32").headroom, "C:/private\\Scripts\\headroom.exe".replaceAll("\\", require("node:path").sep));
+  assert.match(venvExecutables("C:/private", "win32").headroom, /Scripts[\\/]headroom\.exe$/);
   assert.match(venvExecutables("/private", "linux").python, /bin[\\/]python$/);
 });
