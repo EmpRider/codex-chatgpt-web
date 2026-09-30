@@ -4,6 +4,7 @@ const {
   HeadroomService,
   findAvailableHeadroomPort,
   headroomExtras,
+  isHeadroomHealth,
   uvAssetName,
   venvExecutables,
   verifyVersionCommand,
@@ -66,6 +67,13 @@ test("Headroom tells the user to change the configured port when it is occupied"
     () => findAvailableHeadroomPort(8787, { canBind: async () => false }),
     /Headroom port 8787 is already in use\. Change the Headroom port in Settings and try again\./,
   );
+});
+
+test("Headroom health identity rejects generic readiness payloads", () => {
+  assert.equal(isHeadroomHealth({ ready: true }), false);
+  assert.equal(isHeadroomHealth({ service: "another-service", ready: true }), false);
+  assert.equal(isHeadroomHealth({ service: "headroom-proxy", ready: true }), true);
+  assert.equal(isHeadroomHealth({ service: "headroom-proxy", status: "healthy" }), true);
 });
 
 test("Headroom reuses an already healthy service on the configured port", async () => {
