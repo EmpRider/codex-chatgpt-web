@@ -63,12 +63,19 @@ async function provisionJev({
   fs.rmSync(staging, { recursive: true, force: true });
   fs.mkdirSync(path.join(staging, "src"), { recursive: true, mode: 0o700 });
   try {
-    const upstreamPackage = JSON.parse(
-      decodeGitHubText(await fetchFile("package.json", commit), "package.json"),
-    );
+    const [upstreamPackage, upstreamLock] = await Promise.all([
+      fetchFile("package.json", commit)
+        .then(payload => JSON.parse(decodeGitHubText(payload, "package.json"))),
+      fetchFile("package-lock.json", commit)
+        .then(payload => JSON.parse(decodeGitHubText(payload, "package-lock.json"))),
+    ]);
     const sdkRange = upstreamPackage?.dependencies?.["@typesafe-ai/sdk"];
     if (typeof sdkRange !== "string" || !sdkRange.trim()) {
       throw new Error("Jev upstream package does not declare @typesafe-ai/sdk");
+    }
+    const sdkVersion = upstreamLock?.packages?.["node_modules/@typesafe-ai/sdk"]?.version;
+    if (typeof sdkVersion !== "string" || !/^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(sdkVersion)) {
+      throw new Error("Jev package-lock does not pin an exact @typesafe-ai/sdk version");
     }
 
     await Promise.all(JEV_FILES.map(async relative => {
@@ -83,7 +90,7 @@ async function provisionJev({
       name: "codex-web-gpt-managed-jev",
       private: true,
       type: "module",
-      dependencies: { "@typesafe-ai/sdk": sdkRange },
+      dependencies: { "@typesafe-ai/sdk": sdkVersion },
     }, null, 2)}\n`);
 
     runBun(runtimeExecutable, ["install", "--production"], staging);
@@ -96,6 +103,7 @@ async function provisionJev({
     writePrivateFileAtomic(path.join(staging, "source.json"), `${JSON.stringify({
       repository: "Loule95450/jev-free-router",
       commit,
+      sdkVersion,
       installedAt: new Date().toISOString(),
     }, null, 2)}\n`);
     writePrivateFileAtomic(path.join(staging, ".ready"), "ok\n");
