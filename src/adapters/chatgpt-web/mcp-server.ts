@@ -614,14 +614,14 @@ export async function runChatGptMcpServer(options: {
       if (error instanceof TurnBrokerTimeoutError) {
         const toolName = wireName(tool);
         console.error(
-          `[chatgpt-web-mcp] ${toolName} did not complete within ${timeoutMs}ms; retired its turn binding`,
+          `[chatgpt-web-mcp] ${toolName} did not complete within ${timeoutMs}ms; abandoned only that invocation`,
         );
         return result({
           code: "codex_tool_timeout",
           tool: toolName,
           timeout_ms: timeoutMs,
           retryable: false,
-          message: `Codex tool ${toolName} did not complete before the MCP transport deadline. That tool invocation was retired, but the current ChatGPT turn remains active.`,
+          message: `Codex tool ${toolName} did not complete before the MCP transport deadline. Its native outcome is unknown, so do not automatically replay the identical operation. The current ChatGPT turn remains active and may continue with other work.`,
         }, true);
       }
       throw error;
