@@ -104,7 +104,7 @@ async function provisionJev({
       dependencies: { "@typesafe-ai/sdk": sdkVersion },
     }, null, 2)}\n`);
 
-    runBun(runtimeExecutable, ["install", "--production"], staging);
+    runBun(runtimeExecutable, ["install", "--production", "--ignore-scripts"], staging);
     runBun(runtimeExecutable, [
       "-e",
       "import('./src/router.mjs').then(m=>{if(typeof m.Router!=='function')process.exit(2)})",
