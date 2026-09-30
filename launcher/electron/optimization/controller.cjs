@@ -296,6 +296,8 @@ function createOptimizationController({ coreHome, stateStore, logger, secretStor
     const installed = versions();
     const record = installedRecord(installed, "headroom");
     if (!record?.executable
+      || record.codeEnabled !== currentSettings.headroom.codeEnabled
+      || record.mlEnabled !== currentSettings.headroom.mlEnabled
       || !pathInside(paths.runtimeRoot, record.path)
       || !pathInside(paths.runtimeRoot, record.executable)
       || !fs.statSync(record.executable, { throwIfNoEntry: false })?.isFile()) {
@@ -385,7 +387,10 @@ function createOptimizationController({ coreHome, stateStore, logger, secretStor
     await Promise.all(toolIds().map(async id => {
       const definition = TOOL_MANIFEST[id];
       const record = installedRecord(installed, id) || {};
-      const healthyBeforeCheck = localComponentHealthy(id, record, paths.runtimeRoot);
+      const healthyBeforeCheck = localComponentHealthy(id, record, paths.runtimeRoot)
+        && (id !== "headroom"
+          || (record.codeEnabled === currentSettings.headroom.codeEnabled
+            && record.mlEnabled === currentSettings.headroom.mlEnabled));
       try {
         const availableVersion = await remoteVersion(definition);
         const plan = resolveUpdatePlan({
