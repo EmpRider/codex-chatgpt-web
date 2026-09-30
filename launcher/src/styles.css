@@ -2806,3 +2806,32 @@ code {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+.optimization-number {
+  width: 92px;
+  height: 30px;
+  padding: 0 8px;
+  border: 1px solid var(--color-border-heavy);
+  border-radius: var(--radius-sm);
+  background: var(--color-background-control);
+  color: var(--color-text-primary);
+  font: inherit;
+  text-align: right;
+}
+
+.optimization-secret {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.optimization-secret input {
+  width: min(240px, 36vw);
+  height: 30px;
+  padding: 0 9px;
+  border: 1px solid var(--color-border-heavy);
+  border-radius: var(--radius-sm);
+  background: var(--color-background-control);
+  color: var(--color-text-primary);
+  font: inherit;
+}
