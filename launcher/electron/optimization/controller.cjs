@@ -75,8 +75,14 @@ function installedRecord(versions, id) {
   return record && typeof record === "object" ? record : null;
 }
 
-function localComponentHealthy(id, record) {
-  if (!record?.version) return false;
+function pathInside(root, candidate) {
+  if (typeof candidate !== "string" || !path.isAbsolute(candidate)) return false;
+  const rel = path.relative(path.resolve(root), path.resolve(candidate));
+  return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
+}
+
+function localComponentHealthy(id, record, runtimeRoot) {
+  if (!record?.version || !pathInside(runtimeRoot, record.path)) return false;
   try {
     if (TOOL_MANIFEST[id]?.kind === "skill") {
       const skill = typeof record.path === "string" ? path.join(record.path, "SKILL.md") : "";
@@ -86,12 +92,14 @@ function localComponentHealthy(id, record) {
     }
     if (id === "rtk") {
       if (typeof record.executable !== "string"
+        || !pathInside(runtimeRoot, record.executable)
         || !fs.statSync(record.executable, { throwIfNoEntry: false })?.isFile()) return false;
       verifyRtkBinary(record.executable, record.version);
       return true;
     }
     if (id === "headroom") {
       if (typeof record.executable !== "string"
+        || !pathInside(runtimeRoot, record.executable)
         || !fs.statSync(record.executable, { throwIfNoEntry: false })?.isFile()) return false;
       const result = spawnSync(record.executable, ["--version"], {
         encoding: "utf8", timeout: 15_000, windowsHide: true,
@@ -100,7 +108,7 @@ function localComponentHealthy(id, record) {
       return `${result.stdout || ""}\n${result.stderr || ""}`.includes(record.version);
     }
     if (id === "jev") {
-      if (typeof record.path !== "string") return false;
+      if (typeof record.path !== "string" || !pathInside(runtimeRoot, record.path)) return false;
       return fs.statSync(path.join(record.path, ".ready"), { throwIfNoEntry: false })?.isFile() === true
         && fs.statSync(path.join(record.path, "src", "router.mjs"), { throwIfNoEntry: false })?.isFile() === true
         && fs.statSync(path.join(record.path, "node_modules", "@typesafe-ai", "sdk"), { throwIfNoEntry: false })?.isDirectory() === true;
@@ -287,7 +295,10 @@ function createOptimizationController({ coreHome, stateStore, logger, secretStor
     }
     const installed = versions();
     const record = installedRecord(installed, "headroom");
-    if (!record?.executable || !fs.statSync(record.executable, { throwIfNoEntry: false })?.isFile()) {
+    if (!record?.executable
+      || !pathInside(paths.runtimeRoot, record.path)
+      || !pathInside(paths.runtimeRoot, record.executable)
+      || !fs.statSync(record.executable, { throwIfNoEntry: false })?.isFile()) {
       return snapshot();
     }
     try {
@@ -374,7 +385,7 @@ function createOptimizationController({ coreHome, stateStore, logger, secretStor
     await Promise.all(toolIds().map(async id => {
       const definition = TOOL_MANIFEST[id];
       const record = installedRecord(installed, id) || {};
-      const healthyBeforeCheck = localComponentHealthy(id, record);
+      const healthyBeforeCheck = localComponentHealthy(id, record, paths.runtimeRoot);
       try {
         const availableVersion = await remoteVersion(definition);
         const plan = resolveUpdatePlan({
@@ -522,6 +533,7 @@ function createOptimizationController({ coreHome, stateStore, logger, secretStor
 module.exports = {
   createOptimizationController,
   localComponentHealthy,
+  pathInside,
   mergeSettings,
   requestJson,
 };
