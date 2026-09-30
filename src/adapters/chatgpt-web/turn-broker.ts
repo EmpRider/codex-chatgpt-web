@@ -313,6 +313,7 @@ export class TurnBroker implements TurnBrokerOwner {
   private server?: Server;
   private startPromise?: Promise<void>;
   private socketIdentity?: { dev: number; ino: number };
+  private readonly transportSockets = new Set<Socket>();
 
   private constructor(readonly socketPath: string) {}
 
@@ -838,6 +839,12 @@ export class TurnBroker implements TurnBrokerOwner {
     this.server = undefined;
     this.startPromise = undefined;
     if (brokers.get(this.socketPath) === this) brokers.delete(this.socketPath);
+    // server.close() waits for active named-pipe/socket connections. A timed-out MCP client can
+    // detach while Windows still keeps the server-side pipe alive, which otherwise makes broker
+    // shutdown (and process exit) hang indefinitely. These sockets are owned by this broker, so
+    // terminate them before waiting for the listener to close.
+    for (const socket of this.transportSockets) socket.destroy();
+    this.transportSockets.clear();
     if (server?.listening) {
       await new Promise<void>((resolveClose, rejectClose) => server.close(error => {
         if (!error || (error as NodeJS.ErrnoException).code === "ERR_SERVER_NOT_RUNNING") resolveClose();
@@ -873,7 +880,11 @@ export class TurnBroker implements TurnBrokerOwner {
         mkdirSync(dirname(this.socketPath), { recursive: true, mode: 0o700 });
       }
       const listen = () => {
-        const server = createServer(socket => this.handleSocket(socket));
+        const server = createServer(socket => {
+          this.transportSockets.add(socket);
+          socket.once("close", () => this.transportSockets.delete(socket));
+          this.handleSocket(socket);
+        });
         this.server = server;
         server.once("error", rejectStart);
         server.on("error", error => {
