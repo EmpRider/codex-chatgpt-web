@@ -37,6 +37,7 @@ const { RuntimeSupervisor } = require("./runtime-supervisor.cjs");
 const { DEVELOPMENT_PROFILE, resolveLauncherProfile } = require("./profile.cjs");
 const { runtimeBundlePaths } = require("./runtime-command.cjs");
 const { createUpdateController } = require("./update.cjs");
+const { createOptimizationController } = require("./optimization/controller.cjs");
 const {
   createStateStore,
   nextSessionRefreshReminderAt,
@@ -107,6 +108,7 @@ let lastOperation = null;
 let catalogVerificationTimer = null;
 let catalogVerificationInFlight = false;
 let updateController = null;
+let optimizationController = null;
 let limitsController = null;
 
 function findFreePort() {
@@ -561,7 +563,23 @@ function registerIpc({ logger, stateStore }) {
     smokePassed: smokePassedThisSession || smokePassedForCurrentVersion(stateStore.read()),
     operation: lastOperation,
     update: updateController?.getState() ?? { status: "disabled" },
+    optimization: optimizationController?.snapshot() ?? null,
   }));
+
+  handle("launcher:optimization-snapshot", () => {
+    if (!optimizationController) throw new Error("Optimization manager is not initialized");
+    return optimizationController.snapshot();
+  });
+  handle("launcher:optimization-settings", (_event, patch) => {
+    if (!optimizationController) throw new Error("Optimization manager is not initialized");
+    const result = optimizationController.setSettings(patch);
+    send("launcher:state-changed", result.state);
+    return result;
+  });
+  handle("launcher:optimization-check-updates", async () => {
+    if (!optimizationController) throw new Error("Optimization manager is not initialized");
+    return optimizationController.checkUpdates({ force: true });
+  });
 
   handle("launcher:set-language", (_event, language) => {
     const state = stateStore.update({ language: validateLanguage(language) });
@@ -1137,6 +1155,11 @@ async function start() {
     filePath: path.join(app.getPath("logs"), "launcher.jsonl"),
     publish: (record) => send("launcher:log", record),
   });
+  optimizationController = createOptimizationController({
+    coreHome: CORE_HOME,
+    stateStore,
+    logger,
+  });
   const startHidden = process.argv.includes("--hidden") && stateStore.read().onboardingComplete;
   nativeTheme.themeSource = "system";
   mainWindow = createWindow({
@@ -1232,7 +1255,14 @@ async function start() {
     });
   }
   await loadRenderer(mainWindow);
-  if (!launcherSmokeTest) void updateController.checkOnce();
+  if (!launcherSmokeTest) {
+    void updateController.checkOnce();
+    void optimizationController.checkUpdates().catch((error) => {
+      logger.warn("optimization.startup_update_check_failed", {
+        message: error instanceof Error ? error.message : String(error),
+      });
+    });
+  }
   if (launcherSmokeTest) {
     const smokeRuntimeRoot = runtimeRootProvider();
     if (app.isPackaged && !smokeRuntimeRoot) {
