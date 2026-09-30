@@ -6,6 +6,64 @@ export type LauncherProfile = "production" | "development";
 export type BrowserInteractionMode = "automatic" | "manual";
 export type Surface = "browser" | "setup" | "mcp" | "activity" | "limits" | "settings";
 
+export type OptimizationLevel = "off" | "lite" | "full" | "ultra";
+
+export interface OptimizationSettings {
+  autoUpdate: boolean;
+  adhd: {
+    enabled: boolean;
+    activationMode: "always" | "on-demand";
+    restoreAfterCompaction: boolean;
+  };
+  rtk: {
+    enabled: boolean;
+    ultraCompact: boolean;
+  };
+  headroom: {
+    enabled: boolean;
+    codeEnabled: boolean;
+    mlEnabled: boolean;
+    minTokens: number;
+    protectRecentTurns: number;
+    port: number;
+  };
+  caveman: {
+    enabled: boolean;
+    level: OptimizationLevel;
+    autoClarity: boolean;
+  };
+  ponytail: {
+    enabled: boolean;
+    level: OptimizationLevel;
+    applyToSubagents: boolean;
+  };
+  jev: {
+    enabled: boolean;
+    costWeight: number;
+    adaptiveThinking: boolean;
+    reassessAfterToolFailure: boolean;
+    decisionTimeoutMs: number;
+  };
+}
+
+export interface OptimizationComponentStatus {
+  id: string;
+  name: string;
+  kind: "skill" | "binary" | "service" | "module";
+  enabled: boolean;
+  installedVersion: string | null;
+  availableVersion: string | null;
+  status: string;
+  lastError: string | null;
+}
+
+export interface OptimizationSnapshot {
+  settings: OptimizationSettings;
+  root: string;
+  lastUpdateCheckAt: string | null;
+  components: OptimizationComponentStatus[];
+}
+
 export interface LauncherState {
   version: 1;
   language: Language | null;
@@ -33,6 +91,8 @@ export interface LauncherState {
   codexRestartRequired?: boolean;
   mcpGuideStep: number;
   sessionRefreshReminderAt: string | null;
+  optimization: OptimizationSettings;
+  optimizationLastUpdateCheckAt: string | null;
 }
 
 export interface BrowserState {
@@ -124,6 +184,7 @@ export interface LauncherSnapshot {
   smokePassed: boolean;
   operation: OperationState | null;
   update: UpdateState;
+  optimization: OptimizationSnapshot;
 }
 
 export interface LauncherApi {
@@ -170,6 +231,12 @@ export interface LauncherApi {
   setFreshConversationPerTurn(enabled: boolean): Promise<LauncherState>;
   setUseSavedChats(enabled: boolean): Promise<LauncherState>;
   setZeroRiskPro(enabled: boolean): Promise<LauncherState>;
+  optimizationSnapshot(): Promise<OptimizationSnapshot>;
+  setOptimizationSettings(patch: Partial<OptimizationSettings>): Promise<{
+    state: LauncherState;
+    optimization: OptimizationSnapshot;
+  }>;
+  checkOptimizationUpdates(): Promise<OptimizationSnapshot>;
   setBrowserInteractionMode(mode: BrowserInteractionMode): Promise<{
     state: LauncherState;
     credentialsRequired: boolean;
