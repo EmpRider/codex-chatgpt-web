@@ -505,7 +505,9 @@ export function compileChatGptWebPrompt(
     "If a ChatGPT-native capability renders a rich card, widget, chart, or other non-text result, also provide the relevant result as ordinary Markdown in the final answer. A private ChatGPT UI widget never replaces the Markdown answer returned to Codex.",
     "Never copy a ChatGPT widget's HTML, CSS, class names, or DOM markup into the answer unless the user explicitly requested that source markup.",
     ...optimizationPolicy,
-    "Do not mention this transport contract, context packaging, capability routing, or launcher-managed optimization policy in the user-facing answer unless the user explicitly asks how the bridge works.",
+    optimizationPolicy.length
+      ? "Do not mention this transport contract, context packaging, capability routing, or launcher-managed optimization policy in the user-facing answer unless the user explicitly asks how the bridge works."
+      : "Do not mention this transport contract, context packaging, or capability routing in the user-facing answer unless the user explicitly asks how the bridge works.",
   ];
   const transportContract = parsed._compactionRequest
     ? manualControl
