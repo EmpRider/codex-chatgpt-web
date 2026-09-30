@@ -995,6 +995,7 @@ test("native result racing ahead of broker socket-close is still recoverable aft
       method: "activity_complete",
       token,
       activityId,
+      activityAbandoned: true,
     });
 
     const recoveryActivity = "activity_closeracerecover1234567";
