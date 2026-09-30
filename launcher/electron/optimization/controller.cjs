@@ -342,7 +342,19 @@ function createOptimizationController({ coreHome, stateStore, logger, secretStor
 
   async function provisionRtk(version) {
     const release = await requestJson("https://api.github.com/repos/rtk-ai/rtk/releases/latest");
-    const result = await installRtkRelease({ root, release });
+    let licenseContent = null;
+    try {
+      licenseContent = decodeGitHubText(
+        await githubFile(TOOL_MANIFEST.rtk, "LICENSE", `v${version}`),
+        "LICENSE",
+      );
+    } catch (error) {
+      logger?.warn("optimization.license_fetch_failed", {
+        id: "rtk",
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+    const result = await installRtkRelease({ root, release, licenseContent });
     if (result.version !== version) {
       throw new Error(`RTK release changed during provisioning (${version} -> ${result.version})`);
     }
