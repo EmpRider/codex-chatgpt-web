@@ -1916,7 +1916,9 @@ function OptimizationSettingsPanel({
   const [optimization, setOptimization] = useState<OptimizationSnapshot>(snapshot.optimization);
   const [busy, setBusy] = useState(false);
   const [jevKey, setJevKey] = useState("");
+  const [jevBaseUrl, setJevBaseUrl] = useState(snapshot.optimization.settings.jev.baseUrl);
   useEffect(() => setOptimization(snapshot.optimization), [snapshot.optimization]);
+  useEffect(() => setJevBaseUrl(optimization.settings.jev.baseUrl), [optimization.settings.jev.baseUrl]);
   useEffect(() => {
     let active = true;
     const unsubscribe = api!.onOptimizationChanged(value => {
@@ -2107,8 +2109,8 @@ function OptimizationSettingsPanel({
           />
         </SettingRow>
         <SettingRow
-          body="Loopback port used only by the launcher-owned Headroom service."
-          label="Headroom local port"
+          body="Preferred loopback port for the launcher-owned Headroom service. If another app such as 9Router already uses it, Codex Web GPT automatically selects the next free local port."
+          label="Headroom preferred port"
         >
           <input
             className="optimization-number"
@@ -2161,6 +2163,26 @@ function OptimizationSettingsPanel({
             disabled={busy}
             onChange={(enabled) => void updateFeature("jev", { enabled })}
           />
+        </SettingRow>
+        <SettingRow
+          body="Base URL for TypeSafe System One. Remote endpoints must use HTTPS; localhost HTTP endpoints are allowed. /v1/systemone is appended automatically when omitted."
+          label="Jev / TypeSafe base URL"
+        >
+          <div className="optimization-secret">
+            <input
+              aria-label="Jev / TypeSafe base URL"
+              autoComplete="off"
+              disabled={busy}
+              onChange={(event) => setJevBaseUrl(event.target.value)}
+              placeholder="https://api.typesafe.ai"
+              type="url"
+              value={jevBaseUrl}
+            />
+            <SecondaryButton
+              disabled={busy || !jevBaseUrl.trim()}
+              onClick={() => void updateFeature("jev", { baseUrl: jevBaseUrl.trim() })}
+            >Save</SecondaryButton>
+          </div>
         </SettingRow>
         <SettingRow
           body={optimization.secrets.jevApiKeyConfigured
@@ -2277,6 +2299,11 @@ function OptimizationSettingsPanel({
               <strong>{component.name}</strong>
               <small title={component.lastError ?? undefined}>
                 {component.status}
+                {component.id === "headroom" && component.runtimePort
+                  ? ` · port ${component.runtimePort}${component.portConflict && component.preferredPort
+                    ? ` (preferred ${component.preferredPort} busy)`
+                    : ""}`
+                  : ""}
                 {component.lastError ? ` · ${component.lastError.slice(0, 120)}` : ""}
               </small>
             </span>
