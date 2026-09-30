@@ -18,6 +18,7 @@ export async function optimizeNativeCommandResult(
   result: BrokerToolResult,
   command?: string,
 ): Promise<BrokerToolResult> {
+  if (hasCommandSessionMetadata(result)) return result;
   const rtk = await compressCommandResultWithRtk(result, undefined, command);
   return compressCommandResultWithHeadroom(rtk);
 }
