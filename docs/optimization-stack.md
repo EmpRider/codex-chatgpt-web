@@ -52,10 +52,13 @@ With **Automatic optimizer updates** enabled (the default), every launcher start
 
 1. starts a valid last-known-good local Headroom runtime immediately when enabled;
 2. checks the configured upstream source for each managed component;
-3. downloads updates into staging/private version directories;
-4. verifies checksums, executable versions, package health, or skill content as applicable;
-5. activates only a verified installation;
-6. keeps the previous working version if an update or health check fails.
+3. lazily installs missing components only when they are enabled, while still updating already-installed cached components;
+4. downloads updates into staging/private version directories;
+5. verifies checksums, executable versions, package health, or skill content as applicable;
+6. activates only a verified installation;
+7. keeps the previous working version if an update or health check fails.
+
+Turning a missing component **ON** from Settings immediately runs a targeted reconcile for that component, so the user does not need to restart the launcher or run a setup command.
 
 Use **Check & update** in Settings to run the same process manually.
 
