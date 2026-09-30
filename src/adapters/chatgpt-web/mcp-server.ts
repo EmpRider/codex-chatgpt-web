@@ -127,6 +127,21 @@ function exactTool(environment: ChatGptTurnEnvironment, name: string): CodexTool
   return environment.tools.find(tool => !tool.namespace && tool.name === name);
 }
 
+export function nativeCommandOptimization(
+  tool: Pick<CodexTool, "name" | "namespace">,
+  args: Record<string, unknown>,
+): { command?: string } | undefined {
+  if (tool.namespace) return undefined;
+  if (tool.name === "exec_command" && typeof args.cmd === "string") {
+    return { command: args.cmd };
+  }
+  if (tool.name === "shell_command" && typeof args.command === "string") {
+    return { command: args.command };
+  }
+  if (tool.name === "write_stdin") return {};
+  return undefined;
+}
+
 function gatewayToolNameIsValid(name: string): boolean {
   return /^[A-Za-z0-9_$]+$/.test(name);
 }
@@ -1029,7 +1044,14 @@ export async function runChatGptMcpServer(options: {
         if (input !== undefined) throw new Error(`Function Codex tool ${wire_name} does not accept freeform input`);
         const invocationArguments = args ?? {};
         assertBrowserToolArguments(tool, invocationArguments);
-        return invoke(claimed.bindingId, bound, tool, { arguments: invocationArguments }, extra.signal);
+        return invoke(
+          claimed.bindingId,
+          bound,
+          tool,
+          { arguments: invocationArguments },
+          extra.signal,
+          nativeCommandOptimization(tool, invocationArguments),
+        );
       });
     },
   );
