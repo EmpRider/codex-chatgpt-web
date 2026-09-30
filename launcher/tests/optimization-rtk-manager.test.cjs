@@ -1,7 +1,11 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
 const {
   checksumFor,
+  installRtkRelease,
   rtkAssetName,
   verifyRtkBinary,
 } = require("../electron/optimization/rtk-manager.cjs");
@@ -27,4 +31,44 @@ test("RTK binary health check requires the expected version", () => {
   assert.throws(() => verifyRtkBinary("rtk", "0.50.0", wrong), /unexpected version/);
   const failed = () => ({ status: 2, stdout: "", stderr: "boom" });
   assert.throws(() => verifyRtkBinary("rtk", "0.50.0", failed), /health check failed/);
+});
+
+test("RTK installer retains verified source and license metadata", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rtk-manager-test-"));
+  const assetName = "rtk-x86_64-pc-windows-msvc.zip";
+  const sum = "b".repeat(64);
+  try {
+    const result = await installRtkRelease({
+      root,
+      release: {
+        tag_name: "v0.50.0",
+        assets: [
+          { name: assetName, browser_download_url: "https://example.invalid/rtk.zip" },
+          { name: "checksums.txt", browser_download_url: "https://example.invalid/checksums.txt" },
+        ],
+      },
+      platform: "win32",
+      arch: "x64",
+      licenseContent: "Apache License",
+      dependencies: {
+        downloadFile: async (_url, destination) => fs.writeFileSync(destination, "archive"),
+        downloadText: async () => `${sum}  ${assetName}\n`,
+        sha256: () => sum,
+        extractArchive: (_archive, destination) => {
+          fs.mkdirSync(destination, { recursive: true });
+          fs.writeFileSync(path.join(destination, "rtk.exe"), "binary");
+        },
+        verifyBinary: () => "rtk 0.50.0",
+      },
+    });
+    assert.equal(result.version, "0.50.0");
+    assert.equal(fs.readFileSync(path.join(result.path, "LICENSE"), "utf8"), "Apache License\n");
+    assert.match(fs.readFileSync(path.join(result.path, "checksums.txt"), "utf8"), /rtk-x86_64-pc-windows-msvc\.zip/);
+    const source = JSON.parse(fs.readFileSync(path.join(result.path, "source.json"), "utf8"));
+    assert.equal(source.repository, "rtk-ai/rtk");
+    assert.equal(source.release, "v0.50.0");
+    assert.equal(source.sha256, sum);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });
