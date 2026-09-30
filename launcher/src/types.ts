@@ -16,6 +16,7 @@ export interface OptimizationSettings {
   };
   rtk: {
     enabled: boolean;
+    ultraCompact: boolean;
   };
   headroom: {
     enabled: boolean;
