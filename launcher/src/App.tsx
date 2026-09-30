@@ -2000,6 +2000,22 @@ function OptimizationSettingsPanel({
           />
         </SettingRow>
         <SettingRow
+          body="Always applies the ADHD policy, or only when the task invokes i-have-adhd explicitly."
+          label="ADHD activation"
+        >
+          <select
+            className="optimization-select"
+            disabled={busy || !optimization.settings.adhd.enabled}
+            onChange={(event) => void updateFeature("adhd", {
+              activationMode: event.target.value as "always" | "on-demand",
+            })}
+            value={optimization.settings.adhd.activationMode}
+          >
+            <option value="always">Always on</option>
+            <option value="on-demand">On demand</option>
+          </select>
+        </SettingRow>
+        <SettingRow
           body="Compress supported command and tool output before it is added to ChatGPT Web context."
           label="RTK tool compression"
         >
@@ -2007,6 +2023,16 @@ function OptimizationSettingsPanel({
             checked={optimization.settings.rtk.enabled}
             disabled={busy}
             onChange={(enabled) => void updateFeature("rtk", { enabled })}
+          />
+        </SettingRow>
+        <SettingRow
+          body="Use RTK's most aggressive compact-output mode for supported commands."
+          label="RTK ultra compact"
+        >
+          <Switch
+            checked={optimization.settings.rtk.ultraCompact}
+            disabled={busy || !optimization.settings.rtk.enabled}
+            onChange={(enabled) => void updateFeature("rtk", { ultraCompact: enabled })}
           />
         </SettingRow>
         <SettingRow
@@ -2040,16 +2066,78 @@ function OptimizationSettingsPanel({
           />
         </SettingRow>
         <SettingRow
+          body="Minimum estimated message size before Headroom is called."
+          label="Headroom minimum tokens"
+        >
+          <input
+            className="optimization-number"
+            disabled={busy || !optimization.settings.headroom.enabled}
+            min={50}
+            max={200000}
+            onChange={(event) => void updateFeature("headroom", { minTokens: Number(event.target.value) })}
+            type="number"
+            value={optimization.settings.headroom.minTokens}
+          />
+        </SettingRow>
+        <SettingRow
+          body="Keep this many latest user turns and everything after them completely untouched."
+          label="Protected recent turns"
+        >
+          <input
+            className="optimization-number"
+            disabled={busy || !optimization.settings.headroom.enabled}
+            min={0}
+            max={20}
+            onChange={(event) => void updateFeature("headroom", { protectRecentTurns: Number(event.target.value) })}
+            type="number"
+            value={optimization.settings.headroom.protectRecentTurns}
+          />
+        </SettingRow>
+        <SettingRow
+          body="Loopback port used only by the launcher-owned Headroom service."
+          label="Headroom local port"
+        >
+          <input
+            className="optimization-number"
+            disabled={busy || !optimization.settings.headroom.enabled}
+            min={1024}
+            max={65535}
+            onChange={(event) => void updateFeature("headroom", { port: Number(event.target.value) })}
+            type="number"
+            value={optimization.settings.headroom.port}
+          />
+        </SettingRow>
+        <SettingRow
           body="Reduce response ceremony while preserving exact code, errors, and requested document content."
           label="Caveman output style"
         >
           {modeSelect("caveman", optimization.settings.caveman.level)}
         </SettingRow>
         <SettingRow
+          body="Temporarily relax terse mode when clarity is required for safety, destructive actions, ambiguity, or diagnostics."
+          label="Caveman auto clarity"
+        >
+          <Switch
+            checked={optimization.settings.caveman.autoClarity}
+            disabled={busy || !optimization.settings.caveman.enabled}
+            onChange={(enabled) => void updateFeature("caveman", { autoClarity: enabled })}
+          />
+        </SettingRow>
+        <SettingRow
           body="Bias implementation toward YAGNI, reuse, standard libraries, and deletion before addition."
           label="Ponytail minimal-code mode"
         >
           {modeSelect("ponytail", optimization.settings.ponytail.level)}
+        </SettingRow>
+        <SettingRow
+          body="Apply the same minimal-code policy to delegated/sub-agent work."
+          label="Ponytail for subagents"
+        >
+          <Switch
+            checked={optimization.settings.ponytail.applyToSubagents}
+            disabled={busy || !optimization.settings.ponytail.enabled}
+            onChange={(enabled) => void updateFeature("ponytail", { applyToSubagents: enabled })}
+          />
         </SettingRow>
         <SettingRow
           body="Use the app-owned Jev decision layer for model/reasoning optimization. It fails open to the existing route."
@@ -2102,6 +2190,56 @@ function OptimizationSettingsPanel({
               >Clear</SecondaryButton>
             ) : null}
           </div>
+        </SettingRow>
+        <SettingRow
+          body="Penalty applied to higher reasoning cost when Jev probabilities are near-tied."
+          label="Jev cost weight"
+        >
+          <input
+            className="optimization-number"
+            disabled={busy || !optimization.settings.jev.enabled}
+            min={0}
+            max={1}
+            step={0.01}
+            onChange={(event) => void updateFeature("jev", { costWeight: Number(event.target.value) })}
+            type="number"
+            value={optimization.settings.jev.costWeight}
+          />
+        </SettingRow>
+        <SettingRow
+          body="Maximum time allowed for the Jev decision before the bridge falls back to the original route."
+          label="Jev decision timeout (ms)"
+        >
+          <input
+            className="optimization-number"
+            disabled={busy || !optimization.settings.jev.enabled}
+            min={500}
+            max={30000}
+            step={100}
+            onChange={(event) => void updateFeature("jev", { decisionTimeoutMs: Number(event.target.value) })}
+            type="number"
+            value={optimization.settings.jev.decisionTimeoutMs}
+          />
+        </SettingRow>
+        <SettingRow
+          body="Allow Jev to reassess reasoning depth as a tool-driven task changes phase."
+          label="Jev adaptive thinking"
+        >
+          <Switch
+            checked={optimization.settings.jev.adaptiveThinking}
+            disabled={busy || !optimization.settings.jev.enabled}
+            onChange={(enabled) => void updateFeature("jev", { adaptiveThinking: enabled })}
+          />
+        </SettingRow>
+        <SettingRow
+          body="Trigger an early reasoning reassessment after a failed tool call."
+          label="Jev reassess after tool failure"
+        >
+          <Switch
+            checked={optimization.settings.jev.reassessAfterToolFailure}
+            disabled={busy || !optimization.settings.jev.enabled || !optimization.settings.jev.adaptiveThinking}
+            onChange={(enabled) => void updateFeature("jev", { reassessAfterToolFailure: enabled })}
+          />
         </SettingRow>
       </div>
       <div className="optimization-update-row">
