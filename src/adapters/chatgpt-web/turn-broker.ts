@@ -1530,20 +1530,18 @@ export async function callTurnBroker<T>(
       settled = true;
       clearTimeout(timer);
       cleanup();
-      // Activity cleanup follows a timed-out invoke immediately. On Windows a named-pipe destroy
-      // can be logically requested before the peer has observed the close; opening activity_complete
-      // in that interval can stall behind the still-closing pipe. Start teardown first and give the
-      // close event a short bounded grace period before exposing the timeout to the caller.
-      let rejectionSettled = false;
-      const rejectAfterTeardown = () => {
-        if (rejectionSettled) return;
-        rejectionSettled = true;
-        clearTimeout(teardownGrace);
+      // Bun 1.4.0 can block synchronously in Socket.destroy() for an active Windows named pipe.
+      // The MCP activity cleanup that follows this rejection is the durable server-side boundary,
+      // so do not block that cleanup on physical client-pipe teardown. Unref the Windows client and
+      // let the broker response/activity completion close it naturally. Unix sockets do not have
+      // this teardown pathology and can still be destroyed immediately.
+      if (isWindowsPipeEndpoint(socketPath)) {
+        socket.unref();
         rejectCall(error);
-      };
-      const teardownGrace = setTimeout(rejectAfterTeardown, 250);
-      socket.once("close", rejectAfterTeardown);
+        return;
+      }
       socket.destroy();
+      rejectCall(error);
     };
     const finishResponse = () => {
       if (settled) return;
