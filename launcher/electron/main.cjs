@@ -1278,16 +1278,13 @@ async function start() {
   await loadRenderer(mainWindow);
   if (!launcherSmokeTest) {
     void updateController.checkOnce();
-    void optimizationController.ensureActive().catch((error) => {
-      logger.warn("optimization.startup_activation_failed", {
-        message: error instanceof Error ? error.message : String(error),
+    void optimizationController.ensureActive()
+      .then(() => optimizationController.checkUpdates())
+      .catch((error) => {
+        logger.warn("optimization.startup_reconcile_failed", {
+          message: error instanceof Error ? error.message : String(error),
+        });
       });
-    });
-    void optimizationController.checkUpdates().catch((error) => {
-      logger.warn("optimization.startup_update_check_failed", {
-        message: error instanceof Error ? error.message : String(error),
-      });
-    });
   }
   if (launcherSmokeTest) {
     const smokeRuntimeRoot = runtimeRootProvider();
