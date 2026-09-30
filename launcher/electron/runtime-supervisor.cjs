@@ -503,7 +503,7 @@ class RuntimeSupervisor {
       detached: DETACH_OWNED_CHILD,
       env: windowsTrustEnvironment({
         ...process.env,
-        ...(name === "daemon" ? this.runtimeEnvironment() : {}),
+        ...(name === "daemon" && typeof this.runtimeEnvironment === "function" ? this.runtimeEnvironment() : {}),
         CODEX_CHATGPT_WEB_BROWSER_HOST_DESCRIPTOR: this.browserDescriptorPath,
       }, this.platform),
       stdio: ["ignore", "pipe", "pipe"],

@@ -38,6 +38,8 @@ const launcherRegressionFiles = [
   "tests/runtime-host.test.cjs",
   // Renderer wiring for settings and connector-name updates.
   "tests/renderer-wiring.test.cjs",
+  "tests/localization.test.cjs",
+  "tests/windows-trust.test.cjs",
   // App-owned optimizer provisioning, updates, secrets, runtime safety and self-healing.
   "tests/optimization-controller-security.test.cjs",
   "tests/optimization-headroom-manager.test.cjs",

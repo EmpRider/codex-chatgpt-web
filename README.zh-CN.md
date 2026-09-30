@@ -21,7 +21,7 @@
 </p>
 
 <p align="center">
-  <a href="#get-started">开始使用</a> · <a href="https://github.com/EmpRider/codex-chatgpt-web/releases">更新内容</a> · <a href="docs/architecture.md">架构</a> · <a href="TROUBLESHOOTING.md">故障排除</a>
+  <a href="#get-started">开始使用</a> · <a href="https://github.com/EmpRider/codex-chatgpt-web/releases">更新内容</a> · <a href="docs/optimization-stack.md">优化栈</a> · <a href="docs/architecture.md">架构</a> · <a href="TROUBLESHOOTING.md">故障排除</a>
 </p>
 
 在 Codex 原生模型选择器中使用账户可用的 ChatGPT 网页版模型，包括 Pro。使用 ChatGPT 网页版的独立额度，不消耗 Work 或 Codex 额度。保留原有的界面、任务、图片和流式输出。
