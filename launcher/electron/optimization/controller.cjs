@@ -298,13 +298,16 @@ function createOptimizationController({ coreHome, stateStore, logger, secretStor
   }
 
   async function provisionSkill(id, definition, version) {
-    const sourcePayload = await githubFile(definition, definition.sourcePath, version);
+    const sourceRef = definition.release
+      ? `${definition.tagPrefix || ""}${version}`
+      : version;
+    const sourcePayload = await githubFile(definition, definition.sourcePath, sourceRef);
     const content = decodeGitHubText(sourcePayload, definition.sourcePath);
     let licenseContent = null;
     if (definition.licensePath) {
       try {
         licenseContent = decodeGitHubText(
-          await githubFile(definition, definition.licensePath, version),
+          await githubFile(definition, definition.licensePath, sourceRef),
           definition.licensePath,
         );
       } catch (error) {
