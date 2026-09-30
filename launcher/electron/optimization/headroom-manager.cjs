@@ -376,7 +376,8 @@ class HeadroomService {
 
     try {
       const existingHealth = await this.healthCheck(port, "/readyz");
-      if (existingHealth?.ready === true || existingHealth?.status === "healthy") {
+      if (existingHealth?.service === "headroom-proxy"
+        && (existingHealth?.ready === true || existingHealth?.status === "healthy")) {
         this.ready = true;
         this.lastError = null;
         this.publishState();
