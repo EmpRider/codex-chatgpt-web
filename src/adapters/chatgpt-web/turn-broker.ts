@@ -37,6 +37,7 @@ export interface BrokerToolResult {
 
 interface PendingInvocation {
   request: BrokerToolRequest;
+  fingerprint: string;
   resolve: (result: BrokerToolResult) => void;
   reject: (error: Error) => void;
   signal?: AbortSignal;
@@ -80,6 +81,8 @@ interface TurnChannel {
   deliveredCallIds: Set<string>;
   /** Delivered calls whose MCP consumer disconnected before the native result returned. */
   abandonedCallIds: Set<string>;
+  /** Fingerprint per abandoned call, used to block ambiguous duplicate side effects until resolved. */
+  abandonedCallFingerprints: Map<string, string>;
   invocations: Map<string, PendingInvocation>;
   waiters: Set<ToolWaiter>;
   compactionRequested: boolean;
@@ -181,6 +184,26 @@ function handleFingerprint(value: string): string {
 
 function errorOf(value: unknown): Error {
   return value instanceof Error ? value : new Error(String(value));
+}
+
+function canonicalBrokerJson(value: unknown): string {
+  if (value === null) return "null";
+  if (Array.isArray(value)) return `[${value.map(canonicalBrokerJson).join(",")}]`;
+  if (typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    return `{${Object.keys(record).sort().map(key => (
+      `${JSON.stringify(key)}:${canonicalBrokerJson(record[key])}`
+    )).join(",")}}`;
+  }
+  return JSON.stringify(value) ?? "null";
+}
+
+function brokerInvocationFingerprint(request: BrokerToolRequest): string {
+  return createHash("sha256").update(canonicalBrokerJson({
+    wireName: request.wireName,
+    freeform: request.freeform,
+    payload: request.freeform ? request.input ?? "" : request.arguments ?? {},
+  })).digest("hex");
 }
 
 function retiredTurnLabel(traceId: string): string {
@@ -319,6 +342,7 @@ export class TurnBroker implements TurnBrokerOwner {
       queuedCallIds: [],
       deliveredCallIds: new Set(),
       abandonedCallIds: new Set(),
+      abandonedCallFingerprints: new Map(),
       invocations: new Map(),
       waiters: new Set(),
       compactionRequested: false,
@@ -471,6 +495,7 @@ export class TurnBroker implements TurnBrokerOwner {
     // to the turn, so consume it before terminal-state validation. Unknown or still-pending calls
     // keep the normal safe-turn checks below.
     if (!invocation && channel.abandonedCallIds.delete(callId)) {
+      channel.abandonedCallFingerprints.delete(callId);
       console.info(
         `[chatgpt-web] broker trace=${channel.traceId} ignored late result for abandoned call=${callId.slice(0, 17)}`,
       );
@@ -1238,9 +1263,23 @@ export class TurnBroker implements TurnBrokerOwner {
       freeform: request.freeform === true,
       ...(request.freeform === true ? { input: request.input ?? "" } : { arguments: request.arguments ?? {} }),
     };
+    const fingerprint = brokerInvocationFingerprint(toolRequest);
+    if ([...binding.channel.abandonedCallFingerprints.values()].includes(fingerprint)) {
+      const message = "An identical Codex tool invocation timed out and its native outcome is still unknown. Do not replay the same operation until the original result is observed or the turn ends.";
+      return {
+        content: [{ type: "text", text: message }],
+        structuredContent: {
+          code: "codex_tool_outcome_ambiguous",
+          retryable: false,
+          message,
+        },
+        isError: true,
+      };
+    }
     return new Promise<BrokerToolResult>((resolveInvoke, rejectInvoke) => {
       const invocation: PendingInvocation = {
         request: toolRequest,
+        fingerprint,
         resolve: resolveInvoke,
         reject: rejectInvoke,
         ...(socketSignal ? { signal: socketSignal } : {}),
@@ -1252,7 +1291,10 @@ export class TurnBroker implements TurnBrokerOwner {
           binding.channel.invocations.delete(callId);
           binding.channel.queuedCallIds = binding.channel.queuedCallIds.filter(id => id !== callId);
           const wasDelivered = binding.channel.deliveredCallIds.delete(callId);
-          if (wasDelivered) binding.channel.abandonedCallIds.add(callId);
+          if (wasDelivered) {
+            binding.channel.abandonedCallIds.add(callId);
+            binding.channel.abandonedCallFingerprints.set(callId, invocation.fingerprint);
+          }
           rejectInvoke(new DOMException("Codex Native invocation transport disconnected", "AbortError"));
         };
         socketSignal.addEventListener("abort", invocation.onAbort, { once: true });
@@ -1329,6 +1371,7 @@ export class TurnBroker implements TurnBrokerOwner {
     channel.queuedCallIds = [];
     channel.deliveredCallIds.clear();
     channel.abandonedCallIds.clear();
+    channel.abandonedCallFingerprints.clear();
   }
 
   private prune(): void {
