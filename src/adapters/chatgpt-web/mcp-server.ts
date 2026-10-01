@@ -617,8 +617,9 @@ export async function runChatGptMcpServer(options: {
         activityId: claimed.activityId,
         wireName: wireName(tool),
         freeform: tool.freeform === true,
+        invokeTimeoutMs: timeoutMs,
         ...(tool.freeform ? { input: payload.input ?? "" } : { arguments: payload.arguments ?? {} }),
-      }, timeoutMs, signal);
+      }, null, signal);
       const optimized = commandOptimization
         ? await optimizeNativeCommandResult(response, commandOptimization.command)
         : response;
