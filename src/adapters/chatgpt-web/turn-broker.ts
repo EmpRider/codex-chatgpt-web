@@ -43,6 +43,7 @@ interface PendingInvocation {
   reject: (error: Error) => void;
   signal?: AbortSignal;
   onAbort?: () => void;
+  timeout?: ReturnType<typeof setTimeout>;
 }
 
 interface ToolWaiter {
@@ -154,6 +155,7 @@ interface BrokerRequest {
   callId?: string;
   activityId?: string;
   activityAbandoned?: boolean;
+  invokeTimeoutMs?: number;
   revision?: number;
   toolResult?: BrokerToolResult;
   handoffId?: string;
@@ -521,6 +523,7 @@ export class TurnBroker implements TurnBrokerOwner {
       throw new Error(`tool call was completed before it was delivered: ${callId}`);
     }
     channel.invocations.delete(callId);
+    if (invocation.timeout) clearTimeout(invocation.timeout);
     if (invocation.signal && invocation.onAbort) {
       invocation.signal.removeEventListener("abort", invocation.onAbort);
     }
@@ -592,6 +595,7 @@ export class TurnBroker implements TurnBrokerOwner {
       const invocation = channel.invocations.get(callId);
       if (!invocation) continue;
       channel.invocations.delete(callId);
+      if (invocation.timeout) clearTimeout(invocation.timeout);
       channel.compactionDeliveryCount += 1;
       invocation.resolve(structuredClone(queuedResult));
     }
@@ -1251,6 +1255,7 @@ export class TurnBroker implements TurnBrokerOwner {
       for (const [callId, invocation] of [...channel.invocations]) {
         if (invocation.activityId !== request.activityId) continue;
         channel.invocations.delete(callId);
+        if (invocation.timeout) clearTimeout(invocation.timeout);
         channel.queuedCallIds = channel.queuedCallIds.filter(id => id !== callId);
         const wasDelivered = channel.deliveredCallIds.delete(callId);
         if (wasDelivered) {
@@ -1394,6 +1399,26 @@ export class TurnBroker implements TurnBrokerOwner {
         ...(socketSignal ? { signal: socketSignal } : {}),
       };
       binding.channel.invocations.set(callId, invocation);
+      if (request.invokeTimeoutMs !== undefined) {
+        if (!Number.isFinite(request.invokeTimeoutMs) || request.invokeTimeoutMs <= 0) {
+          binding.channel.invocations.delete(callId);
+          throw new Error("turn invocation timeout must be a positive finite number");
+        }
+        invocation.timeout = setTimeout(() => {
+          if (binding.channel.invocations.get(callId) !== invocation) return;
+          binding.channel.invocations.delete(callId);
+          if (invocation.timeout) clearTimeout(invocation.timeout);
+          binding.channel.queuedCallIds = binding.channel.queuedCallIds.filter(id => id !== callId);
+          const wasDelivered = binding.channel.deliveredCallIds.delete(callId);
+          if (wasDelivered) {
+            binding.channel.abandonedInvocations.set(callId, { fingerprint: invocation.fingerprint });
+          }
+          if (invocation.signal && invocation.onAbort) {
+            invocation.signal.removeEventListener("abort", invocation.onAbort);
+          }
+          rejectInvoke(new TurnBrokerTimeoutError());
+        }, request.invokeTimeoutMs);
+      }
       if (socketSignal) {
         invocation.onAbort = () => {
           if (binding.channel.invocations.get(callId) !== invocation) return;
@@ -1470,6 +1495,7 @@ export class TurnBroker implements TurnBrokerOwner {
     }
     channel.waiters.clear();
     for (const invocation of channel.invocations.values()) {
+      if (invocation.timeout) clearTimeout(invocation.timeout);
       if (invocation.signal && invocation.onAbort) {
         invocation.signal.removeEventListener("abort", invocation.onAbort);
       }
@@ -1515,9 +1541,15 @@ export async function callTurnBroker<T>(
   // The wire protocol requires a client-owned activity identity. Most callers never need to see
   // it; the MCP server supplies its own so it can retire an ambiguously delivered claim, while
   // lower-level diagnostics receive an equally client-generated identity here.
-  const wireRequest = request.method === "claim" && request.activityId === undefined
+  const activityBoundRequest = request.method === "claim" && request.activityId === undefined
     ? { ...request, activityId: opaqueId("activity") }
     : request;
+  // Windows named-pipe teardown in Bun 1.4.0 can block the client event loop. Give invoke
+  // requests the same deadline on the broker side so the server can retire the exact invocation
+  // and close the response pipe normally, without relying on client-side destruction.
+  const wireRequest = activityBoundRequest.method === "invoke" && timeoutMs !== null
+    ? { ...activityBoundRequest, invokeTimeoutMs: timeoutMs }
+    : activityBoundRequest;
   return new Promise<T>((resolveCall, rejectCall) => {
     const socket = createConnection(socketPath);
     let buffered = "";
@@ -1555,12 +1587,22 @@ export async function callTurnBroker<T>(
       settled = true;
       clearTimeout(timer);
       cleanup();
-      if (response.error) rejectCall(new Error(response.error));
-      else resolveCall(response.result as T);
+      if (response.error === "ChatGPT web turn broker timed out") {
+        rejectCall(new TurnBrokerTimeoutError());
+      } else if (response.error) {
+        rejectCall(new Error(response.error));
+      } else {
+        resolveCall(response.result as T);
+      }
     };
-    const timer = timeoutMs === null
+    const localTimeoutMs = isWindowsPipeEndpoint(socketPath)
+      && wireRequest.method === "invoke"
+      && timeoutMs !== null
+      ? Math.max(timeoutMs + 5_000, timeoutMs * 2)
+      : timeoutMs;
+    const timer = localTimeoutMs === null
       ? undefined
-      : setTimeout(() => finishError(new TurnBrokerTimeoutError()), timeoutMs);
+      : setTimeout(() => finishError(new TurnBrokerTimeoutError()), localTimeoutMs);
     signal?.addEventListener("abort", onAbort, { once: true });
     if (signal?.aborted) {
       finishError(new DOMException("ChatGPT web turn broker call aborted", "AbortError"));
