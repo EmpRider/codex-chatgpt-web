@@ -14,12 +14,16 @@ for (let index = 1; index <= 2; index += 1) {
   bindingId ||= claimed.bindingId;
   if (claimed.bindingId !== bindingId) throw new Error("binding changed across timeout recovery");
   try {
+    // The first call expires quickly so the next activity can start. Give the second call enough
+    // time for the owner process to observe its delivery before it also expires and becomes a
+    // recoverable late-result tombstone.
+    const invokeTimeoutMs = index === 1 ? 100 : 1_500;
     await callTurnBroker(socketPath, {
       method: "invoke",
       bindingId,
       activityId,
       wireName: "exec_command",
-      invokeTimeoutMs: 100,
+      invokeTimeoutMs,
       arguments: { cmd: `cross-process-timeout-${index}` },
     }, null);
     throw new Error("timed invocation unexpectedly completed");
