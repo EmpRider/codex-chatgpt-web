@@ -37,6 +37,10 @@ windowsOnly("Windows broker survives repeated MCP timeouts across a separate cli
     const [firstRequest] = await firstBatchPromise;
     expect(firstRequest?.arguments?.cmd).toBe("cross-process-timeout-1");
 
+    // nextToolBatch intentionally replays a delivered call while it is still pending. Let the
+    // separate MCP client cross its first timeout and settle that activity before asking for the
+    // next native batch, otherwise this assertion would only observe the valid replay.
+    await Bun.sleep(300);
     const [secondRequest] = await broker.nextToolBatch(token);
     expect(secondRequest?.arguments?.cmd).toBe("cross-process-timeout-2");
 
