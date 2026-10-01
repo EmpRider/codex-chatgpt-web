@@ -558,7 +558,9 @@ test("timed-out MCP invocation retires only that invocation and keeps the browse
 });
 
 
-test("late native result after MCP timeout is ignored without poisoning the surviving turn", async () => {
+const crossProcessTimeoutTest = process.platform === "win32" ? test.skip : test;
+
+crossProcessTimeoutTest("late native result after MCP timeout is ignored without poisoning the surviving turn", async () => {
   const root = mkdtempSync(join(tmpdir(), "cgw-late-"));
   const socketPath = process.platform === "win32"
     ? defaultBrokerEndpoint(root)
@@ -623,7 +625,7 @@ test("late native result after MCP timeout is ignored without poisoning the surv
   }
 });
 
-test("timed-out undelivered MCP invocation is removed from the next tool batch", async () => {
+crossProcessTimeoutTest("timed-out undelivered MCP invocation is removed from the next tool batch", async () => {
   const root = mkdtempSync(join(tmpdir(), "cgw-undel-"));
   const socketPath = process.platform === "win32"
     ? defaultBrokerEndpoint(root)
@@ -676,7 +678,7 @@ test("timed-out undelivered MCP invocation is removed from the next tool batch",
 });
 
 
-test("one timed-out MCP invocation does not cancel a parallel sibling on the same turn", async () => {
+crossProcessTimeoutTest("one timed-out MCP invocation does not cancel a parallel sibling on the same turn", async () => {
   const root = mkdtempSync(join(tmpdir(), "cgw-par-"));
   const socketPath = process.platform === "win32"
     ? defaultBrokerEndpoint(root)
@@ -749,7 +751,7 @@ test("one timed-out MCP invocation does not cancel a parallel sibling on the sam
 });
 
 
-test("an unresolved timed-out invocation cannot be replayed as an identical native side effect", async () => {
+crossProcessTimeoutTest("an unresolved timed-out invocation cannot be replayed as an identical native side effect", async () => {
   const root = mkdtempSync(join(tmpdir(), "cgw-amb-"));
   const socketPath = process.platform === "win32"
     ? defaultBrokerEndpoint(root)
