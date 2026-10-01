@@ -8,6 +8,8 @@ remote ChatGPT service. No Windows working-set measurement has been collected ye
 - Token estimates reuse exact text within the owning asynchronous request. Each cache retains
   at most 128 entries and 8 MiB of conservatively charged string data. Daemon and browser-helper
   processes each establish their own scope; concurrent requests do not share prompt caches.
+  Completion or failure clears cached prompt strings, even when detached timers or broker
+  listeners still inherit the asynchronous scope.
 - MCP context batches reuse Unicode-safe chunk offsets and slice only the requested range.
   Transport identifiers, hashes, batch limits, and the complete context remain unchanged.
 - Response-history snapshots use asynchronous atomic writes and yield between serialization

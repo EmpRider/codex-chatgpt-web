@@ -13,6 +13,7 @@ let tokenizer: Tiktoken | undefined;
 const MAX_CACHE_BYTES = 8 * 1024 * 1024;
 const MAX_CACHE_ENTRIES = 128;
 interface EstimateCache {
+  active: boolean;
   values: Map<string, number>;
   retainedBytes: number;
   hits: number;
@@ -22,13 +23,34 @@ const requestCache = new AsyncLocalStorage<EstimateCache>();
 
 /** Cache exact text only for the owning request, never across conversations. */
 export function withTokenEstimateCache<T>(work: () => T): T {
-  if (requestCache.getStore()) return work();
-  return requestCache.run({ values: new Map(), retainedBytes: 0, hits: 0, misses: 0 }, work);
+  if (requestCache.getStore()?.active) return work();
+  const cache: EstimateCache = { active: true, values: new Map(), retainedBytes: 0, hits: 0, misses: 0 };
+  const release = () => {
+    // Async resources (including broker listeners and retained timers) can outlive
+    // their request. They must not keep prompt strings or reuse its expired cache.
+    cache.active = false;
+    cache.values.clear();
+    cache.retainedBytes = 0;
+  };
+  return requestCache.run(cache, () => {
+    try {
+      const result = work();
+      if (result != null && (typeof result === "object" || typeof result === "function")
+        && typeof (result as { then?: unknown }).then === "function") {
+        return Promise.resolve(result).finally(release) as T;
+      }
+      release();
+      return result;
+    } catch (error) {
+      release();
+      throw error;
+    }
+  });
 }
 
 export function tokenEstimateCacheStats() {
   const cache = requestCache.getStore();
-  return cache && { hits: cache.hits, misses: cache.misses, entries: cache.values.size, retainedBytes: cache.retainedBytes };
+  return cache?.active ? { hits: cache.hits, misses: cache.misses, entries: cache.values.size, retainedBytes: cache.retainedBytes } : undefined;
 }
 
 function chatGptTokenizer(): Tiktoken {
@@ -45,7 +67,8 @@ export function estimateTokens(text: string, modelId?: string): number {
   void modelId;
   if (!text) return 0;
 
-  const cache = requestCache.getStore();
+  const inheritedCache = requestCache.getStore();
+  const cache = inheritedCache?.active ? inheritedCache : undefined;
   const cached = cache?.values.get(text);
   if (cached !== undefined) {
     cache!.hits += 1;

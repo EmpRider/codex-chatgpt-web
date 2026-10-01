@@ -1,5 +1,27 @@
 import { expect, test } from "bun:test";
 import { estimateTokens, tokenEstimateCacheStats, withTokenEstimateCache } from "../src/lib/token-estimate";
+
+test("settled token caches release prompt entries inherited by detached async resources", async () => {
+  for (const outcome of ["sync", "resolved", "rejected"] as const) {
+    let release!: () => void;
+    let detached!: Promise<void>;
+    const work = () => {
+      estimateTokens("private prompt");
+      detached = new Promise<void>(resolve => { release = resolve; }).then(() => {
+        expect(tokenEstimateCacheStats()).toBeUndefined();
+        estimateTokens("another prompt");
+        expect(tokenEstimateCacheStats()).toBeUndefined();
+      });
+      if (outcome === "rejected") return Promise.reject(new Error("request failed"));
+      if (outcome === "resolved") return Promise.resolve("done");
+      return "done";
+    };
+    if (outcome === "rejected") await expect(withTokenEstimateCache(work)).rejects.toThrow("request failed");
+    else expect(await withTokenEstimateCache(work)).toBe("done");
+    release();
+    await detached;
+  }
+});
 import { chatGptWebMcpContextChunkBatch, createChatGptWebMcpContextTransport } from "../src/adapters/chatgpt-web/context-transport";
 
 test("token estimates are reused within one async request, with bounded retention", async () => {
