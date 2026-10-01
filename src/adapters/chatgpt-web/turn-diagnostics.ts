@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { appendFile, mkdir, readdir, rename, rm, stat } from "node:fs/promises";
+import { appendFileSync, mkdirSync, readdirSync, renameSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { getConfigDir } from "../../config";
 import { VERSION } from "../../version";
@@ -64,6 +65,26 @@ let pendingBytes = 0;
 let timer: ReturnType<typeof setTimeout> | undefined;
 let writing: Promise<void> | undefined;
 
+// Bun 1.4.0's Windows named-pipe lifecycle can stall when asynchronous filesystem
+// work overlaps broker teardown. Keep the proven synchronous writer there, but
+// invoke it once per deferred, bounded batch rather than on every broker event.
+function writeWindowsDiagnostics(directory: string, lines: string[]): void {
+  mkdirSync(directory, { recursive: true, mode: 0o700 });
+  const file = join(directory, `process-${process.pid}.jsonl`);
+  if ((statSync(file, { throwIfNoEntry: false })?.size ?? 0) >= 2 * 1024 * 1024) {
+    rmSync(`${file}.1`, { force: true });
+    renameSync(file, `${file}.1`);
+  }
+  appendFileSync(file, lines.join(""), { mode: 0o600 });
+  if (Date.now() - lastPrune > 60_000) {
+    lastPrune = Date.now();
+    const files = readdirSync(directory).filter(name => /^process-\d+\.jsonl(?:\.1)?$/.test(name))
+      .map(name => ({ name, modified: statSync(join(directory, name)).mtimeMs }))
+      .sort((a, b) => b.modified - a.modified);
+    for (const entry of files.slice(40)) rmSync(join(directory, entry.name), { force: true });
+  }
+}
+
 function scheduleDiagnostics(): void {
   if (timer || writing || !pending.length) return;
   timer = setTimeout(() => { void drainDiagnostics(); }, 25);
@@ -84,6 +105,10 @@ function drainDiagnostics(): Promise<void> {
     }
     for (const [directory, lines] of groups) {
       try {
+        if (process.platform === "win32") {
+          writeWindowsDiagnostics(directory, lines);
+          continue;
+        }
         await mkdir(directory, { recursive: true, mode: 0o700 });
         const file = join(directory, `process-${process.pid}.jsonl`);
         if (((await stat(file).catch(() => null))?.size ?? 0) >= 2 * 1024 * 1024) {

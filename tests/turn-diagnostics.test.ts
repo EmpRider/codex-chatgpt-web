@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { logTurnDiagnostic, flushTurnDiagnostics, buildTurnDiagnostic, classifyTurnDiagnosticError } from "../src/adapters/chatgpt-web/turn-diagnostics";
 
 test("correlation fingerprints match across processes without leaking credentials or paths", () => {
@@ -60,4 +61,36 @@ test("independent process logs flush asynchronously, rotate, and tolerate failed
     else process.env.CODEX_CHATGPT_WEB_HOME = previous;
     rmSync(home, { recursive: true, force: true });
   }
+});
+
+test("browser helper graceful shutdown flushes its final lifecycle records", async () => {
+  const home = mkdtempSync(join(tmpdir(), "cgw-helper-diagnostics-"));
+  const worker = fileURLToPath(new URL("../src/adapters/chatgpt-web/browser-worker.ts", import.meta.url));
+  const diagnostics = pathToFileURL(join(import.meta.dir, "../src/adapters/chatgpt-web/turn-diagnostics.ts")).href;
+  const helper = pathToFileURL(join(import.meta.dir, "../src/adapters/chatgpt-web/browser-helper-main.ts")).href;
+  const script = `
+    import { mock } from "bun:test";
+    const { logTurnDiagnostic } = await import(${JSON.stringify(diagnostics)});
+    mock.module(${JSON.stringify(worker)}, () => ({
+      ChatGptBrowserWorker: class {},
+      closeChatGptBrowserWorkers: async () => logTurnDiagnostic("submission_accepted", { traceId: "shutdown-final" }),
+    }));
+    await import(${JSON.stringify(helper)});
+  `;
+  try {
+    const child = Bun.spawn([process.execPath, "-e", script], {
+      env: { ...process.env, CODEX_CHATGPT_WEB_HOME: home },
+      stdin: "pipe", stdout: "pipe", stderr: "pipe",
+    });
+    child.stdin.write('{"type":"shutdown"}\n');
+    child.stdin.end();
+    const timer = setTimeout(() => child.kill(), 5_000);
+    try {
+      const stderr = await new Response(child.stderr).text();
+      expect(stderr).toBe("");
+      expect(await child.exited).toBe(0);
+    } finally { clearTimeout(timer); }
+    const records = readFileSync(join(home, "diagnostics", "turn-lifecycle", `process-${child.pid}.jsonl`), "utf8");
+    expect(records).toContain('"traceId":"shutdown-final"');
+  } finally { rmSync(home, { recursive: true, force: true }); }
 });

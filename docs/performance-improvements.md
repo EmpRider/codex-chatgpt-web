@@ -23,8 +23,10 @@ remote ChatGPT service. No Windows working-set measurement has been collected ye
 - Browser response mutations wake observation without the unconditional 250 ms sleep. A 50 ms
   minimum coalesces bursts; the existing 250 ms fallback still checks CSS and external state.
   Temporary observers and timers are disconnected on settlement.
-- Launcher and MCP lifecycle logs use bounded asynchronous batches. Launcher logging flushes on
-  export and graceful quit; lifecycle logging flushes on server shutdown and normal process exit.
+- Launcher and MCP lifecycle logs use bounded deferred batches. Launcher logging flushes on
+  export and graceful quit; lifecycle logging flushes on server and browser-helper shutdown and normal process exit.
+  Lifecycle writes use asynchronous filesystem operations on macOS and Linux. Windows keeps
+  synchronous disk writes inside each batch for compatibility with Bun 1.4.0 named-pipe teardown.
   Redaction and rotation remain enabled. Under a stalled disk, bounded logging queues can discard
   old pending records rather than accumulating RAM indefinitely; launcher logs report this loss.
 - Headroom failures open a thirty-second cooldown scoped to configuration directory and port.
