@@ -1,6 +1,6 @@
 const fs = require("node:fs");
 const path = require("node:path");
-const { renameAtomicFile, writePrivateFileAtomic } = require("./atomic-file.cjs");
+const { renameAtomicFileAsync, writePrivateFileAtomic } = require("./atomic-file.cjs");
 
 const MAX_LOG_BYTES = 4 * 1024 * 1024;
 const MAX_MEMORY_RECORDS = 300;
@@ -161,8 +161,49 @@ function readRecent(filePath) {
   return records.reverse();
 }
 
-function createLogger({ filePath, publish }) {
+function createLogger({ filePath, publish, platform = process.platform }) {
   const records = readRecent(filePath);
+  const pending = [];
+  let pendingBytes = 0;
+  let dropped = 0;
+  let timer = null;
+  let writing = null;
+  const maxPendingBytes = 1024 * 1024;
+
+  const drain = () => {
+    if (timer) { clearTimeout(timer); timer = null; }
+    if (writing || !pending.length) return writing ?? Promise.resolve();
+    const lines = pending.splice(0);
+    pendingBytes = 0;
+    if (dropped) {
+      lines.unshift(`${JSON.stringify({ at: new Date().toISOString(), level: "warning", event: "logging.backlog_dropped", detail: { records: dropped } })}\n`);
+      dropped = 0;
+    }
+    writing = (async () => {
+      try {
+        await fs.promises.mkdir(path.dirname(filePath), { recursive: true, mode: 0o700 });
+        const stat = await fs.promises.stat(filePath).catch(() => null);
+        if (stat && stat.size >= MAX_LOG_BYTES) {
+          await fs.promises.rm(`${filePath}.1`, { force: true });
+          await renameAtomicFileAsync(filePath, `${filePath}.1`, { platform });
+        }
+        await fs.promises.appendFile(filePath, lines.join(""), { mode: 0o600 });
+      } catch { /* Logging must not break a turn when the disk is unavailable. */ }
+    })().finally(() => {
+      writing = null;
+      if (pending.length) schedule();
+    });
+    return writing;
+  };
+  const schedule = () => {
+    if (timer || writing) return;
+    timer = setTimeout(() => { void drain(); }, 25);
+    timer.unref?.();
+  };
+  const flush = async () => {
+    do { await drain(); } while (writing || pending.length);
+    if (timer) { clearTimeout(timer); timer = null; }
+  };
 
   const append = (level, event, detail = {}) => {
     const record = {
@@ -173,15 +214,15 @@ function createLogger({ filePath, publish }) {
     };
     records.push(record);
     if (records.length > MAX_MEMORY_RECORDS) records.splice(0, records.length - MAX_MEMORY_RECORDS);
-    try {
-      fs.mkdirSync(path.dirname(filePath), { recursive: true, mode: 0o700 });
-      const stat = fs.statSync(filePath, { throwIfNoEntry: false });
-      if (stat && stat.size >= MAX_LOG_BYTES) {
-        fs.rmSync(`${filePath}.1`, { force: true });
-        renameAtomicFile(filePath, `${filePath}.1`);
-      }
-      fs.appendFileSync(filePath, `${JSON.stringify(record)}\n`, { mode: 0o600 });
-    } catch {}
+    const line = `${JSON.stringify(record)}\n`;
+    const bytes = Buffer.byteLength(line);
+    while (pending.length && pendingBytes + bytes > maxPendingBytes) {
+      pendingBytes -= Buffer.byteLength(pending.shift());
+      dropped++;
+    }
+    if (bytes <= maxPendingBytes) { pending.push(line); pendingBytes += bytes; }
+    else dropped++;
+    schedule();
     publish?.(record);
     return record;
   };
@@ -192,6 +233,7 @@ function createLogger({ filePath, publish }) {
     warn: (event, detail) => append("warning", event, detail),
     error: (event, detail) => append("error", event, detail),
     recent: (limit = 150) => records.slice(-Math.max(1, Math.min(300, limit))),
+    flush,
     filePath,
   };
 }

@@ -48,8 +48,27 @@ function writePrivateFileAtomic(filePath, content, { mode = 0o600, protectDirect
   }
 }
 
+async function renameAtomicFileAsync(
+  source,
+  destination,
+  { platform = process.platform, rename = fs.promises.rename } = {},
+) {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      await rename(source, destination);
+      return;
+    } catch (error) {
+      const delay = WINDOWS_RENAME_RETRY_DELAYS_MS[attempt];
+      if (platform !== "win32" || !["EBUSY", "EPERM", "EACCES"].includes(error?.code)
+        || delay === undefined) throw error;
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
+  }
+}
+
 module.exports = {
   WINDOWS_RENAME_RETRY_DELAYS_MS,
   renameAtomicFile,
+  renameAtomicFileAsync,
   writePrivateFileAtomic,
 };

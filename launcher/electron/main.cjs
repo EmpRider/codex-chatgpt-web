@@ -103,6 +103,7 @@ let runtimeSupervisor = null;
 let tray = null;
 let quitting = false;
 let shutdownInProgress = false;
+let launcherLogger = null;
 let exitCommitted = false;
 let smokePassedThisSession = false;
 let cdpPort = 0;
@@ -1039,6 +1040,7 @@ function registerIpc({ logger, stateStore }) {
       filters: [{ name: "JSON Lines", extensions: ["jsonl"] }],
     });
     if (result.canceled || !result.filePath) return null;
+    await logger.flush();
     const recordCount = exportSanitizedLogs({
       filePath: logger.filePath,
       lifecycleDirectory: path.join(CORE_HOME, "diagnostics", "turn-lifecycle"),
@@ -1087,6 +1089,7 @@ async function requestQuit() {
     await browserHost?.persistSession();
     browserHost?.destroy();
     await browserControl?.close();
+    await launcherLogger?.flush();
     exitCommitted = true;
     app.quit();
     return { ok: true };
@@ -1166,7 +1169,7 @@ async function start() {
     && stateStore.read().autoStart !== autostart.enabled) {
     setAutostart(app, stateStore.read().autoStart);
   }
-  const logger = createLogger({
+  const logger = launcherLogger = createLogger({
     filePath: path.join(app.getPath("logs"), "launcher.jsonl"),
     publish: (record) => send("launcher:log", record),
   });

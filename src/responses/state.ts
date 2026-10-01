@@ -1,6 +1,9 @@
-import { chmodSync, existsSync, mkdirSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { atomicWriteFile, getConfigDir } from "../config";
+import { randomUUID } from "node:crypto";
+import { chmod, mkdir, rename, rm, writeFile } from "node:fs/promises";
+import { setImmediate as yieldToRequests, setTimeout as delay } from "node:timers/promises";
+import { getConfigDir } from "../config";
 
 const MAX_STORED_RESPONSES = 1_000;
 const RESPONSE_TTL_MS = 60 * 60 * 1_000;
@@ -19,6 +22,7 @@ interface StoredResponseState {
   items: unknown[];
   /** Approximate in-memory size, computed locally at insert time (never trusted from disk). */
   sizeBytes?: number;
+  serializedBytes?: number;
 }
 
 const states = new Map<string, StoredResponseState>();
@@ -27,12 +31,15 @@ let storedResponseBytes = 0;
 /** The ONLY size computation: approximate entry weight from its items payload. */
 function measuredEntry(entry: Omit<StoredResponseState, "sizeBytes">): StoredResponseState {
   let sizeBytes = 0;
+  let serializedBytes = 0;
   try {
-    sizeBytes = JSON.stringify(entry.items).length;
+    const serialized = JSON.stringify(entry.items);
+    serializedBytes = Buffer.byteLength(serialized, "utf8");
+    sizeBytes = Math.max(serializedBytes, serialized.length * 2);
   } catch {
     /* unserializable items: weightless rather than fatal */
   }
-  return { ...entry, sizeBytes };
+  return { ...entry, sizeBytes, serializedBytes };
 }
 
 /** The ONLY insertion point: keeps the byte counter consistent on replacement. */
@@ -59,6 +66,9 @@ const replayedInputPrefixLengths = new WeakMap<object, number>();
 let loaded = false;
 let persistTimer: ReturnType<typeof setTimeout> | null = null;
 let pendingPersistPath: string | null = null;
+let persistChain: Promise<void> = Promise.resolve();
+let persistRunning = false;
+const pendingSnapshots = new Map<string, [string, StoredResponseState][]>();
 
 function now(): number {
   return Date.now();
@@ -101,36 +111,75 @@ function ensureLoaded(): void {
   }
 }
 
-function persistNow(path: string): void {
-  if (persistTimer) {
-    clearTimeout(persistTimer);
-    persistTimer = null;
-  }
-  pendingPersistPath = null;
+async function persistSnapshot(path: string, snapshot: [string, StoredResponseState][]): Promise<void> {
+  let temp: string | undefined;
   try {
-    const entries: [string, StoredResponseState][] = [];
+    const entries: string[] = [];
     let total = 0;
+    let sinceYield = 0;
     // Newest-first so the most recent chains survive both caps.
-    for (const entry of [...states].reverse()) {
+    for (const entry of snapshot.reverse()) {
       // sizeBytes is in-memory accounting only; keep it out of the disk snapshot.
       const [id, state] = entry;
-      const { sizeBytes: _sizeBytes, ...persistable } = state;
+      if ((state.serializedBytes ?? 0) > SNAPSHOT_ENTRY_MAX_BYTES) continue;
+      const { sizeBytes: _sizeBytes, serializedBytes: _serializedBytes, ...persistable } = state;
       const persistEntry: [string, StoredResponseState] = [id, persistable];
-      const size = JSON.stringify(persistEntry).length;
+      const serialized = JSON.stringify(persistEntry);
+      const size = Buffer.byteLength(serialized, "utf8");
       if (size > SNAPSHOT_ENTRY_MAX_BYTES) continue;
       if (total + size > SNAPSHOT_TOTAL_MAX_BYTES) break;
       total += size;
-      entries.push(persistEntry);
+      entries.push(serialized);
+      sinceYield += size;
+      if (sinceYield >= 256 * 1024) {
+        sinceYield = 0;
+        await yieldToRequests();
+      }
     }
     entries.reverse();
-    mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+    await mkdir(dirname(path), { recursive: true, mode: 0o700 });
     // mkdirSync's mode only applies on creation — re-harden an existing config dir so the
     // conversation-content snapshot never lands in a group/world-readable directory.
-    try { chmodSync(dirname(path), 0o700); } catch { /* best-effort (e.g. Windows) */ }
-    atomicWriteFile(path, JSON.stringify({ version: 1, states: entries }));
+    try { await chmod(dirname(path), 0o700); } catch { /* best-effort (e.g. Windows) */ }
+    temp = `${path}.tmp-${process.pid}-${randomUUID()}`;
+    await writeFile(temp, `{"version":1,"states":[${entries.join(",")}]}`, { flag: "wx", mode: 0o600 });
+    // Windows scanners can briefly hold the destination. Retry asynchronously so streaming
+    // and heartbeats can continue, keeping the existing atomic replacement guarantee.
+    for (let attempt = 0; ; attempt++) {
+      try { await rename(temp, path); break; } catch (error) {
+        if (attempt >= 4 || !["EPERM", "EACCES", "EBUSY"].includes((error as NodeJS.ErrnoException).code ?? "")) throw error;
+        await delay(10 * (attempt + 1));
+      }
+    }
+    temp = undefined;
+    try { await chmod(path, 0o600); } catch { /* Windows ACLs are managed by the installer. */ }
   } catch {
     /* best-effort: disk trouble must never affect request handling */
+  } finally {
+    if (temp) await rm(temp, { force: true }).catch(() => {});
   }
+}
+
+function enqueuePersist(path: string): void {
+  // Keep only the newest pending snapshot per destination while a slow disk is writing.
+  // This avoids retaining an unbounded queue of obsolete conversation arrays.
+  pendingSnapshots.set(path, [...states]);
+  startPersistPump();
+}
+
+function startPersistPump(): void {
+  if (persistRunning) return;
+  persistRunning = true;
+  persistChain = (async () => {
+    while (pendingSnapshots.size) {
+      const [path, snapshot] = pendingSnapshots.entries().next().value!;
+      pendingSnapshots.delete(path);
+      await persistSnapshot(path, snapshot);
+    }
+  })().finally(() => {
+    persistRunning = false;
+    if (pendingSnapshots.size) startPersistPump();
+  });
 }
 
 function schedulePersist(): void {
@@ -139,15 +188,28 @@ function schedulePersist(): void {
   // debounce fires, and a late write must land in the home that owned the recorded state.
   pendingPersistPath = snapshotPath();
   const path = pendingPersistPath;
-  persistTimer = setTimeout(() => persistNow(path), SNAPSHOT_DEBOUNCE_MS);
+  persistTimer = setTimeout(() => {
+    persistTimer = null;
+    pendingPersistPath = null;
+    enqueuePersist(path);
+  }, SNAPSHOT_DEBOUNCE_MS);
   (persistTimer as { unref?: () => void }).unref?.();
 }
 
 /** Flush any pending debounced snapshot write (graceful shutdown / deterministic tests). */
-export function flushResponseState(): void {
-  if (!persistTimer) return;
-  // Use the path captured when the write was scheduled; CODEX_CHATGPT_WEB_HOME may have moved.
-  persistNow(pendingPersistPath ?? snapshotPath());
+export async function flushResponseState(): Promise<void> {
+  for (;;) {
+    if (persistTimer) {
+      clearTimeout(persistTimer);
+      persistTimer = null;
+      const path = pendingPersistPath ?? snapshotPath();
+      pendingPersistPath = null;
+      enqueuePersist(path);
+    }
+    const pending = persistChain;
+    await pending;
+    if (!persistTimer && !pendingSnapshots.size && pending === persistChain) return;
+  }
 }
 
 function inputItems(input: unknown): unknown[] {

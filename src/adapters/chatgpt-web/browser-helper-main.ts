@@ -10,6 +10,7 @@ import { createBrowserHelperPromptSelection } from "./browser-helper-prompt-sele
 import { isChatGptWebMultipartPartCount, type CompiledChatGptWebPrompt } from "./prompt";
 import { ChatGptMirroredTurnProgress } from "./turn-progress";
 import type { ChatGptExternalTurnProgressSnapshot } from "./turn-progress";
+import { flushTurnDiagnostics } from "./turn-diagnostics";
 
 interface RunMessage {
   type: "run";
@@ -143,7 +144,7 @@ function requestShutdown(): Promise<void> {
   }
   completionFenceCommitWaiters.clear();
   input.close();
-  void closeChatGptBrowserWorkers().then(
+  void closeChatGptBrowserWorkers().finally(() => flushTurnDiagnostics()).then(
     () => {
       completeShutdown();
       process.exit(0);

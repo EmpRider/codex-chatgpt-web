@@ -88,7 +88,21 @@ export function chatGptWebMcpContextManifest(
 export function chatGptWebMcpContextChunks(
   context: ChatGptWebMcpContextTransport,
 ): string[] {
-  const chunks: string[] = [];
+  const offsets = contextChunkOffsets(context);
+  return offsets.slice(0, -1).map((start, index) => context.text.slice(start, offsets[index + 1]));
+}
+
+const chunkOffsets = new WeakMap<ChatGptWebMcpContextTransport, {
+  text: string; chunkChars: number; offsets: number[];
+}>();
+
+function contextChunkOffsets(context: ChatGptWebMcpContextTransport): number[] {
+  const cached = chunkOffsets.get(context);
+  if (cached?.text === context.text && cached.chunkChars === context.chunkChars) return cached.offsets;
+  if (!Number.isSafeInteger(context.chunkChars) || context.chunkChars < 2) {
+    throw new Error("Codex MCP context chunk size is invalid");
+  }
+  const offsets = [0];
   let offset = 0;
   while (offset < context.text.length) {
     let end = Math.min(context.text.length, offset + context.chunkChars);
@@ -105,10 +119,12 @@ export function chatGptWebMcpContextChunks(
     ) {
       end -= 1;
     }
-    chunks.push(context.text.slice(offset, end));
+    offsets.push(end);
     offset = end;
   }
-  return chunks.length > 0 ? chunks : [""];
+  if (offsets.length === 1) offsets.push(0);
+  chunkOffsets.set(context, { text: context.text, chunkChars: context.chunkChars, offsets });
+  return offsets;
 }
 
 export function chatGptWebMcpContextChunkBatch(
@@ -124,9 +140,10 @@ export function chatGptWebMcpContextChunkBatch(
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > CHATGPT_WEB_MCP_CONTEXT_BATCH_CHUNKS) {
     throw new Error(`Codex MCP context batch size must be between 1 and ${CHATGPT_WEB_MCP_CONTEXT_BATCH_CHUNKS}`);
   }
-  const chunks = chatGptWebMcpContextChunks(context);
-  if (chunk >= chunks.length) throw new Error("Codex MCP context chunk is out of range");
-  const next = Math.min(chunks.length, chunk + limit);
+  const offsets = contextChunkOffsets(context);
+  const totalChunks = offsets.length - 1;
+  if (chunk >= totalChunks) throw new Error("Codex MCP context chunk is out of range");
+  const next = Math.min(totalChunks, chunk + limit);
   return {
     context_id: context.contextId,
     sha256: context.sha256,
@@ -134,9 +151,9 @@ export function chatGptWebMcpContextChunkBatch(
     bytes: context.bytes,
     chunk,
     chunk_count: next - chunk,
-    total_chunks: chunks.length,
-    text: chunks.slice(chunk, next).join(""),
-    next_chunk: next < chunks.length ? next : null,
+    total_chunks: totalChunks,
+    text: context.text.slice(offsets[chunk], offsets[next]),
+    next_chunk: next < totalChunks ? next : null,
   };
 }
 

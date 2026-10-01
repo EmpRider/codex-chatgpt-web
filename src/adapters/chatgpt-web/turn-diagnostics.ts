@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { appendFile, mkdir, readdir, rename, rm, stat } from "node:fs/promises";
 import { appendFileSync, mkdirSync, readdirSync, renameSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { getConfigDir } from "../../config";
@@ -59,26 +60,91 @@ export function buildTurnDiagnostic(event: TurnDiagnosticEvent, fields: TurnDiag
 }
 
 let lastPrune = 0;
+const pending: { directory: string; line: string }[] = [];
+let pendingBytes = 0;
+let timer: ReturnType<typeof setTimeout> | undefined;
+let writing: Promise<void> | undefined;
+
+// Preserve the previous immediate writer on Windows while investigating Bun
+// named-pipe teardown stalls. Other platforms use the bounded asynchronous queue.
+function writeWindowsDiagnostics(directory: string, lines: string[]): void {
+  mkdirSync(directory, { recursive: true, mode: 0o700 });
+  const file = join(directory, `process-${process.pid}.jsonl`);
+  if ((statSync(file, { throwIfNoEntry: false })?.size ?? 0) >= 2 * 1024 * 1024) {
+    rmSync(`${file}.1`, { force: true });
+    renameSync(file, `${file}.1`);
+  }
+  appendFileSync(file, lines.join(""), { mode: 0o600 });
+  if (Date.now() - lastPrune > 60_000) {
+    lastPrune = Date.now();
+    const files = readdirSync(directory).filter(name => /^process-\d+\.jsonl(?:\.1)?$/.test(name))
+      .map(name => ({ name, modified: statSync(join(directory, name)).mtimeMs }))
+      .sort((a, b) => b.modified - a.modified);
+    for (const entry of files.slice(40)) rmSync(join(directory, entry.name), { force: true });
+  }
+}
+
+function scheduleDiagnostics(): void {
+  if (timer || writing || !pending.length) return;
+  timer = setTimeout(() => { void drainDiagnostics(); }, 25);
+  timer.unref?.();
+}
+
+function drainDiagnostics(): Promise<void> {
+  if (timer) { clearTimeout(timer); timer = undefined; }
+  if (writing || !pending.length) return writing ?? Promise.resolve();
+  const batch = pending.splice(0);
+  pendingBytes = 0;
+  writing = (async () => {
+    const groups = new Map<string, string[]>();
+    for (const { directory, line } of batch) {
+      const lines = groups.get(directory) ?? [];
+      lines.push(line);
+      groups.set(directory, lines);
+    }
+    for (const [directory, lines] of groups) {
+      try {
+        await mkdir(directory, { recursive: true, mode: 0o700 });
+        const file = join(directory, `process-${process.pid}.jsonl`);
+        if (((await stat(file).catch(() => null))?.size ?? 0) >= 2 * 1024 * 1024) {
+          await rm(`${file}.1`, { force: true });
+          await rename(file, `${file}.1`);
+        }
+        await appendFile(file, lines.join(""), { mode: 0o600 });
+        if (Date.now() - lastPrune > 60_000) {
+          lastPrune = Date.now();
+          const names = (await readdir(directory)).filter(name => /^process-\d+\.jsonl(?:\.1)?$/.test(name));
+          const files = await Promise.all(names.map(async name => ({ name, modified: (await stat(join(directory, name)).catch(() => null))?.mtimeMs ?? 0 })));
+          files.sort((a, b) => b.modified - a.modified);
+          for (const entry of files.slice(40)) await rm(join(directory, entry.name), { force: true });
+        }
+      } catch { /* Diagnostics must not affect execution or MCP stdout framing. */ }
+    }
+  })().finally(() => { writing = undefined; scheduleDiagnostics(); });
+  return writing;
+}
+
+export async function flushTurnDiagnostics(): Promise<void> {
+  do { await drainDiagnostics(); } while (writing || pending.length);
+}
+
+process.on("beforeExit", () => { if (pending.length || writing) void flushTurnDiagnostics(); });
+
 export function logTurnDiagnostic(event: TurnDiagnosticEvent, fields: TurnDiagnosticFields): void {
   try {
     const directory = join(getConfigDir(), "diagnostics", "turn-lifecycle");
-    mkdirSync(directory, { recursive: true, mode: 0o700 });
-    const file = join(directory, `process-${process.pid}.jsonl`);
-    // Each process owns its file; avoid shared-file rotation races between daemon and MCP.
-    if ((statSync(file, { throwIfNoEntry: false })?.size ?? 0) >= 2 * 1024 * 1024) {
-      rmSync(`${file}.1`, { force: true });
-      renameSync(file, `${file}.1`);
+    const line = `${JSON.stringify(buildTurnDiagnostic(event, fields))}\n`;
+    if (process.platform === "win32") {
+      writeWindowsDiagnostics(directory, [line]);
+      return;
     }
-    appendFileSync(file, `${JSON.stringify(buildTurnDiagnostic(event, fields))}\n`, { mode: 0o600 });
-    if (Date.now() - lastPrune > 60_000) {
-      lastPrune = Date.now();
-      const files = readdirSync(directory).filter(name => /^process-\d+\.jsonl(?:\.1)?$/.test(name))
-        .map(name => ({ name, modified: statSync(join(directory, name)).mtimeMs }))
-        .sort((a, b) => b.modified - a.modified);
-      for (const entry of files.slice(40)) {
-        rmSync(join(directory, entry.name), { force: true });
-      }
-    }
+    const bytes = Buffer.byteLength(line);
+    // Bound diagnostics while a disk is stalled; the live task always takes precedence.
+    while (pending.length && pendingBytes + bytes > 512 * 1024) pendingBytes -= Buffer.byteLength(pending.shift()!.line);
+    if (bytes > 512 * 1024) return;
+    pending.push({ directory, line });
+    pendingBytes += bytes;
+    scheduleDiagnostics();
   } catch {
     // Diagnostics must never affect token authorization, task execution or MCP stdout framing.
   }

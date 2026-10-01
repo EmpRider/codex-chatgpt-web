@@ -1,4 +1,5 @@
 import { logTurnDiagnostic } from "./turn-diagnostics";
+import { waitForChatGptResponseDomChange } from "./response-dom-wait";
 import { randomUUID } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readdirSync, rmSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -16,7 +17,7 @@ import {
   legacyChatGptConnectorMigrationMessage,
   LEGACY_CHATGPT_CONNECTOR_NAMES,
 } from "../../config";
-import { estimateTokens } from "../../lib/token-estimate";
+import { estimateTokens, withTokenEstimateCache } from "../../lib/token-estimate";
 import { CHATGPT_STOPPED_THINKING_LABELS } from "./ui-labels";
 import type { CodexProviderConfig } from "../../types";
 import { parseDataUrl } from "../image";
@@ -4734,6 +4735,10 @@ export class ChatGptBrowserWorker {
   }
 
   private async runExclusive(turn: BrowserTurn): Promise<string> {
+    return withTokenEstimateCache(() => this.runExclusiveWithTokenCache(turn));
+  }
+
+  private async runExclusiveWithTokenCache(turn: BrowserTurn): Promise<string> {
     if (turn.abortSignal?.aborted) throw new DOMException("ChatGPT web turn aborted", "AbortError");
     if (this.config.browserHost !== "launcher") return this.runBrowserTurn(turn);
 
@@ -5640,7 +5645,16 @@ export class ChatGptBrowserWorker {
           });
           if (domError) throw new ChatGptDomHealthObservationError(domError);
         }
-        await new Promise(resolveSleep => setTimeout(resolveSleep, 250));
+        if (snapshot.responsePresent) {
+          await withChatGptBrowserObservationTimeout(withBrowserTurnAbort(responseTurn.locator.evaluate(waitForChatGptResponseDomChange, {
+            knownKey: responseDomCache.key,
+            timeoutMs: 250,
+            minWaitMs: 50,
+            attributeFilter: [...CHATGPT_DOM_REVISION_ATTRIBUTES],
+          }), turn.abortSignal));
+        } else {
+          await new Promise(resolveSleep => setTimeout(resolveSleep, 250));
+        }
        } catch (error) {
         if (error instanceof ChatGptPostToolFinalAnswerMissingError
           && localToolsActive

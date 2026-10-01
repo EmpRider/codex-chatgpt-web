@@ -45,6 +45,7 @@ import {
 } from "./responses/compaction";
 import { parseRequest } from "./responses/parser";
 import { expandPreviousResponseInput, flushResponseState, rememberResponseState } from "./responses/state";
+import { flushTurnDiagnostics } from "./adapters/chatgpt-web/turn-diagnostics";
 import { namespacedToolName, type AdapterEvent, type CodexParsedRequest } from "./types";
 import { compressParsedContextWithHeadroom } from "./optimization/headroom";
 import { optimizeRouteWithJev } from "./optimization/jev";
@@ -1126,12 +1127,13 @@ export function startServer(
     if (shutdownPromise) return;
     draining = true;
     chatGptTurnSessions.clear();
-    flushResponseState();
     shutdownPromise = (async () => {
       const results = await Promise.allSettled([
         closeChatGptBrowserWorkers(),
         closeTurnBrokers(),
       ]);
+      await flushResponseState();
+      await flushTurnDiagnostics();
       const failures = results
         .filter((result): result is PromiseRejectedResult => result.status === "rejected")
         .map(result => result.reason);
