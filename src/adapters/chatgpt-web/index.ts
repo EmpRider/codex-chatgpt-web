@@ -1522,7 +1522,17 @@ export function createChatGptWebAdapter(
           if (!(turnError instanceof ChatGptWebAdapterError && turnError.retryable)) {
             chatGptWebTurnRetryPolicy.clear(retryKey);
           }
-          if (handledError instanceof ChatGptWebAdapterError && !handledError.retryable) {
+          const staleTokenConversationKey = handledError instanceof ChatGptWebAdapterError
+            && handledError.code === "codex_turn_token_rejected"
+            ? session.conversationKey()
+            : undefined;
+          if (staleTokenConversationKey) {
+            // ChatGPT completed the stale-token text normally, so the launcher may already have
+            // retained that physical conversation. Release the retained epoch before reporting the
+            // retryable failure; otherwise the retry could receive a fresh token but reopen the
+            // same conversation whose history still contains the revoked handle.
+            await chatGptTurnSessions.retireConversationAndWait(staleTokenConversationKey);
+          } else if (handledError instanceof ChatGptWebAdapterError && !handledError.retryable) {
             // A deterministic request failure remains replayable so a native reconnect cannot burn
             // another browser attempt. Every other failure retires the browser session: client
             // disconnects, stage failures, and retryable ChatGPT errors must start a fresh surface
