@@ -1288,7 +1288,15 @@ describe("ChatGPT outer-native harness v4", () => {
     }
   });
 
-  test("stale Codex turn-token response is retryable and the next attempt gets a fresh token", async () => {
+  test.each([
+    ["Codex task could not start: provided turn token is invalid, expired, or revoked.\nRetry the Codex task so it generates a fresh turn token.", true],
+    ["No repository changes or commands were executed. Retry the Codex task so it supplies a fresh turn_token.", true],
+    ["No repository changes or commands were executed. Retry the Codex task so it supplies a fresh `turn\\_token`.", true],
+    ["This turn_token was issued for an earlier turn, which has already finished. This Codex Native action can no longer run. Retry the Codex task with a fresh turn_token.", true],
+    ["No repository changes or commands were executed. The task was read-only.", false],
+    ["Retry the Codex task so it supplies a fresh turn_token.", false],
+    ["A fresh turn_token is generated for each task.", false],
+  ] as const)("Codex turn-token recovery classifies the completed response: %s", async (rejectionAnswer, shouldRetry) => {
     const socketPath = brokerTestEndpoint(`cgw-stale-turn-token-${process.pid}-${Date.now()}`);
     const provider: CodexProviderConfig = {
       adapter: "chatgpt-web",
@@ -1320,7 +1328,7 @@ describe("ChatGPT outer-native harness v4", () => {
         tokens.push(token);
         browserStarts += 1;
         const answer = browserStarts === 1
-          ? "Codex task could not start: provided turn token is invalid, expired, or revoked.\nRetry the Codex task so it generates a fresh turn token."
+          ? rejectionAnswer
           : "Recovered with a fresh turn token";
         turn.onTextDelta(answer);
         return answer;
@@ -1334,6 +1342,12 @@ describe("ChatGPT outer-native harness v4", () => {
     try {
       const firstEvents: AdapterEvent[] = [];
       await adapter.runTurn!(request, { headers: new Headers() }, event => firstEvents.push(event));
+      if (!shouldRetry) {
+        expect(firstEvents.at(-1)).toMatchObject({ type: "done", stopReason: "stop", endTurn: true });
+        expect(retireConversation).not.toHaveBeenCalled();
+        expect(browserStarts).toBe(1);
+        return;
+      }
       expect(firstEvents.at(-1)).toMatchObject({
         type: "error",
         code: "codex_turn_token_rejected",

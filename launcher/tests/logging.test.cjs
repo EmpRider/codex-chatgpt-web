@@ -175,3 +175,19 @@ test("a closed Windows diagnostic pipe is recorded without becoming an uncaught 
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("export includes independent MCP lifecycle logs and protects all source files", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "cgw-lifecycle-export-"));
+  try {
+    const filePath = path.join(root, "launcher.jsonl");
+    const lifecycleDirectory = path.join(root, "turn-lifecycle");
+    fs.mkdirSync(lifecycleDirectory);
+    fs.writeFileSync(filePath, JSON.stringify({ at: "2026-10-01T09:00:00Z", level: "info", event: "launcher.started" }) + "\n");
+    const mcpPath = path.join(lifecycleDirectory, "process-123.jsonl");
+    fs.writeFileSync(mcpPath, JSON.stringify({ at: "2026-10-01T09:00:01Z", level: "info", event: "turn.mcp_claim_failed", detail: { tokenHash: "123456789abc", endpointHash: "abcdef123456", failureClass: "invalid_token", pid: 123 } }) + "\n");
+    const destinationPath = path.join(root, "export.jsonl");
+    assert.equal(exportSanitizedLogs({ filePath, destinationPath, lifecycleDirectory }), 2);
+    assert.match(fs.readFileSync(destinationPath, "utf8"), /turn.mcp_claim_failed/);
+    assert.throws(() => exportSanitizedLogs({ filePath, destinationPath: mcpPath, lifecycleDirectory }), /source log/);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});

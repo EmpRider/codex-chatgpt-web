@@ -1,3 +1,4 @@
+import { logTurnDiagnostic, classifyTurnDiagnosticError } from "./turn-diagnostics";
 import { createHash, randomBytes } from "node:crypto";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -483,6 +484,7 @@ export async function runChatGptMcpServer(options: {
   contract?: ChatGptMcpContract;
 }): Promise<void> {
   const contract = options.contract ?? "native";
+  logTurnDiagnostic("mcp_started", { brokerEndpoint: options.brokerSocketPath });
   const server = new McpServer(
     { name: contract === "safe" ? "codex-safe" : "codex-native", version: VERSION },
     contract === "safe" ? { instructions: ZERO_RISK_MCP_INSTRUCTIONS } : undefined,
@@ -494,6 +496,7 @@ export async function runChatGptMcpServer(options: {
     extra: McpRequestExtra,
   ): Promise<ClaimedTurn> => {
     console.error(`[chatgpt-web-mcp] ${toolName} scope=${requestScopeSummary(extra)}`);
+    logTurnDiagnostic("mcp_claim_started", { token: turnToken, brokerEndpoint: options.brokerSocketPath, toolName });
     const activityId = `activity_${randomBytes(18).toString("base64url")}`;
     try {
       const claimed = await callTurnBroker<Omit<ClaimedTurn, "activityId">>(
@@ -502,8 +505,10 @@ export async function runChatGptMcpServer(options: {
         contract === "safe" ? null : 5_000,
         extra.signal,
       );
+      logTurnDiagnostic("mcp_claim_succeeded", { token: turnToken, brokerEndpoint: options.brokerSocketPath, toolName });
       return { ...claimed, activityId };
     } catch (error) {
+      logTurnDiagnostic("mcp_claim_failed", { token: turnToken, brokerEndpoint: options.brokerSocketPath, toolName, failureClass: classifyTurnDiagnosticError(error) });
       try {
         await settleTurnActivity(turnToken, activityId);
       } catch (cleanupError) {

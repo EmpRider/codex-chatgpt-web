@@ -108,3 +108,15 @@ test("usage accounts for skills accumulated over many turns without applying a p
   expect(usage.inputTokens).toBeGreaterThan(0);
   expect(usage.estimated).toBe(true);
 });
+
+test("MCP context transport preserves referenced skill files and their reading contract", () => {
+  const skill = text();
+  const compiled = compile([input(skill), input("Execute the task. " + "x".repeat(150_000), ["user.text"])]);
+  expect(compiled.contextTransport).toBeDefined();
+  expect(compiled.skillFiles).toHaveLength(1);
+  const [file] = chatGptPromptFilePayloads(compiled);
+  expect(file!.buffer.toString("utf8")).toBe(skill);
+  expect(compiled.contextTransport!.text).toContain(file!.name);
+  expect(compiled.text).toContain("Each skill_attachment refers to a named UTF-8 text file");
+  expect(compiled.text).toContain(`Use turn_token ${token} unchanged`);
+});

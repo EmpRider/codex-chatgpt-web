@@ -691,6 +691,7 @@ export function compileChatGptWebPrompt(
       ];
       const text = [
         ...mcpSharedContract,
+        ...skillContract,
         ...transportContract,
         ...outputControlContract,
         ...checkpointContract,
@@ -702,7 +703,7 @@ export function compileChatGptWebPrompt(
           : "The task context is complete only after the MCP context reader has returned every chunk. Execute the latest active user request only after that point.",
         "</codex_transport_resume>",
       ].join("\n");
-      return { text, images, contextTransport };
+      return { text, images, contextTransport, ...attachments };
     }
     if (multipartEnabled) {
       const records: MultipartContextRecord[] = [

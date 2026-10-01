@@ -116,6 +116,11 @@ that option clicks **Allow once**, never a permanent grant.
 <a id="operations"></a>
 
 Use **Activity** for safe local diagnostics and **Settings → Run doctor** for end-to-end health.
+
+For token failures, reproduce once and use **Export privacy-safe diagnostics**. The export includes independent daemon, browser and MCP lifecycle records (`turn.*`), even when tunnel-managed MCP stderr is absent from Activity. Records include timestamps, process IDs, runtime versions, trace IDs, token and broker-endpoint fingerprints, transport mode, and classified claim failures. Match `tokenHash` across registration, prompt verification, accepted submission, MCP claim and retirement; match `endpointHash` to check that MCP and the daemon target the same broker. Different hashes locate a mismatch; a missing MCP claim alone does not establish why the remote connector did not reach this runtime.
+
+Lifecycle logs are automatic, contain no raw capability tokens, prompt/response text or endpoint paths, and rotate at 2 MiB per process (one backup). At most 40 process log files are retained after periodic pruning. Diagnostic write failures never block tasks. PNG browser captures remain separately opt-in.
+
 Settings can also cancel a retained browser turn or remove the Codex integration before uninstall.
 **Save chats in ChatGPT** keeps task conversations in ChatGPT history. Off by default; independent of **New browser chat for each turn**.
 Set `CODEX_CHATGPT_WEB_BROWSER_DIAGNOSTICS=1` only when every browser checkpoint needs a screenshot.
