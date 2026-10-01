@@ -451,6 +451,9 @@ describe("ChatGPT outer-native harness v4", () => {
       expect(tokens[1]).not.toBe(tokens[0]);
       expect(preparedPrompts[0]).toContain("Inspect the project");
       expect(preparedPrompts[1]).toContain("Continue in the same repository");
+      expect(preparedPrompts[1]).toContain(
+        "Ignore any turn_token from earlier ChatGPT messages; those handles are retired.",
+      );
       if (freshConversation) {
         expect(preparedPrompts[1]).toContain("First retained answer");
         expect(preparedPrompts[1]).toContain("Inspect the project");
@@ -1281,6 +1284,73 @@ describe("ChatGPT outer-native harness v4", () => {
       expect(browserStarts).toBe(MAX_CHATGPT_WEB_TURN_RETRIES + 1);
     } finally {
       (worker as unknown as { run: (turn: BrowserTurn) => Promise<string> }).run = originalRun;
+      await TurnBroker.forSocket(socketPath).close();
+    }
+  });
+
+  test("stale Codex turn-token response is retryable and the next attempt gets a fresh token", async () => {
+    const socketPath = brokerTestEndpoint(`cgw-stale-turn-token-${process.pid}-${Date.now()}`);
+    const provider: CodexProviderConfig = {
+      adapter: "chatgpt-web",
+      baseUrl: `browser://chatgpt-stale-turn-token-${Date.now()}`,
+      chatgptWeb: {
+        browserHost: "launcher",
+        browserHostDescriptorPath: join(tempRoot, "stale-token-launcher.json"),
+        brokerSocketPath: socketPath,
+        localToolsEnabled: true,
+        solAvailable: true,
+        extraHighAvailable: true,
+        proAvailable: true,
+      },
+    };
+    const worker = ChatGptBrowserWorker.forProvider(provider);
+    const originalRun = worker.run.bind(worker);
+    const retireConversation = spyOn(chatGptTurnSessions, "retireConversationAndWait")
+      .mockImplementation(async () => {
+        chatGptTurnSessions.clear();
+        return 1;
+      });
+    const tokens: string[] = [];
+    let browserStarts = 0;
+    (worker as unknown as { run: (turn: BrowserTurn) => Promise<string> }).run = async turn => {
+      const prepared = await turn.prepare();
+      try {
+        const token = prepared.text.match(/turn_token (turn_[A-Za-z0-9_-]+)/)?.[1];
+        if (!token) throw new Error("turn token missing from compiled prompt");
+        tokens.push(token);
+        browserStarts += 1;
+        const answer = browserStarts === 1
+          ? "Codex task could not start: provided turn token is invalid, expired, or revoked.\nRetry the Codex task so it generates a fresh turn token."
+          : "Recovered with a fresh turn token";
+        turn.onTextDelta(answer);
+        return answer;
+      } finally {
+        prepared.release();
+      }
+    };
+
+    const adapter = createChatGptWebAdapter(provider);
+    const request = rawWireRequest(environmentXml);
+    try {
+      const firstEvents: AdapterEvent[] = [];
+      await adapter.runTurn!(request, { headers: new Headers() }, event => firstEvents.push(event));
+      expect(firstEvents.at(-1)).toMatchObject({
+        type: "error",
+        code: "codex_turn_token_rejected",
+        retryable: true,
+      });
+      expect(retireConversation).toHaveBeenCalledTimes(1);
+
+      const secondEvents: AdapterEvent[] = [];
+      await adapter.runTurn!(request, { headers: new Headers() }, event => secondEvents.push(event));
+      expect(secondEvents.at(-1)).toMatchObject({ type: "done", stopReason: "stop", endTurn: true });
+      expect(browserStarts).toBe(2);
+      expect(tokens).toHaveLength(2);
+      expect(tokens[1]).not.toBe(tokens[0]);
+    } finally {
+      retireConversation.mockRestore();
+      (worker as unknown as { run: (turn: BrowserTurn) => Promise<string> }).run = originalRun;
+      chatGptTurnSessions.clear();
       await TurnBroker.forSocket(socketPath).close();
     }
   });
@@ -2217,6 +2287,56 @@ describe("ChatGPT outer-native harness v4", () => {
     await expect(callTurnBroker(socketPath, { method: "resolve", bindingId: claimed.bindingId }))
       .rejects.toThrow("has already finished");
     await broker.close();
+  });
+
+  test("automatic native turn tokens remain lifecycle-bound when a browser timeout is configured", async () => {
+    const socketPath = brokerTestEndpoint(`cgw-native-token-lifetime-${process.pid}-${Date.now()}`);
+    const provider: CodexProviderConfig = {
+      adapter: "chatgpt-web",
+      baseUrl: "browser://chatgpt-native-token-lifetime",
+      chatgptWeb: {
+        brokerSocketPath: socketPath,
+        turnTimeoutMs: 30_000,
+        localToolsEnabled: true,
+        solAvailable: true,
+        extraHighAvailable: true,
+        proAvailable: true,
+      },
+    };
+    const worker = ChatGptBrowserWorker.forProvider(provider);
+    const originalRun = worker.run.bind(worker);
+    (worker as unknown as { run: (turn: BrowserTurn) => Promise<string> }).run = async turn => {
+      const prepared = await turn.prepare();
+      try {
+        const token = prepared.text.match(/turn_token (turn_[A-Za-z0-9_-]+)/)?.[1];
+        if (!token) throw new Error("turn token missing from compiled prompt");
+        const activityId = "activity_token_lifetime_1234567890";
+        const claimed = await callTurnBroker<{
+          bindingId: string;
+          environment: { expiresAt?: number };
+        }>(socketPath, { method: "claim", token, activityId });
+        expect(claimed.environment.expiresAt).toBeUndefined();
+        await callTurnBroker(socketPath, { method: "activity_complete", token, activityId });
+        turn.onTextDelta("Token stayed live");
+        return "Token stayed live";
+      } finally {
+        prepared.release();
+      }
+    };
+
+    try {
+      const events: AdapterEvent[] = [];
+      await createChatGptWebAdapter(provider).runTurn!(
+        rawWireRequest(environmentXml),
+        { headers: new Headers() },
+        event => events.push(event),
+      );
+      expect(events.at(-1)).toMatchObject({ type: "done", stopReason: "stop", endTurn: true });
+    } finally {
+      (worker as unknown as { run: (turn: BrowserTurn) => Promise<string> }).run = originalRun;
+      chatGptTurnSessions.clear();
+      await TurnBroker.forSocket(socketPath).close();
+    }
   });
 
   test("recalculates usage from tool results added during the active browser turn", async () => {

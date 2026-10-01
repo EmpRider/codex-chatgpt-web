@@ -294,6 +294,22 @@ function replayEvents(events: AdapterEvent[], emit: (event: AdapterEvent) => voi
   for (const event of events) emit(event);
 }
 
+function throwIfCodexTurnTokenRejected(answer: string): void {
+  const normalized = answer.replace(/\s+/g, " ").trim();
+  if (!normalized.toLowerCase().includes("codex task could not start")) return;
+  if (!normalized.toLowerCase().includes("turn token is invalid, expired, or revoked")) return;
+  if (!normalized.toLowerCase().includes("fresh turn token")) return;
+  throw new ChatGptWebAdapterError(
+    "Codex Native rejected a stale turn token. Retry the task so the bridge can start a fresh ChatGPT turn with a new token.",
+    {
+      status: 502,
+      errorType: "server_error",
+      code: "codex_turn_token_rejected",
+      retryable: true,
+    },
+  );
+}
+
 function submittedTurnFailure(session: ChatGptTurnSession, error: unknown): Error {
   const normalized = error instanceof Error ? error : new Error(String(error));
   if (normalized instanceof ChatGptWebAdapterError) return normalized;
@@ -770,9 +786,14 @@ export function createChatGptWebAdapter(
     let tokenSettled = false;
     let activeToken: string | undefined;
     const prepareWith = async (input: CodexParsedRequest) => {
+      // The browser/session lifecycle owns cancellation. Do not mirror the browser timeout into
+      // the broker capability: a live ChatGPT task may legitimately outlive an observation/stage
+      // budget, and expiring its turn token independently produces stale-token failures while the
+      // task is still active. Explicit completion, cancellation, retirement, or runtime shutdown
+      // remains the authority that revokes this capability.
       const turnToken = activeToken ?? await broker.register(
         environment,
-        timeoutMs === undefined ? undefined : timeoutMs + 60_000,
+        undefined,
         traceId,
       );
       activeToken = turnToken;
@@ -1296,6 +1317,7 @@ export function createChatGptWebAdapter(
               if (session.runtime.text.value() !== settled.answer) {
                 throw new Error("ChatGPT browser Markdown stream did not reproduce the completed answer");
               }
+              throwIfCodexTurnTokenRejected(settled.answer);
               structuredOutputValidator?.(settled.answer);
               if (bufferStructuredOutput) {
                 emitRoundBatch(buffer => emitTextDeltas([settled.answer], buffer));
@@ -1405,6 +1427,7 @@ export function createChatGptWebAdapter(
                 if (session.runtime.text.value() !== completedOutcome.answer) {
                   throw new Error("ChatGPT browser Markdown stream did not reproduce the completed answer");
                 }
+                throwIfCodexTurnTokenRejected(completedOutcome.answer);
                 structuredOutputValidator?.(completedOutcome.answer);
                 if (bufferStructuredOutput) {
                   emitRoundBatch(buffer => emitTextDeltas([completedOutcome.answer], buffer));
@@ -1499,7 +1522,17 @@ export function createChatGptWebAdapter(
           if (!(turnError instanceof ChatGptWebAdapterError && turnError.retryable)) {
             chatGptWebTurnRetryPolicy.clear(retryKey);
           }
-          if (handledError instanceof ChatGptWebAdapterError && !handledError.retryable) {
+          const staleTokenConversationKey = handledError instanceof ChatGptWebAdapterError
+            && handledError.code === "codex_turn_token_rejected"
+            ? session.conversationKey()
+            : undefined;
+          if (staleTokenConversationKey) {
+            // ChatGPT completed the stale-token text normally, so the launcher may already have
+            // retained that physical conversation. Release the retained epoch before reporting the
+            // retryable failure; otherwise the retry could receive a fresh token but reopen the
+            // same conversation whose history still contains the revoked handle.
+            await chatGptTurnSessions.retireConversationAndWait(staleTokenConversationKey);
+          } else if (handledError instanceof ChatGptWebAdapterError && !handledError.retryable) {
             // A deterministic request failure remains replayable so a native reconnect cannot burn
             // another browser attempt. Every other failure retires the browser session: client
             // disconnects, stage failures, and retryable ChatGPT errors must start a fresh surface
