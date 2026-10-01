@@ -380,7 +380,7 @@ class HeadroomService {
     this.portConflict = false;
 
     try {
-      const existingHealth = await this.healthCheck(port, "/readyz");
+      const existingHealth = await this.healthCheck(port, "/livez");
       if (isHeadroomHealth(existingHealth)) {
         this.ready = true;
         this.lastError = null;
@@ -450,7 +450,7 @@ class HeadroomService {
       if (spawnError) throw spawnError;
       if (child.exitCode !== null) throw new Error(`Headroom exited during startup: ${stderr.trim()}`);
       try {
-        const health = await this.healthCheck(effectivePort, "/readyz");
+        const health = await this.healthCheck(effectivePort, "/livez");
         if (isHeadroomHealth(health)) {
           this.ready = true;
           this.lastError = null;

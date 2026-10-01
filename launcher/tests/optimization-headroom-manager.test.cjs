@@ -69,11 +69,11 @@ test("Headroom tells the user to change the configured port when it is occupied"
   );
 });
 
-test("Headroom health identity rejects generic readiness payloads", () => {
-  assert.equal(isHeadroomHealth({ ready: true }), false);
-  assert.equal(isHeadroomHealth({ service: "another-service", ready: true }), false);
+test("Headroom health identity accepts the local liveness contract", () => {
+  assert.equal(isHeadroomHealth({ alive: true }), false);
+  assert.equal(isHeadroomHealth({ service: "another-service", status: "healthy", alive: true }), false);
+  assert.equal(isHeadroomHealth({ service: "headroom-proxy", status: "healthy", alive: true }), true);
   assert.equal(isHeadroomHealth({ service: "headroom-proxy", ready: true }), true);
-  assert.equal(isHeadroomHealth({ service: "headroom-proxy", status: "healthy" }), true);
 });
 
 test("Headroom reuses an already healthy service on the configured port", async () => {
@@ -87,8 +87,8 @@ test("Headroom reuses an already healthy service on the configured port", async 
     },
     healthCheck: async (port, route) => {
       assert.equal(port, 8787);
-      assert.equal(route, "/readyz");
-      return { service: "headroom-proxy", ready: true };
+      assert.equal(route, "/livez");
+      return { service: "headroom-proxy", status: "healthy", alive: true };
     },
   });
 
@@ -99,7 +99,7 @@ test("Headroom reuses an already healthy service on the configured port", async 
     mlEnabled: false,
   });
 
-  assert.deepEqual(health, { service: "headroom-proxy", ready: true });
+  assert.deepEqual(health, { service: "headroom-proxy", status: "healthy", alive: true });
   assert.equal(resolverCalled, false);
   assert.deepEqual(service.state(), {
     running: true,
