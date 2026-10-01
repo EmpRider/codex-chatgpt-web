@@ -1,6 +1,40 @@
 import { estimateTokens } from "../lib/token-estimate";
 import type { CodexMessage, CodexParsedRequest } from "../types";
 import { effectiveHeadroomPort, loadOptimizationSettings } from "./config";
+import { getConfigDir } from "../config";
+
+const HEADROOM_COOLDOWN_MS = 30_000;
+const circuits = new Map<string, { retryAt: number; probing: boolean }>();
+
+function circuitKey(port: number): string { return `${getConfigDir()}:${port}`; }
+
+function canCompress(key: string): boolean {
+  const circuit = circuits.get(key);
+  if (!circuit) return true;
+  if (Date.now() < circuit.retryAt || circuit.probing) return false;
+  return true;
+}
+
+async function compressedPayload(port: number, body: unknown, fetchImpl: typeof fetch): Promise<HeadroomCompressResponse> {
+  const key = circuitKey(port);
+  const circuit = circuits.get(key);
+  if (circuit) circuit.probing = true;
+  try {
+    const response = await fetchImpl(`http://127.0.0.1:${port}/v1/compress`, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify(body), signal: AbortSignal.timeout(3_000),
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const payload = await response.json() as HeadroomCompressResponse;
+    circuits.delete(key);
+    return payload;
+  } catch (error) {
+    circuits.delete(key);
+    circuits.set(key, { retryAt: Date.now() + HEADROOM_COOLDOWN_MS, probing: false });
+    while (circuits.size > 16) circuits.delete(circuits.keys().next().value!);
+    throw error;
+  }
+}
 
 interface HeadroomCompressResponse {
   messages?: Array<Record<string, unknown>>;
@@ -103,21 +137,16 @@ export async function compressCommandResultWithHeadroom(
   const candidate = block as Record<string, unknown>;
   if (candidate.type !== "text" || typeof candidate.text !== "string") return result;
   const raw = candidate.text;
+  const port = effectiveHeadroomPort(settings);
+  if (!canCompress(circuitKey(port))) return result;
   if (estimateTokens(raw) < settings.headroom.minTokens) return result;
 
   try {
-    const response = await fetchImpl(`http://127.0.0.1:${effectiveHeadroomPort(settings)}/v1/compress`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        messages: [{ role: "assistant", content: raw }],
-        model: "gpt-5.6-sol",
-        config: { mode: "lossy_inline", frozen_message_count: 0 },
-      }),
-      signal: AbortSignal.timeout(3_000),
-    });
-    if (!response.ok) return result;
-    const payload = await response.json() as HeadroomCompressResponse;
+    const payload = await compressedPayload(port, {
+      messages: [{ role: "assistant", content: raw }],
+      model: "gpt-5.6-sol",
+      config: { mode: "lossy_inline", frozen_message_count: 0 },
+    }, fetchImpl);
     if (!Array.isArray(payload.messages) || payload.messages.length !== 1) return result;
     const compressed = payload.messages[0];
     if (compressed?.role !== "assistant" || typeof compressed.content !== "string") return result;
@@ -147,6 +176,8 @@ export async function compressParsedContextWithHeadroom(
 ): Promise<HeadroomOptimizationResult> {
   const settings = loadOptimizationSettings();
   if (!settings.headroom.enabled) return { attempted: false, applied: false, messageCount: 0 };
+  const port = effectiveHeadroomPort(settings);
+  if (!canCompress(circuitKey(port))) return { attempted: false, applied: false, messageCount: 0 };
 
   const candidates = headroomEligibleMessages(
     parsed,
@@ -156,28 +187,14 @@ export async function compressParsedContextWithHeadroom(
   if (!candidates.length) return { attempted: false, applied: false, messageCount: 0 };
 
   try {
-    const response = await fetchImpl(`http://127.0.0.1:${effectiveHeadroomPort(settings)}/v1/compress`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        messages: candidates.map(wireMessage),
-        model: parsed.modelId,
-        config: {
-          mode: "lossy_inline",
-          frozen_message_count: 0,
-        },
-      }),
-      signal: AbortSignal.timeout(3_000),
-    });
-    if (!response.ok) {
-      return {
-        attempted: true,
-        applied: false,
-        messageCount: candidates.length,
-        error: `HTTP ${response.status}`,
-      };
-    }
-    const payload = await response.json() as HeadroomCompressResponse;
+    const payload = await compressedPayload(port, {
+      messages: candidates.map(wireMessage),
+      model: parsed.modelId,
+      config: {
+        mode: "lossy_inline",
+        frozen_message_count: 0,
+      },
+    }, fetchImpl);
     if (!Array.isArray(payload.messages) || !applyCompressedContent(parsed, candidates, payload.messages)) {
       return {
         attempted: true,

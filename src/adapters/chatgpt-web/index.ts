@@ -1,5 +1,6 @@
 import { logTurnDiagnostic } from "./turn-diagnostics";
 import { createHash, randomBytes } from "node:crypto";
+import { withTokenEstimateCache } from "../../lib/token-estimate";
 import { resolve } from "node:path";
 import { isChatGptWebZeroRiskBackendModel } from "../../chatgpt-web-models";
 import { defaultBrokerEndpoint, expandUserPath, resolveBrokerEndpoint } from "../../config";
@@ -1594,7 +1595,7 @@ export function createChatGptWebAdapter(
       );
       try {
         emit({ type: "heartbeat" });
-        await runChatGptWebTurn();
+        await withTokenEstimateCache(runChatGptWebTurn);
       } finally {
         clearInterval(heartbeat);
       }

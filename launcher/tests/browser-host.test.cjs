@@ -2842,7 +2842,7 @@ test("ending one browser turn does not stop another running tab", async () => {
   assert.equal(fixture.activeTraceId, active.traceId);
 });
 
-test("a completed keyed turn is retained for thirty minutes and preserves its acknowledgement", async () => {
+test("a completed keyed turn is retained until its idle deadline and preserves its acknowledgement", async () => {
   const throttling = [];
   const tab = {
     id: "tab-retained",
@@ -2891,11 +2891,11 @@ test("a completed keyed turn is retained for thirty minutes and preserves its ac
   assert.deepEqual(throttling, [true]);
 
   const retainedAt = tab.lastHeartbeatAt;
-  BrowserHost.prototype.reapExpiredTurnTabs.call(fixture, retainedAt + (30 * 60 * 1000) - 1);
+  BrowserHost.prototype.reapExpiredTurnTabs.call(fixture, retainedAt + (5 * 60 * 1000) - 1);
   assert.equal(fixture.turnTabs.has(tab.id), true);
 });
 
-test("a retained browser tab expires at thirty minutes", () => {
+test("an automatic retained browser tab expires after five idle minutes", () => {
   const removed = [];
   const tab = {
     id: "tab-expired",
@@ -2912,10 +2912,22 @@ test("a retained browser tab expires at thirty minutes", () => {
     },
   };
 
-  BrowserHost.prototype.reapExpiredTurnTabs.call(fixture, 100 + (30 * 60 * 1000));
+  BrowserHost.prototype.reapExpiredTurnTabs.call(fixture, 100 + (5 * 60 * 1000));
 
   assert.deepEqual(removed, [[tab.id, false]]);
   assert.equal(fixture.turnTabs.size, 0);
+});
+
+test("manual retained state and running turns survive automatic idle reclamation", () => {
+  const ready = { id: "manual", interactionMode: "manual", status: "ready", lastHeartbeatAt: 100 };
+  const running = { id: "running", status: "running", bootstrapReady: true, lastHeartbeatAt: 100 + 5 * 60 * 1000 };
+  const fixture = {
+    turnTabs: new Map([[ready.id, ready], [running.id, running]]),
+    logger: { info() {}, warn() {} },
+    removeTurnTab() { assert.fail("live and manual state must survive"); },
+  };
+  BrowserHost.prototype.reapExpiredTurnTabs.call(fixture, 100 + 5 * 60 * 1000);
+  assert.equal(fixture.turnTabs.size, 2);
 });
 
 test("a completed connector turn without binding is released instead of retained", async () => {

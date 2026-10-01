@@ -46,6 +46,9 @@ const TURN_HEARTBEAT_SWEEP_MS = 5_000;
 const TURN_HEARTBEAT_TIMEOUT_MS = 60_000;
 const TURN_TAB_BOOTSTRAP_TIMEOUT_MS = 120_000;
 const RETAINED_TURN_TAB_TTL_MS = 30 * 60 * 1000;
+// Automatic turns have a full-context fallback. Reclaim their idle renderer sooner;
+// manual turns keep their existing lease because the browser owns that transcript.
+const AUTOMATIC_RETAINED_TURN_TAB_TTL_MS = 5 * 60 * 1000;
 const BROWSER_NAVIGATION_TIMEOUT_MS = 60_000;
 const CHATGPT_AUTH_SESSION_TIMEOUT_MS = 5_000;
 const WINDOW_VISIBILITY_EVENTS = ["show", "hide", "minimize", "restore"];
@@ -1508,7 +1511,7 @@ class BrowserHost {
         continue;
       }
       if (tab.status === "ready") {
-        if (now - (tab.lastHeartbeatAt ?? 0) < RETAINED_TURN_TAB_TTL_MS) continue;
+        if (now - (tab.lastHeartbeatAt ?? 0) < AUTOMATIC_RETAINED_TURN_TAB_TTL_MS) continue;
         this.logger.info("browser.retained_tab_expired", { tabId: tab.id, traceId: tab.traceId });
         this.removeTurnTab(tab, false);
         continue;

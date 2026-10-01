@@ -107,6 +107,28 @@ describe("Headroom context optimization", () => {
 });
 
 describe("Headroom live command-result compression", () => {
+  test("an unavailable service is bypassed during cooldown and retried after recovery", async () => {
+    configureHeadroom({ minTokens: 50 });
+    const source = { content: [{ type: "text", text: "command output ".repeat(1000) }] };
+    let calls = 0;
+    let now = Date.now();
+    const originalNow = Date.now;
+    Date.now = () => now;
+    const fetchImpl = (async () => {
+      calls++;
+      if (calls === 1) throw new Error("offline");
+      return new Response(JSON.stringify({ messages: [{ role: "assistant", content: "recovered" }] }));
+    }) as unknown as typeof fetch;
+    try {
+      expect(await compressCommandResultWithHeadroom(source, fetchImpl)).toBe(source);
+      expect(await compressCommandResultWithHeadroom(source, fetchImpl)).toBe(source);
+      expect(calls).toBe(1);
+      now += 30_001;
+      expect((await compressCommandResultWithHeadroom(source, fetchImpl)).content).toEqual([{ type: "text", text: "recovered" }]);
+      expect(calls).toBe(2);
+    } finally { Date.now = originalNow; }
+  });
+
   test("compresses a large plain-text command result without changing its MCP shape", async () => {
     configureHeadroom({ minTokens: 50 });
     const raw = "repeated command output ".repeat(1000);

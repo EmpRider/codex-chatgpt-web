@@ -24,6 +24,27 @@ test("launcher logs redact tunnel ids, runtime keys, and bearer credentials", ()
   });
 });
 
+test("normal logging avoids synchronous disk writes and flushes ordered sanitized records", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "cgw-buffered-log-"));
+  const filePath = path.join(root, "launcher.jsonl");
+  const logger = createLogger({ filePath });
+  const append = fs.appendFileSync;
+  fs.appendFileSync = () => { assert.fail("normal logging must not block on disk"); };
+  try {
+    for (let index = 0; index < 100; index++) logger.info(`event-${index}`, { authorization: "secret" });
+    assert.equal(logger.recent(100).length, 100);
+    await logger.flush();
+    const records = fs.readFileSync(filePath, "utf8").trim().split("\n").map(JSON.parse);
+    assert.equal(records.length, 100);
+    assert.equal(records[0].event, "event-0");
+    assert.equal(records.at(-1).event, "event-99");
+    assert.equal(records[0].detail.authorization, "[redacted]");
+  } finally {
+    fs.appendFileSync = append;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("failed launcher IPC calls are written to runtime activity", async () => {
   let registered;
   const errors = [];

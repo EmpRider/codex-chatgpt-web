@@ -1,4 +1,5 @@
 import { get_encoding, type Tiktoken } from "tiktoken";
+import { AsyncLocalStorage } from "node:async_hooks";
 
 /**
  * Token accounting for ChatGPT Web prompts.
@@ -9,6 +10,26 @@ import { get_encoding, type Tiktoken } from "tiktoken";
 
 const TOKENIZER_CHUNK_CHARS = 4_096;
 let tokenizer: Tiktoken | undefined;
+const MAX_CACHE_BYTES = 8 * 1024 * 1024;
+const MAX_CACHE_ENTRIES = 128;
+interface EstimateCache {
+  values: Map<string, number>;
+  retainedBytes: number;
+  hits: number;
+  misses: number;
+}
+const requestCache = new AsyncLocalStorage<EstimateCache>();
+
+/** Cache exact text only for the owning request, never across conversations. */
+export function withTokenEstimateCache<T>(work: () => T): T {
+  if (requestCache.getStore()) return work();
+  return requestCache.run({ values: new Map(), retainedBytes: 0, hits: 0, misses: 0 }, work);
+}
+
+export function tokenEstimateCacheStats() {
+  const cache = requestCache.getStore();
+  return cache && { hits: cache.hits, misses: cache.misses, entries: cache.values.size, retainedBytes: cache.retainedBytes };
+}
 
 function chatGptTokenizer(): Tiktoken {
   tokenizer ??= get_encoding("o200k_base");
@@ -24,6 +45,16 @@ export function estimateTokens(text: string, modelId?: string): number {
   void modelId;
   if (!text) return 0;
 
+  const cache = requestCache.getStore();
+  const cached = cache?.values.get(text);
+  if (cached !== undefined) {
+    cache!.hits += 1;
+    cache!.values.delete(text);
+    cache!.values.set(text, cached);
+    return cached;
+  }
+  if (cache) cache.misses += 1;
+
   const encoding = chatGptTokenizer();
   let count = 0;
   for (let start = 0; start < text.length;) {
@@ -37,6 +68,18 @@ export function estimateTokens(text: string, modelId?: string): number {
     }
     count += encoding.encode_ordinary(text.slice(start, end)).length;
     start = end;
+  }
+  // Charge two bytes per UTF-16 code unit even when the engine can use compact strings.
+  const bytes = text.length * 2;
+  if (cache && bytes <= MAX_CACHE_BYTES) {
+    while (cache.values.size >= MAX_CACHE_ENTRIES || cache.retainedBytes + bytes > MAX_CACHE_BYTES) {
+      const oldest = cache.values.keys().next().value;
+      if (oldest === undefined) break;
+      cache.retainedBytes -= oldest.length * 2;
+      cache.values.delete(oldest);
+    }
+    cache.values.set(text, count);
+    cache.retainedBytes += bytes;
   }
   return count;
 }
