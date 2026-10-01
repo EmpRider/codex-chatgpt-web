@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { ChatGptTextFeed, ChatGptTraceFeed, ChatGptTurnSessions } from "../src/adapters/chatgpt-web/turn-execution";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, statSync } from "node:fs";
-import { createServer, type Socket } from "node:net";
+import { createConnection, createServer, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { callTurnBroker, TurnBroker } from "../src/adapters/chatgpt-web/turn-broker";
@@ -504,3 +504,574 @@ test("turn broker names the finished turn that owns a replayed handle", async ()
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+
+test("timed-out MCP invocation retires only that invocation and keeps the browser turn capability alive", async () => {
+  const root = mkdtempSync(join(tmpdir(), "cgw-inv-"));
+  const socketPath = process.platform === "win32"
+    ? defaultBrokerEndpoint(root)
+    : join(tmpdir(), `cgw-inv-${process.pid}.sock`);
+  const broker = TurnBroker.forSocket(socketPath);
+  try {
+    const token = await broker.register({
+      cwd: root,
+      roots: [root],
+      writableRoots: [root],
+      sandboxPolicy: { type: "dangerFullAccess" },
+      tools: [],
+    }, undefined, "long-browser-turn");
+    const activityId = "activity_timeoutcleanup1234567890";
+    const claimed = await callTurnBroker<{ bindingId: string }>(socketPath, {
+      method: "claim",
+      token,
+      activityId,
+    });
+
+    const invocation = callTurnBroker(socketPath, {
+      method: "invoke",
+      bindingId: claimed.bindingId,
+      activityId,
+      wireName: "exec_command",
+      arguments: { cmd: "long-running-command" },
+    }, 25);
+    const [request] = await broker.nextToolBatch(token);
+    expect(request?.wireName).toBe("exec_command");
+    await expect(invocation).rejects.toThrow("timed out");
+
+    await Bun.sleep(25);
+    await callTurnBroker(socketPath, {
+      method: "activity_complete",
+      token,
+      activityId,
+    });
+
+    expect(broker.beginCompletionFence(token)).toBeDefined();
+    await expect(callTurnBroker<{ bindingId: string }>(socketPath, {
+      method: "claim",
+      token,
+      activityId: "activity_aftertimeout1234567890",
+    })).resolves.toMatchObject({ bindingId: claimed.bindingId });
+  } finally {
+    await broker.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+
+const crossProcessTimeoutTest = process.platform === "win32" ? test.skip : test;
+
+crossProcessTimeoutTest("late native result after MCP timeout is ignored without poisoning the surviving turn", async () => {
+  const root = mkdtempSync(join(tmpdir(), "cgw-late-"));
+  const socketPath = process.platform === "win32"
+    ? defaultBrokerEndpoint(root)
+    : join(tmpdir(), `cgw-late-${process.pid}.sock`);
+  const broker = TurnBroker.forSocket(socketPath);
+  try {
+    const token = await broker.register({
+      cwd: root,
+      roots: [root],
+      writableRoots: [root],
+      sandboxPolicy: { type: "dangerFullAccess" },
+      tools: [],
+    }, undefined, "late-result-turn");
+    const activityId = "activity_lateresult1234567890";
+    const claimed = await callTurnBroker<{ bindingId: string }>(socketPath, {
+      method: "claim",
+      token,
+      activityId,
+    });
+
+    const invocation = callTurnBroker(socketPath, {
+      method: "invoke",
+      bindingId: claimed.bindingId,
+      activityId,
+      wireName: "exec_command",
+      arguments: { cmd: "slow-command" },
+    }, 25);
+    const [request] = await broker.nextToolBatch(token);
+    expect(request).toBeDefined();
+
+    await expect(invocation).rejects.toThrow("timed out");
+    expect(broker.beginCompletionFence(token)).toBeUndefined();
+
+    await callTurnBroker(socketPath, {
+      method: "activity_complete",
+      token,
+      activityId,
+    });
+    expect(broker.beginCompletionFence(token)).toBeDefined();
+
+    expect(() => broker.completeTool(token, request!.callId, {
+      content: [{ type: "text", text: "late native result" }],
+    })).not.toThrow();
+    expect(() => broker.completeTool(token, "call_unknown_late_result", {
+      content: [{ type: "text", text: "unknown" }],
+    })).toThrow("tool call is not pending");
+
+    const nextActivity = "activity_afterlate1234567890";
+    await expect(callTurnBroker<{ bindingId: string }>(socketPath, {
+      method: "claim",
+      token,
+      activityId: nextActivity,
+    })).resolves.toMatchObject({ bindingId: claimed.bindingId });
+    await callTurnBroker(socketPath, {
+      method: "activity_complete",
+      token,
+      activityId: nextActivity,
+    });
+  } finally {
+    await broker.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+crossProcessTimeoutTest("timed-out undelivered MCP invocation is removed from the next tool batch", async () => {
+  const root = mkdtempSync(join(tmpdir(), "cgw-undel-"));
+  const socketPath = process.platform === "win32"
+    ? defaultBrokerEndpoint(root)
+    : join(tmpdir(), `cgw-undel-${process.pid}.sock`);
+  const broker = TurnBroker.forSocket(socketPath);
+  try {
+    const token = await broker.register({
+      cwd: root,
+      roots: [root],
+      writableRoots: [root],
+      sandboxPolicy: { type: "dangerFullAccess" },
+      tools: [],
+    }, undefined, "undelivered-timeout");
+    const activityId = "activity_undelivered1234567890";
+    const claimed = await callTurnBroker<{ bindingId: string }>(socketPath, {
+      method: "claim",
+      token,
+      activityId,
+    });
+
+    await expect(callTurnBroker(socketPath, {
+      method: "invoke",
+      bindingId: claimed.bindingId,
+      activityId,
+      wireName: "exec_command",
+      arguments: { cmd: "never-delivered" },
+    }, 25)).rejects.toThrow("timed out");
+    // The client timeout destroys its socket; allow the broker close event to retire the queued
+    // invocation before asking for the next batch.
+    await Bun.sleep(25);
+
+    const waitAbort = new AbortController();
+    const timer = setTimeout(() => waitAbort.abort(), 40);
+    try {
+      await expect(broker.nextToolBatch(token, waitAbort.signal)).rejects.toThrow("tool wait aborted");
+    } finally {
+      clearTimeout(timer);
+    }
+
+    await callTurnBroker(socketPath, {
+      method: "activity_complete",
+      token,
+      activityId,
+    });
+    expect(broker.beginCompletionFence(token)).toBeDefined();
+  } finally {
+    await broker.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+
+crossProcessTimeoutTest("one timed-out MCP invocation does not cancel a parallel sibling on the same turn", async () => {
+  const root = mkdtempSync(join(tmpdir(), "cgw-par-"));
+  const socketPath = process.platform === "win32"
+    ? defaultBrokerEndpoint(root)
+    : join(tmpdir(), `cgw-par-${process.pid}.sock`);
+  const broker = TurnBroker.forSocket(socketPath);
+  try {
+    const token = await broker.register({
+      cwd: root,
+      roots: [root],
+      writableRoots: [root],
+      sandboxPolicy: { type: "dangerFullAccess" },
+      tools: [],
+    }, undefined, "parallel-timeout-turn");
+    const firstActivity = "activity_parallelfirst1234567890";
+    const secondActivity = "activity_parallelsecond123456789";
+    const firstClaim = await callTurnBroker<{ bindingId: string }>(socketPath, {
+      method: "claim", token, activityId: firstActivity,
+    });
+    const secondClaim = await callTurnBroker<{ bindingId: string }>(socketPath, {
+      method: "claim", token, activityId: secondActivity,
+    });
+    expect(secondClaim.bindingId).toBe(firstClaim.bindingId);
+
+    const timedOut = callTurnBroker(socketPath, {
+      method: "invoke",
+      bindingId: firstClaim.bindingId,
+      activityId: firstActivity,
+      wireName: "exec_command",
+      arguments: { cmd: "slow-first" },
+    }, 25);
+    const survivor = callTurnBroker(socketPath, {
+      method: "invoke",
+      bindingId: secondClaim.bindingId,
+      activityId: secondActivity,
+      wireName: "exec_command",
+      arguments: { cmd: "fast-second" },
+    }, 2_000);
+
+    const batch = await broker.nextToolBatch(token);
+    expect(batch).toHaveLength(2);
+    const first = batch.find(request => request.arguments?.cmd === "slow-first");
+    const second = batch.find(request => request.arguments?.cmd === "fast-second");
+    expect(first).toBeDefined();
+    expect(second).toBeDefined();
+
+    await expect(timedOut).rejects.toThrow("timed out");
+    await Bun.sleep(25);
+    broker.completeTool(token, second!.callId, {
+      content: [{ type: "text", text: "second completed" }],
+    });
+    await expect(survivor).resolves.toMatchObject({
+      content: [{ type: "text", text: "second completed" }],
+    });
+
+    await callTurnBroker(socketPath, {
+      method: "activity_complete", token, activityId: firstActivity,
+    });
+    await callTurnBroker(socketPath, {
+      method: "activity_complete", token, activityId: secondActivity,
+    });
+    expect(broker.beginCompletionFence(token)).toBeDefined();
+
+    expect(() => broker.completeTool(token, first!.callId, {
+      content: [{ type: "text", text: "first completed late" }],
+    })).not.toThrow();
+  } finally {
+    await broker.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+
+crossProcessTimeoutTest("an unresolved timed-out invocation cannot be replayed as an identical native side effect", async () => {
+  const root = mkdtempSync(join(tmpdir(), "cgw-amb-"));
+  const socketPath = process.platform === "win32"
+    ? defaultBrokerEndpoint(root)
+    : join(tmpdir(), `cgw-amb-${process.pid}.sock`);
+  const broker = TurnBroker.forSocket(socketPath);
+  try {
+    const token = await broker.register({
+      cwd: root,
+      roots: [root],
+      writableRoots: [root],
+      sandboxPolicy: { type: "dangerFullAccess" },
+      tools: [],
+    }, undefined, "ambiguous-timeout-turn");
+    const firstActivity = "activity_ambiguousfirst123456789";
+    const claimed = await callTurnBroker<{ bindingId: string }>(socketPath, {
+      method: "claim",
+      token,
+      activityId: firstActivity,
+    });
+
+    const first = callTurnBroker(socketPath, {
+      method: "invoke",
+      bindingId: claimed.bindingId,
+      activityId: firstActivity,
+      wireName: "exec_command",
+      arguments: { cmd: "perform-side-effect", cwd: root },
+    }, 25);
+    const [firstRequest] = await broker.nextToolBatch(token);
+    expect(firstRequest).toBeDefined();
+    await expect(first).rejects.toThrow("timed out");
+    await Bun.sleep(25);
+    await callTurnBroker(socketPath, {
+      method: "activity_complete",
+      token,
+      activityId: firstActivity,
+    });
+
+    const secondActivity = "activity_ambiguoussecond12345678";
+    await callTurnBroker(socketPath, {
+      method: "claim",
+      token,
+      activityId: secondActivity,
+    });
+    const duplicate = callTurnBroker<{
+      content: unknown[];
+      structuredContent?: unknown;
+      isError?: boolean;
+    }>(socketPath, {
+      method: "invoke",
+      bindingId: claimed.bindingId,
+      activityId: secondActivity,
+      wireName: "exec_command",
+      arguments: { cwd: root, cmd: "perform-side-effect" },
+    }, 500);
+
+    const waitAbort = new AbortController();
+    const timer = setTimeout(() => waitAbort.abort(), 50);
+    try {
+      await expect(broker.nextToolBatch(token, waitAbort.signal)).rejects.toThrow("tool wait aborted");
+    } finally {
+      clearTimeout(timer);
+    }
+    await expect(duplicate).resolves.toMatchObject({
+      isError: true,
+      structuredContent: {
+        code: "codex_tool_outcome_ambiguous",
+        retryable: false,
+      },
+    });
+
+    await callTurnBroker(socketPath, {
+      method: "activity_complete",
+      token,
+      activityId: secondActivity,
+    });
+    // If the original native operation eventually finishes, ChatGPT still never received that
+    // result. Keep the outcome and replay it to an identical retry instead of executing the
+    // side effect a second time.
+    expect(() => broker.completeTool(token, firstRequest!.callId, {
+      content: [{ type: "text", text: "original completed late" }],
+      structuredContent: { source: "original" },
+    })).not.toThrow();
+
+    const thirdActivity = "activity_ambiguousthird123456789";
+    await callTurnBroker(socketPath, {
+      method: "claim",
+      token,
+      activityId: thirdActivity,
+    });
+    const retry = callTurnBroker(socketPath, {
+      method: "invoke",
+      bindingId: claimed.bindingId,
+      activityId: thirdActivity,
+      wireName: "exec_command",
+      arguments: { cmd: "perform-side-effect", cwd: root },
+    }, 500);
+    await expect(retry).resolves.toMatchObject({
+      content: [{ type: "text", text: "original completed late" }],
+      structuredContent: { source: "original" },
+    });
+
+    const noReplayAbort = new AbortController();
+    const noReplayTimer = setTimeout(() => noReplayAbort.abort(), 50);
+    try {
+      await expect(broker.nextToolBatch(token, noReplayAbort.signal)).rejects.toThrow("tool wait aborted");
+    } finally {
+      clearTimeout(noReplayTimer);
+    }
+    await callTurnBroker(socketPath, {
+      method: "activity_complete",
+      token,
+      activityId: thirdActivity,
+    });
+
+    // The late result is a one-recovery cache, not a permanent memoization entry. Once the
+    // recovering activity settles, a later intentional identical operation must be allowed to run.
+    const fourthActivity = "activity_ambiguousfourth12345678";
+    await callTurnBroker(socketPath, {
+      method: "claim",
+      token,
+      activityId: fourthActivity,
+    });
+    const intentionalRepeat = callTurnBroker(socketPath, {
+      method: "invoke",
+      bindingId: claimed.bindingId,
+      activityId: fourthActivity,
+      wireName: "exec_command",
+      arguments: { cmd: "perform-side-effect", cwd: root },
+    }, 2_000);
+    const [repeatRequest] = await broker.nextToolBatch(token);
+    expect(repeatRequest).toBeDefined();
+    broker.completeTool(token, repeatRequest!.callId, {
+      content: [{ type: "text", text: "intentional repeat completed" }],
+    });
+    await expect(intentionalRepeat).resolves.toMatchObject({
+      content: [{ type: "text", text: "intentional repeat completed" }],
+    });
+    await callTurnBroker(socketPath, {
+      method: "activity_complete",
+      token,
+      activityId: fourthActivity,
+    });
+  } finally {
+    await broker.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+
+test("activity completion abandons its delivered invocation without waiting for socket-close cleanup", async () => {
+  const root = mkdtempSync(join(tmpdir(), "cgw-act-"));
+  const socketPath = process.platform === "win32"
+    ? defaultBrokerEndpoint(root)
+    : join(tmpdir(), `cgw-act-${process.pid}.sock`);
+  const broker = TurnBroker.forSocket(socketPath);
+  try {
+    const token = await broker.register({
+      cwd: root,
+      roots: [root],
+      writableRoots: [root],
+      sandboxPolicy: { type: "dangerFullAccess" },
+      tools: [],
+    }, undefined, "activity-cleanup-turn");
+    const activityId = "activity_cleanupowner12345678901";
+    const claimed = await callTurnBroker<{ bindingId: string }>(socketPath, {
+      method: "claim",
+      token,
+      activityId,
+    });
+
+    const invocation = callTurnBroker(socketPath, {
+      method: "invoke",
+      bindingId: claimed.bindingId,
+      activityId,
+      wireName: "exec_command",
+      arguments: { cmd: "slow-owner-call" },
+    }, 2_000);
+    const [request] = await broker.nextToolBatch(token);
+    expect(request).toBeDefined();
+
+    await callTurnBroker(socketPath, {
+      method: "activity_complete",
+      token,
+      activityId,
+    });
+    expect(broker.beginCompletionFence(token)).toBeDefined();
+
+    await expect(invocation).rejects.toThrow("activity completed");
+    expect(() => broker.completeTool(token, request!.callId, {
+      content: [{ type: "text", text: "late result" }],
+    })).not.toThrow();
+  } finally {
+    await broker.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+
+test("native result racing ahead of broker socket-close is still recoverable after client abandonment", async () => {
+  const root = mkdtempSync(join(tmpdir(), "cgw-close-race-"));
+  const socketPath = process.platform === "win32"
+    ? defaultBrokerEndpoint(root)
+    : join(tmpdir(), `cgw-close-race-${process.pid}.sock`);
+  const broker = TurnBroker.forSocket(socketPath);
+  let invokeSocket: Socket | undefined;
+  try {
+    const token = await broker.register({
+      cwd: root,
+      roots: [root],
+      writableRoots: [root],
+      sandboxPolicy: { type: "dangerFullAccess" },
+      tools: [],
+    }, undefined, "close-race-turn");
+    const activityId = "activity_closerace123456789012";
+    const claimed = await callTurnBroker<{ bindingId: string }>(socketPath, {
+      method: "claim",
+      token,
+      activityId,
+    });
+
+    // Use a raw broker socket so client abandonment and the server's close observation are separate
+    // events. Destroy locally, then complete the native call synchronously before the broker's
+    // socket-close callback has a chance to run.
+    invokeSocket = createConnection(socketPath);
+    await new Promise<void>((resolve, reject) => {
+      invokeSocket!.once("connect", resolve);
+      invokeSocket!.once("error", reject);
+    });
+    invokeSocket.write(`${JSON.stringify({
+      id: "request_close_race",
+      method: "invoke",
+      bindingId: claimed.bindingId,
+      activityId,
+      wireName: "exec_command",
+      arguments: { cmd: "single-side-effect" },
+    })}\n`);
+
+    const [request] = await broker.nextToolBatch(token);
+    expect(request).toBeDefined();
+    invokeSocket.destroy();
+    broker.completeTool(token, request!.callId, {
+      content: [{ type: "text", text: "completed during close race" }],
+      structuredContent: { source: "raced-original" },
+    });
+    await Bun.sleep(25);
+
+    // The MCP activity now reports that its consumer is gone. The result above must be converted
+    // into recoverable abandoned state rather than forgotten as a successful delivery.
+    await callTurnBroker(socketPath, {
+      method: "activity_complete",
+      token,
+      activityId,
+      activityAbandoned: true,
+    });
+
+    const recoveryActivity = "activity_closeracerecover1234567";
+    await callTurnBroker(socketPath, {
+      method: "claim",
+      token,
+      activityId: recoveryActivity,
+    });
+    const recovery = callTurnBroker(socketPath, {
+      method: "invoke",
+      bindingId: claimed.bindingId,
+      activityId: recoveryActivity,
+      wireName: "exec_command",
+      arguments: { cmd: "single-side-effect" },
+    }, 500);
+    await expect(recovery).resolves.toMatchObject({
+      content: [{ type: "text", text: "completed during close race" }],
+      structuredContent: { source: "raced-original" },
+    });
+
+    const noSecondDispatch = new AbortController();
+    const noSecondTimer = setTimeout(() => noSecondDispatch.abort(), 50);
+    try {
+      await expect(broker.nextToolBatch(token, noSecondDispatch.signal)).rejects.toThrow("tool wait aborted");
+    } finally {
+      clearTimeout(noSecondTimer);
+    }
+    await callTurnBroker(socketPath, {
+      method: "activity_complete",
+      token,
+      activityId: recoveryActivity,
+    });
+  } finally {
+    invokeSocket?.destroy();
+    await broker.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+
+test("turn broker close does not wait forever for an attached transport socket", async () => {
+  const root = mkdtempSync(join(tmpdir(), "cgw-close-sock-"));
+  const socketPath = defaultBrokerEndpoint(root);
+  const broker = TurnBroker.forSocket(socketPath);
+  let socket: Socket | undefined;
+  try {
+    await broker.register({
+      cwd: root,
+      roots: [root],
+      writableRoots: [root],
+      sandboxPolicy: { type: "dangerFullAccess" },
+      tools: [],
+    }, undefined, "close-active-transport");
+
+    socket = createConnection(socketPath);
+    await new Promise<void>((resolve, reject) => {
+      socket!.once("connect", resolve);
+      socket!.once("error", reject);
+    });
+
+    await expect(Promise.race([
+      broker.close().then(() => "closed"),
+      Bun.sleep(1_000).then(() => "timed-out"),
+    ])).resolves.toBe("closed");
+  } finally {
+    socket?.destroy();
+    await broker.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+}, 5_000);

@@ -37,8 +37,13 @@ export interface BrokerToolResult {
 
 interface PendingInvocation {
   request: BrokerToolRequest;
+  fingerprint: string;
+  activityId?: string;
   resolve: (result: BrokerToolResult) => void;
   reject: (error: Error) => void;
+  signal?: AbortSignal;
+  onAbort?: () => void;
+  timeout?: ReturnType<typeof setTimeout>;
 }
 
 interface ToolWaiter {
@@ -76,6 +81,18 @@ interface TurnChannel {
   bindingId?: string;
   queuedCallIds: string[];
   deliveredCallIds: Set<string>;
+  /** Delivered calls whose MCP consumer detached before the native result returned. */
+  abandonedInvocations: Map<string, {
+    fingerprint: string;
+    result?: BrokerToolResult;
+    replayActivityId?: string;
+  }>;
+  /** Native results that settled before their owning MCP activity reported its disposition. */
+  completedInvocationResults: Map<string, {
+    fingerprint: string;
+    activityId: string;
+    result: BrokerToolResult;
+  }>;
   invocations: Map<string, PendingInvocation>;
   waiters: Set<ToolWaiter>;
   compactionRequested: boolean;
@@ -137,6 +154,8 @@ interface BrokerRequest {
   traceId?: string;
   callId?: string;
   activityId?: string;
+  activityAbandoned?: boolean;
+  invokeTimeoutMs?: number;
   revision?: number;
   toolResult?: BrokerToolResult;
   handoffId?: string;
@@ -177,6 +196,26 @@ function handleFingerprint(value: string): string {
 
 function errorOf(value: unknown): Error {
   return value instanceof Error ? value : new Error(String(value));
+}
+
+function canonicalBrokerJson(value: unknown): string {
+  if (value === null) return "null";
+  if (Array.isArray(value)) return `[${value.map(canonicalBrokerJson).join(",")}]`;
+  if (typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    return `{${Object.keys(record).sort().map(key => (
+      `${JSON.stringify(key)}:${canonicalBrokerJson(record[key])}`
+    )).join(",")}}`;
+  }
+  return JSON.stringify(value) ?? "null";
+}
+
+function brokerInvocationFingerprint(request: BrokerToolRequest): string {
+  return createHash("sha256").update(canonicalBrokerJson({
+    wireName: request.wireName,
+    freeform: request.freeform,
+    payload: request.freeform ? request.input ?? "" : request.arguments ?? {},
+  })).digest("hex");
 }
 
 function retiredTurnLabel(traceId: string): string {
@@ -276,6 +315,7 @@ export class TurnBroker implements TurnBrokerOwner {
   private server?: Server;
   private startPromise?: Promise<void>;
   private socketIdentity?: { dev: number; ino: number };
+  private readonly transportSockets = new Set<Socket>();
 
   private constructor(readonly socketPath: string) {}
 
@@ -314,6 +354,8 @@ export class TurnBroker implements TurnBrokerOwner {
       },
       queuedCallIds: [],
       deliveredCallIds: new Set(),
+      abandonedInvocations: new Map(),
+      completedInvocationResults: new Map(),
       invocations: new Map(),
       waiters: new Set(),
       compactionRequested: false,
@@ -460,13 +502,41 @@ export class TurnBroker implements TurnBrokerOwner {
     this.prune();
     const channel = this.channels.get(token);
     if (!channel) throw new Error("turn token is invalid or expired");
-    this.assertSafeHarnessRunning(channel, true);
     const invocation = channel.invocations.get(callId);
-    if (!invocation) throw new Error(`tool call is not pending: ${callId}`);
+    // A native result can arrive after its MCP consumer timed out and, in Zero Risk, even after
+    // the user-visible turn has already completed. The tombstone proves this exact call belonged
+    // to the turn, so consume it before terminal-state validation. Unknown or still-pending calls
+    // keep the normal safe-turn checks below.
+    const abandoned = !invocation ? channel.abandonedInvocations.get(callId) : undefined;
+    if (abandoned) {
+      abandoned.result = structuredClone(result);
+      console.info(
+        `[chatgpt-web] broker trace=${channel.traceId} cached late result for abandoned call=${callId.slice(0, 17)}`,
+      );
+      return;
+    }
+    this.assertSafeHarnessRunning(channel, true);
+    if (!invocation) {
+      throw new Error(`tool call is not pending: ${callId}`);
+    }
     if (!channel.deliveredCallIds.delete(callId)) {
       throw new Error(`tool call was completed before it was delivered: ${callId}`);
     }
     channel.invocations.delete(callId);
+    if (invocation.timeout) clearTimeout(invocation.timeout);
+    if (invocation.signal && invocation.onAbort) {
+      invocation.signal.removeEventListener("abort", invocation.onAbort);
+    }
+    if (invocation.activityId) {
+      // Hold the result until the MCP activity declares whether its consumer actually received it.
+      // This closes the race where a client timeout destroys its socket just before the broker
+      // resolves the native result, but the server observes that close only afterwards.
+      channel.completedInvocationResults.set(callId, {
+        fingerprint: invocation.fingerprint,
+        activityId: invocation.activityId,
+        result: structuredClone(result),
+      });
+    }
     console.info(`[chatgpt-web] broker trace=${channel.traceId} completed call=${callId.slice(0, 17)} pending=${channel.invocations.size}`);
     invocation.resolve(result);
   }
@@ -525,6 +595,7 @@ export class TurnBroker implements TurnBrokerOwner {
       const invocation = channel.invocations.get(callId);
       if (!invocation) continue;
       channel.invocations.delete(callId);
+      if (invocation.timeout) clearTimeout(invocation.timeout);
       channel.compactionDeliveryCount += 1;
       invocation.resolve(structuredClone(queuedResult));
     }
@@ -772,6 +843,12 @@ export class TurnBroker implements TurnBrokerOwner {
     this.server = undefined;
     this.startPromise = undefined;
     if (brokers.get(this.socketPath) === this) brokers.delete(this.socketPath);
+    // server.close() waits for active named-pipe/socket connections. A timed-out MCP client can
+    // detach while Windows still keeps the server-side pipe alive, which otherwise makes broker
+    // shutdown (and process exit) hang indefinitely. These sockets are owned by this broker, so
+    // terminate them before waiting for the listener to close.
+    for (const socket of this.transportSockets) socket.destroy();
+    this.transportSockets.clear();
     if (server?.listening) {
       await new Promise<void>((resolveClose, rejectClose) => server.close(error => {
         if (!error || (error as NodeJS.ErrnoException).code === "ERR_SERVER_NOT_RUNNING") resolveClose();
@@ -807,7 +884,11 @@ export class TurnBroker implements TurnBrokerOwner {
         mkdirSync(dirname(this.socketPath), { recursive: true, mode: 0o700 });
       }
       const listen = () => {
-        const server = createServer(socket => this.handleSocket(socket));
+        const server = createServer(socket => {
+          this.transportSockets.add(socket);
+          socket.once("close", () => this.transportSockets.delete(socket));
+          this.handleSocket(socket);
+        });
         this.server = server;
         server.once("error", rejectStart);
         server.on("error", error => {
@@ -1154,6 +1235,48 @@ export class TurnBroker implements TurnBrokerOwner {
       }
       const wasActive = channel.activities.delete(request.activityId);
       channel.completedActivities.add(request.activityId);
+      const abandonedActivity = request.activityAbandoned === true;
+      // A result can settle in the narrow interval after the MCP client gives up but before the
+      // broker observes that request socket closing. The activity disposition is authoritative:
+      // preserve those results for safe recovery only when the consumer abandoned the activity.
+      for (const [callId, completed] of [...channel.completedInvocationResults]) {
+        if (completed.activityId !== request.activityId) continue;
+        channel.completedInvocationResults.delete(callId);
+        if (abandonedActivity) {
+          channel.abandonedInvocations.set(callId, {
+            fingerprint: completed.fingerprint,
+            result: structuredClone(completed.result),
+          });
+        }
+      }
+      // A completed MCP activity is the durable lifecycle boundary for every invocation it owns.
+      // Do not depend on a later socket-close notification (notably delayed on Windows named pipes)
+      // to remove a timed-out/cancelled invocation from the completion fence.
+      for (const [callId, invocation] of [...channel.invocations]) {
+        if (invocation.activityId !== request.activityId) continue;
+        channel.invocations.delete(callId);
+        if (invocation.timeout) clearTimeout(invocation.timeout);
+        channel.queuedCallIds = channel.queuedCallIds.filter(id => id !== callId);
+        const wasDelivered = channel.deliveredCallIds.delete(callId);
+        if (wasDelivered) {
+          channel.abandonedInvocations.set(callId, { fingerprint: invocation.fingerprint });
+        }
+        if (invocation.signal && invocation.onAbort) {
+          invocation.signal.removeEventListener("abort", invocation.onAbort);
+        }
+        invocation.reject(new DOMException(
+          "Codex Native invocation activity completed before result",
+          "AbortError",
+        ));
+      }
+      // A cached late result is scoped to one recovery MCP activity. Keep it stable throughout
+      // that activity so duplicate calls cannot race a second native side effect, then expire it
+      // when the activity settles so a later intentional identical operation can run normally.
+      for (const [callId, abandoned] of [...channel.abandonedInvocations]) {
+        if (abandoned.replayActivityId === request.activityId) {
+          channel.abandonedInvocations.delete(callId);
+        }
+      }
       // A cleanup that overtakes an ambiguously delivered claim is still a causal event. Its
       // tombstone makes the delayed claim fail instead of resurrecting activity after a fence.
       channel.activityRevision += 1;
@@ -1211,6 +1334,15 @@ export class TurnBroker implements TurnBrokerOwner {
 
     const wireName = request.wireName?.trim();
     if (!wireName) throw new Error("wire tool name is required");
+    if (request.activityId !== undefined) {
+      if (!/^activity_[A-Za-z0-9_-]{16,128}$/.test(request.activityId)) {
+        throw new Error("turn activity id is invalid");
+      }
+      if (!binding.channel.activities.has(request.activityId)
+        || binding.channel.completedActivities.has(request.activityId)) {
+        throw new Error("turn activity is not active for this invocation");
+      }
+    }
     const callId = opaqueId("call");
     const toolRequest: BrokerToolRequest = {
       callId,
@@ -1218,8 +1350,92 @@ export class TurnBroker implements TurnBrokerOwner {
       freeform: request.freeform === true,
       ...(request.freeform === true ? { input: request.input ?? "" } : { arguments: request.arguments ?? {} }),
     };
+    const fingerprint = brokerInvocationFingerprint(toolRequest);
+    const matchingAbandoned = [...binding.channel.abandonedInvocations.entries()]
+      .filter(([, abandoned]) => abandoned.fingerprint === fingerprint);
+    if (matchingAbandoned.length > 0) {
+      const resolved = matchingAbandoned.filter(
+        (entry): entry is [string, { fingerprint: string; result: BrokerToolResult; replayActivityId?: string }] =>
+          entry[1].result !== undefined,
+      );
+      if (matchingAbandoned.length === 1 && resolved.length === 1) {
+        const [abandonedCallId, abandoned] = resolved[0];
+        // ChatGPT never received this result because its original MCP request detached. Reserve the
+        // cached result for one recovery activity: every duplicate from that same activity is
+        // idempotently replayed, while another concurrent activity remains blocked from executing
+        // the side effect again. The reservation is cleared by activity_complete.
+        if (request.activityId) {
+          if (abandoned.replayActivityId === undefined) {
+            abandoned.replayActivityId = request.activityId;
+          }
+          if (abandoned.replayActivityId === request.activityId) {
+            return structuredClone(abandoned.result);
+          }
+        } else if (abandoned.replayActivityId === undefined) {
+          // Legacy/direct broker callers have no durable activity boundary. Consume their cached
+          // result exactly once so it cannot permanently memoize an otherwise valid future call.
+          binding.channel.abandonedInvocations.delete(abandonedCallId);
+          return structuredClone(abandoned.result);
+        }
+      }
+      const message = "An identical Codex tool invocation timed out and its native outcome is still unknown or is already being recovered by another MCP activity. Do not replay the same operation until that recovery settles.";
+      return {
+        content: [{ type: "text", text: message }],
+        structuredContent: {
+          code: "codex_tool_outcome_ambiguous",
+          retryable: false,
+          message,
+        },
+        isError: true,
+      };
+    }
     return new Promise<BrokerToolResult>((resolveInvoke, rejectInvoke) => {
-      binding.channel.invocations.set(callId, { request: toolRequest, resolve: resolveInvoke, reject: rejectInvoke });
+      const invocation: PendingInvocation = {
+        request: toolRequest,
+        fingerprint,
+        ...(request.activityId ? { activityId: request.activityId } : {}),
+        resolve: resolveInvoke,
+        reject: rejectInvoke,
+        ...(socketSignal ? { signal: socketSignal } : {}),
+      };
+      binding.channel.invocations.set(callId, invocation);
+      if (request.invokeTimeoutMs !== undefined) {
+        if (!Number.isFinite(request.invokeTimeoutMs) || request.invokeTimeoutMs <= 0) {
+          binding.channel.invocations.delete(callId);
+          throw new Error("turn invocation timeout must be a positive finite number");
+        }
+        invocation.timeout = setTimeout(() => {
+          if (binding.channel.invocations.get(callId) !== invocation) return;
+          binding.channel.invocations.delete(callId);
+          if (invocation.timeout) clearTimeout(invocation.timeout);
+          binding.channel.queuedCallIds = binding.channel.queuedCallIds.filter(id => id !== callId);
+          const wasDelivered = binding.channel.deliveredCallIds.delete(callId);
+          if (wasDelivered) {
+            binding.channel.abandonedInvocations.set(callId, { fingerprint: invocation.fingerprint });
+          }
+          if (invocation.signal && invocation.onAbort) {
+            invocation.signal.removeEventListener("abort", invocation.onAbort);
+          }
+          rejectInvoke(new TurnBrokerTimeoutError());
+        }, request.invokeTimeoutMs);
+      }
+      if (socketSignal) {
+        invocation.onAbort = () => {
+          if (binding.channel.invocations.get(callId) !== invocation) return;
+          binding.channel.invocations.delete(callId);
+          binding.channel.queuedCallIds = binding.channel.queuedCallIds.filter(id => id !== callId);
+          const wasDelivered = binding.channel.deliveredCallIds.delete(callId);
+          if (wasDelivered) {
+            binding.channel.abandonedInvocations.set(callId, { fingerprint: invocation.fingerprint });
+          }
+          rejectInvoke(new DOMException("Codex Native invocation transport disconnected", "AbortError"));
+        };
+        socketSignal.addEventListener("abort", invocation.onAbort, { once: true });
+        if (socketSignal.aborted) {
+          invocation.onAbort();
+          return;
+        }
+      }
       binding.channel.queuedCallIds.push(callId);
       console.info(
         `[chatgpt-web] broker trace=${binding.channel.traceId} queued call=${callId.slice(0, 17)} tool=${wireName} waiters=${binding.channel.waiters.size}`,
@@ -1278,10 +1494,18 @@ export class TurnBroker implements TurnBrokerOwner {
       waiter.reject(error);
     }
     channel.waiters.clear();
-    for (const invocation of channel.invocations.values()) invocation.reject(error);
+    for (const invocation of channel.invocations.values()) {
+      if (invocation.timeout) clearTimeout(invocation.timeout);
+      if (invocation.signal && invocation.onAbort) {
+        invocation.signal.removeEventListener("abort", invocation.onAbort);
+      }
+      invocation.reject(error);
+    }
     channel.invocations.clear();
     channel.queuedCallIds = [];
     channel.deliveredCallIds.clear();
+    channel.abandonedInvocations.clear();
+    channel.completedInvocationResults.clear();
   }
 
   private prune(): void {
@@ -1317,9 +1541,15 @@ export async function callTurnBroker<T>(
   // The wire protocol requires a client-owned activity identity. Most callers never need to see
   // it; the MCP server supplies its own so it can retire an ambiguously delivered claim, while
   // lower-level diagnostics receive an equally client-generated identity here.
-  const wireRequest = request.method === "claim" && request.activityId === undefined
+  const activityBoundRequest = request.method === "claim" && request.activityId === undefined
     ? { ...request, activityId: opaqueId("activity") }
     : request;
+  // Windows named-pipe teardown in Bun 1.4.0 can block the client event loop. Give invoke
+  // requests the same deadline on the broker side so the server can retire the exact invocation
+  // and close the response pipe normally, without relying on client-side destruction.
+  const wireRequest = activityBoundRequest.method === "invoke" && timeoutMs !== null
+    ? { ...activityBoundRequest, invokeTimeoutMs: timeoutMs }
+    : activityBoundRequest;
   return new Promise<T>((resolveCall, rejectCall) => {
     const socket = createConnection(socketPath);
     let buffered = "";
@@ -1332,6 +1562,19 @@ export async function callTurnBroker<T>(
       settled = true;
       clearTimeout(timer);
       cleanup();
+      // Bun 1.4.0 can block synchronously while tearing down an active Windows named pipe.
+      // For an activity-owned invoke, the MCP handler immediately follows this rejection with
+      // activity_complete, which is the durable server-side cleanup boundary. Do not touch the
+      // Windows client pipe here; settlement will reject the broker-side invocation and close the
+      // response socket naturally. Other bounded broker calls do not have that activity cleanup,
+      // so close their write side gracefully instead of using destroy().
+      if (isWindowsPipeEndpoint(socketPath)) {
+        if (wireRequest.method !== "invoke" || wireRequest.activityId === undefined) {
+          socket.end();
+        }
+        rejectCall(error);
+        return;
+      }
       socket.destroy();
       rejectCall(error);
     };
@@ -1344,12 +1587,22 @@ export async function callTurnBroker<T>(
       settled = true;
       clearTimeout(timer);
       cleanup();
-      if (response.error) rejectCall(new Error(response.error));
-      else resolveCall(response.result as T);
+      if (response.error === "ChatGPT web turn broker timed out") {
+        rejectCall(new TurnBrokerTimeoutError());
+      } else if (response.error) {
+        rejectCall(new Error(response.error));
+      } else {
+        resolveCall(response.result as T);
+      }
     };
-    const timer = timeoutMs === null
+    const localTimeoutMs = isWindowsPipeEndpoint(socketPath)
+      && wireRequest.method === "invoke"
+      && timeoutMs !== null
+      ? Math.max(timeoutMs + 5_000, timeoutMs * 2)
+      : timeoutMs;
+    const timer = localTimeoutMs === null
       ? undefined
-      : setTimeout(() => finishError(new TurnBrokerTimeoutError()), timeoutMs);
+      : setTimeout(() => finishError(new TurnBrokerTimeoutError()), localTimeoutMs);
     signal?.addEventListener("abort", onAbort, { once: true });
     if (signal?.aborted) {
       finishError(new DOMException("ChatGPT web turn broker call aborted", "AbortError"));

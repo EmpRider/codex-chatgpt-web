@@ -11,12 +11,17 @@ import {
   createChatGptWebMcpContextTransport,
 } from "../src/adapters/chatgpt-web/context-transport";
 import type { ChatGptTurnEnvironment } from "../src/adapters/chatgpt-web/environment";
+import {
+  mcpActivityAbandonedAtSettlement,
+  shouldRetireTurnBindingAfterInvocationFailure,
+} from "../src/adapters/chatgpt-web/mcp-server";
 import { CHATGPT_WEB_MODEL_ID } from "../src/adapters/chatgpt-web/model";
 import { compileChatGptWebPrompt } from "../src/adapters/chatgpt-web/prompt";
 import {
   callTurnBroker,
   RemoteTurnBroker,
   TurnBroker,
+  TurnBrokerTimeoutError,
 } from "../src/adapters/chatgpt-web/turn-broker";
 import { defaultBrokerEndpoint } from "../src/config";
 import type { CodexParsedRequest } from "../src/types";
@@ -296,4 +301,23 @@ test("large compaction reads complete history over MCP before summarizing", () =
   expect(compiled.text).toContain("Produce the requested checkpoint summary");
   expect(compiled.text).not.toContain("Execute the latest active user request");
   expect(compiled.text).not.toContain("Do not call local or ChatGPT-native tools");
+});
+
+
+test("MCP transport timeout or cancellation does not retire the whole ChatGPT turn binding", () => {
+  expect(shouldRetireTurnBindingAfterInvocationFailure(new TurnBrokerTimeoutError())).toBeFalse();
+  expect(shouldRetireTurnBindingAfterInvocationFailure(
+    new DOMException("transport cancelled", "AbortError"),
+  )).toBeFalse();
+  expect(shouldRetireTurnBindingAfterInvocationFailure(new Error("broker state failure"))).toBeTrue();
+});
+
+
+test("MCP activity settlement treats cancellation during result post-processing as abandoned", () => {
+  const controller = new AbortController();
+  expect(mcpActivityAbandonedAtSettlement(false, controller.signal)).toBeFalse();
+
+  controller.abort("client cancelled while optimizer still held the native result");
+  expect(mcpActivityAbandonedAtSettlement(false, controller.signal)).toBeTrue();
+  expect(mcpActivityAbandonedAtSettlement(true, undefined)).toBeTrue();
 });

@@ -51,6 +51,8 @@ const launcherRegressionFiles = [
   "tests/optimization-secrets.test.cjs",
 ];
 
+const REGRESSION_COMMAND_TIMEOUT_MS = 5 * 60_000;
+
 async function run(command: string, args: string[], cwd = root): Promise<void> {
   console.log(`\n[regression] ${command} ${args.join(" ")}`);
   const child = Bun.spawn([command, ...args], {
@@ -59,15 +61,36 @@ async function run(command: string, args: string[], cwd = root): Promise<void> {
     stdout: "inherit",
     stderr: "inherit",
   });
-  const exitCode = await child.exited;
-  if (exitCode !== 0) {
-    throw new Error(`Fork regression command failed (${exitCode}): ${command} ${args.join(" ")}`);
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    console.error(
+      `[regression] timed out after ${REGRESSION_COMMAND_TIMEOUT_MS}ms: ${command} ${args.join(" ")}`,
+    );
+    child.kill();
+  }, REGRESSION_COMMAND_TIMEOUT_MS);
+  try {
+    const exitCode = await child.exited;
+    if (timedOut) {
+      throw new Error(
+        `Fork regression command timed out: ${command} ${args.join(" ")}`,
+      );
+    }
+    if (exitCode !== 0) {
+      throw new Error(`Fork regression command failed (${exitCode}): ${command} ${args.join(" ")}`);
+    }
+  } finally {
+    clearTimeout(timer);
   }
 }
 
 console.log("Fork regression gate: validating EmpRider custom behavior before general verification.");
 
 await run(process.execPath, ["test", ...rootRegressionFiles]);
+// Run the intentionally timer-heavy long-turn stress suite in isolation so it cannot distort the
+// tight timing assertions in retained-compaction and other normal regression files.
+await run(process.execPath, ["test", "regression/long-turn-lifecycle.test.ts"]);
+await run(process.execPath, ["test", "regression/windows-cross-process-timeout.test.ts"]);
 await run("node", ["--test", ...launcherRegressionFiles], resolve(root, "launcher"));
 
 console.log("\nFork regression gate passed.");

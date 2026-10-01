@@ -19,6 +19,7 @@ import { optimizeNativeCommandResult } from "../../optimization/tool-results";
 interface ClaimedTurn {
   bindingId: string;
   activityId: string;
+  activityAbandoned?: boolean;
   environment: ChatGptTurnEnvironment & { expiresAt?: number };
   contextTransport?: ChatGptWebMcpContextManifest;
 }
@@ -226,6 +227,18 @@ function assertGatewayToolArguments(name: string, args: Record<string, unknown>)
       + " so the shared MCP channel remains available to spawned Web agents",
     );
   }
+}
+
+export function shouldRetireTurnBindingAfterInvocationFailure(error: unknown): boolean {
+  if (error instanceof TurnBrokerTimeoutError) return false;
+  return !(error instanceof DOMException && error.name === "AbortError");
+}
+
+export function mcpActivityAbandonedAtSettlement(
+  alreadyAbandoned: boolean,
+  signal?: AbortSignal,
+): boolean {
+  return alreadyAbandoned || signal?.aborted === true;
 }
 
 export function chatGptMcpInvocationTimeout(
@@ -504,14 +517,21 @@ export async function runChatGptMcpServer(options: {
     }
   };
 
-  const settleTurnActivity = async (turnToken: string, activityId: string): Promise<void> => {
+  const settleTurnActivity = async (
+    turnToken: string,
+    activityId: string,
+    activityAbandoned = false,
+    requestSignal?: AbortSignal,
+  ): Promise<void> => {
     let firstError: unknown;
     for (let attempt = 0; attempt < 2; attempt += 1) {
       try {
+        const abandonedAtSend = mcpActivityAbandonedAtSettlement(activityAbandoned, requestSignal);
         await callTurnBroker(options.brokerSocketPath, {
           method: "activity_complete",
           token: turnToken,
           activityId,
+          ...(abandonedAtSend ? { activityAbandoned: true } : {}),
         }, 5_000);
         return;
       } catch (error) {
@@ -534,10 +554,23 @@ export async function runChatGptMcpServer(options: {
     try {
       return await action(claimed);
     } finally {
+      // Cancellation can arrive after the native result has already crossed the broker boundary,
+      // including while RTK/Headroom post-processes that result. The MCP SDK discards a handler
+      // result after cancellation, so the settlement signal is the final authority on whether
+      // ChatGPT actually had a consumer for the native outcome.
+      claimed.activityAbandoned = mcpActivityAbandonedAtSettlement(
+        claimed.activityAbandoned === true,
+        extra.signal,
+      );
       // The broker's terminal fence treats even a fully local inventory lookup as live MCP work.
       // Settle the lease without the request AbortSignal: cancellation must not strand activity
       // and silently prevent every later completion candidate from committing.
-      await settleTurnActivity(turnToken, claimed.activityId);
+      await settleTurnActivity(
+        turnToken,
+        claimed.activityId,
+        claimed.activityAbandoned,
+        extra.signal,
+      );
     }
   };
 
@@ -568,52 +601,64 @@ export async function runChatGptMcpServer(options: {
   }
 
   const invoke = async (
-    bindingId: string,
-    bound: ChatGptTurnEnvironment & { expiresAt?: number },
+    claimed: ClaimedTurn,
     tool: CodexTool,
     payload: { arguments?: Record<string, unknown>; input?: string },
     signal?: AbortSignal,
     commandOptimization?: { command?: string },
   ) => {
+    const bindingId = claimed.bindingId;
+    const bound = claimed.environment;
     const timeoutMs = chatGptMcpInvocationTimeout(bound);
     try {
       const response = await callTurnBroker<BrokerToolResult>(options.brokerSocketPath, {
         method: "invoke",
         bindingId,
+        activityId: claimed.activityId,
         wireName: wireName(tool),
         freeform: tool.freeform === true,
+        invokeTimeoutMs: timeoutMs,
         ...(tool.freeform ? { input: payload.input ?? "" } : { arguments: payload.arguments ?? {} }),
-      }, timeoutMs, signal);
+      }, null, signal);
       const optimized = commandOptimization
         ? await optimizeNativeCommandResult(response, commandOptimization.command)
         : response;
       return asMcpResult(optimized);
     } catch (error) {
-      // A cancelled/timed-out MCP request no longer has a consumer for the native result. Revoke
-      // the whole turn capability so the broker drops the pending invocation and every later call
-      // from that abandoned ChatGPT response fails explicitly against its retired binding.
-      try {
-        await callTurnBroker(options.brokerSocketPath, {
-          method: "release",
-          bindingId,
-        });
-      } catch (releaseError) {
-        throw new AggregateError(
-          [error, releaseError],
-          "Codex Native invocation failed and its abandoned broker binding could not be retired",
-        );
+      if (error instanceof TurnBrokerTimeoutError
+        || (error instanceof DOMException && error.name === "AbortError")) {
+        // This exact MCP activity no longer has a consumer for the broker result. Carry that fact
+        // into activity_complete so a result racing ahead of socket-close can be recovered safely.
+        claimed.activityAbandoned = true;
+      }
+      // The broker ties each invocation to its request socket. A transport timeout/cancel therefore
+      // retires only that abandoned invocation; the accepted ChatGPT browser turn remains valid.
+      // Structural broker failures still retire the whole binding because its state is no longer
+      // safe to reuse.
+      if (shouldRetireTurnBindingAfterInvocationFailure(error)) {
+        try {
+          await callTurnBroker(options.brokerSocketPath, {
+            method: "release",
+            bindingId,
+          });
+        } catch (releaseError) {
+          throw new AggregateError(
+            [error, releaseError],
+            "Codex Native invocation failed and its abandoned broker binding could not be retired",
+          );
+        }
       }
       if (error instanceof TurnBrokerTimeoutError) {
         const toolName = wireName(tool);
         console.error(
-          `[chatgpt-web-mcp] ${toolName} did not complete within ${timeoutMs}ms; retired its turn binding`,
+          `[chatgpt-web-mcp] ${toolName} did not complete within ${timeoutMs}ms; abandoned only that invocation`,
         );
         return result({
           code: "codex_tool_timeout",
           tool: toolName,
           timeout_ms: timeoutMs,
           retryable: false,
-          message: `Codex tool ${toolName} did not complete before the MCP transport deadline. The current turn binding was retired; do not retry it in this ChatGPT response.`,
+          message: `Codex tool ${toolName} did not complete before the MCP transport deadline. Its native outcome is unknown, so do not automatically replay the identical operation. The current ChatGPT turn remains active and may continue with other work.`,
         }, true);
       }
       throw error;
@@ -621,19 +666,19 @@ export async function runChatGptMcpServer(options: {
   };
 
   const invokeNestedNative = (
-    bindingId: string,
-    bound: ChatGptTurnEnvironment & { expiresAt?: number },
+    claimed: ClaimedTurn,
     nestedToolName: string,
     freeform: boolean,
     payload: { arguments?: Record<string, unknown>; input?: string },
     signal?: AbortSignal,
     commandOptimization?: { command?: string },
   ) => {
+    const bound = claimed.environment;
     const gateway = execGateway(bound);
     if (!gateway) {
       throw new Error(`This Codex turn did not advertise ${nestedToolName} or the native exec gateway`);
     }
-    return invoke(bindingId, bound, gateway, {
+    return invoke(claimed, gateway, {
       input: execGatewayProgram(nestedToolName, freeform, payload, bound.tools.map(wireName)),
     }, signal, commandOptimization);
   };
@@ -696,8 +741,7 @@ export async function runChatGptMcpServer(options: {
           }
           const args = tool.name === "exec_command" ? execCommandArguments : shellCommandArguments;
           return invoke(
-            claimed.bindingId,
-            bound,
+            claimed,
             tool,
             { arguments: args },
             extra.signal,
@@ -710,7 +754,7 @@ export async function runChatGptMcpServer(options: {
         }
         // The gateway can flatten nested protocol metadata (including session identifiers) into
         // text. Keep that envelope byte-exact; direct native command surfaces are optimized above.
-        return invoke(claimed.bindingId, bound, gateway, {
+        return invoke(claimed, gateway, {
           input: execCommandGatewayProgram(execCommandArguments, shellCommandArguments),
         }, extra.signal);
       },
@@ -746,8 +790,8 @@ export async function runChatGptMcpServer(options: {
           ...(max_output_tokens !== undefined ? { max_output_tokens } : {}),
         } };
         return tool
-          ? invoke(claimed.bindingId, bound, tool, payload, extra.signal, {})
-          : invokeNestedNative(claimed.bindingId, bound, "write_stdin", false, payload, extra.signal);
+          ? invoke(claimed, tool, payload, extra.signal, {})
+          : invokeNestedNative(claimed, "write_stdin", false, payload, extra.signal);
       },
     ),
   );
@@ -768,10 +812,10 @@ export async function runChatGptMcpServer(options: {
         const { patch } = input;
         const bound = claimed.environment;
         const tool = exactTool(bound, "apply_patch");
-        if (!tool) return invokeNestedNative(claimed.bindingId, bound, "apply_patch", true, { input: patch }, extra.signal);
+        if (!tool) return invokeNestedNative(claimed, "apply_patch", true, { input: patch }, extra.signal);
         return tool.freeform
-          ? invoke(claimed.bindingId, bound, tool, { input: patch }, extra.signal)
-          : invoke(claimed.bindingId, bound, tool, { arguments: { input: patch } }, extra.signal);
+          ? invoke(claimed, tool, { input: patch }, extra.signal)
+          : invoke(claimed, tool, { arguments: { input: patch } }, extra.signal);
       },
     ),
   );
@@ -798,8 +842,8 @@ export async function runChatGptMcpServer(options: {
         const tool = exactTool(bound, "view_image");
         const payload = { arguments: { path, ...(detail ? { detail } : {}) } };
         return tool
-          ? invoke(claimed.bindingId, bound, tool, payload, extra.signal)
-          : invokeNestedNative(claimed.bindingId, bound, "view_image", false, payload, extra.signal);
+          ? invoke(claimed, tool, payload, extra.signal)
+          : invokeNestedNative(claimed, "view_image", false, payload, extra.signal);
       },
     ),
   );
@@ -897,7 +941,7 @@ export async function runChatGptMcpServer(options: {
           const excludedGatewayNames = bound.tools.map(wireName);
           const nestedOffset = Math.max(0, offset - localMatches.length);
           const nestedLimit = Math.max(0, limit - directPage.length);
-          const response = await invoke(claimed.bindingId, bound, gateway, {
+          const response = await invoke(claimed, gateway, {
             input: gatewayToolCatalogProgram({
               query,
               offset: nestedOffset,
@@ -1028,7 +1072,7 @@ export async function runChatGptMcpServer(options: {
           }
           const invocationArguments = args ?? {};
           assertGatewayToolArguments(wire_name, invocationArguments);
-          return invoke(claimed.bindingId, bound, gateway, {
+          return invoke(claimed, gateway, {
             input: execGatewayProgram(wire_name, input !== undefined, {
               ...(input !== undefined ? { input } : { arguments: invocationArguments }),
             }, bound.tools.map(wireName)),
@@ -1037,7 +1081,7 @@ export async function runChatGptMcpServer(options: {
         if (tool.freeform) {
           if (input === undefined) throw new Error(`Freeform Codex tool ${wire_name} requires input`);
           if (args && Object.keys(args).length > 0) throw new Error(`Freeform Codex tool ${wire_name} does not accept arguments`);
-          return invoke(claimed.bindingId, bound, tool, {
+          return invoke(claimed, tool, {
             input: tool === execGateway(bound) ? transportBoundRawExecProgram(input, wireName(tool)) : input,
           }, extra.signal);
         }
@@ -1045,8 +1089,7 @@ export async function runChatGptMcpServer(options: {
         const invocationArguments = args ?? {};
         assertBrowserToolArguments(tool, invocationArguments);
         return invoke(
-          claimed.bindingId,
-          bound,
+          claimed,
           tool,
           { arguments: invocationArguments },
           extra.signal,
