@@ -99,7 +99,7 @@ test("Headroom reuses an already healthy service on the configured port", async 
     mlEnabled: false,
   });
 
-  assert.deepEqual(health, { service: "headroom-proxy", ready: true });
+  assert.deepEqual(health, { service: "headroom-proxy", status: "healthy", alive: true });
   assert.equal(resolverCalled, false);
   assert.deepEqual(service.state(), {
     running: true,
