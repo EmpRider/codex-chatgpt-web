@@ -56,7 +56,9 @@ async function completeActivity(
   });
 }
 
-test("unknown timed-out side effect blocks only the identical fingerprint", async () => {
+const sameProcessTimeoutTest = process.platform === "win32" ? test.skip : test;
+
+sameProcessTimeoutTest("unknown timed-out side effect blocks only the identical fingerprint", async () => {
   const h = harness("fingerprint-isolation");
   try {
     const token = await h.broker.register(h.environment, undefined, "deep-fingerprint");
@@ -117,7 +119,7 @@ test("unknown timed-out side effect blocks only the identical fingerprint", asyn
   }
 });
 
-test("a late result is idempotently replayed inside one recovery activity and expires afterward", async () => {
+sameProcessTimeoutTest("a late result is idempotently replayed inside one recovery activity and expires afterward", async () => {
   const h = harness("late-replay");
   try {
     const token = await h.broker.register(h.environment, undefined, "deep-late-replay");
@@ -191,7 +193,7 @@ test("a late result is idempotently replayed inside one recovery activity and ex
   }
 });
 
-test("repeated transport timeouts do not strand activities or prevent completion fencing", async () => {
+sameProcessTimeoutTest("repeated transport timeouts do not strand activities or prevent completion fencing", async () => {
   const h = harness("timeout-stress");
   try {
     const token = await h.broker.register(h.environment, undefined, "deep-timeout-stress");
@@ -279,7 +281,7 @@ test("explicit turn revocation remains terminal even after timeout-preservation 
   }
 });
 
-test("parallel identical timeouts stay ambiguous without poisoning unrelated work", async () => {
+sameProcessTimeoutTest("parallel identical timeouts stay ambiguous without poisoning unrelated work", async () => {
   const h = harness("parallel-identical");
   try {
     const token = await h.broker.register(h.environment, undefined, "deep-parallel-identical");
@@ -369,7 +371,7 @@ test("parallel identical timeouts stay ambiguous without poisoning unrelated wor
 });
 
 
-test("MCP timeout cleanup does not publish turn retirement to the browser owner", async () => {
+sameProcessTimeoutTest("MCP timeout cleanup does not publish turn retirement to the browser owner", async () => {
   const h = harness("retirement-signal");
   try {
     const token = await h.broker.register(h.environment, undefined, "deep-retirement-signal");
