@@ -249,7 +249,7 @@ sameProcessTimeoutTest("repeated transport timeouts do not strand activities or 
   }
 }, 15_000);
 
-test("explicit turn revocation remains terminal even after timeout-preservation logic", async () => {
+sameProcessTimeoutTest("explicit turn revocation remains terminal even after timeout-preservation logic", async () => {
   const h = harness("explicit-revoke");
   try {
     const token = await h.broker.register(h.environment, undefined, "deep-explicit-revoke");
