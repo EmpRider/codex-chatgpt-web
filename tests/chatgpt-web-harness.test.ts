@@ -1285,6 +1285,64 @@ describe("ChatGPT outer-native harness v4", () => {
     }
   });
 
+  test("stale Codex turn-token response is retryable and the next attempt gets a fresh token", async () => {
+    const socketPath = brokerTestEndpoint(`cgw-stale-turn-token-${process.pid}-${Date.now()}`);
+    const provider: CodexProviderConfig = {
+      adapter: "chatgpt-web",
+      baseUrl: `browser://chatgpt-stale-turn-token-${Date.now()}`,
+      chatgptWeb: {
+        brokerSocketPath: socketPath,
+        localToolsEnabled: true,
+        solAvailable: true,
+        extraHighAvailable: true,
+        proAvailable: true,
+      },
+    };
+    const worker = ChatGptBrowserWorker.forProvider(provider);
+    const originalRun = worker.run.bind(worker);
+    const tokens: string[] = [];
+    let browserStarts = 0;
+    (worker as unknown as { run: (turn: BrowserTurn) => Promise<string> }).run = async turn => {
+      const prepared = await turn.prepare();
+      try {
+        const token = prepared.text.match(/turn_token (turn_[A-Za-z0-9_-]+)/)?.[1];
+        if (!token) throw new Error("turn token missing from compiled prompt");
+        tokens.push(token);
+        browserStarts += 1;
+        const answer = browserStarts === 1
+          ? "Codex task could not start: provided turn token is invalid, expired, or revoked.\nRetry the Codex task so it generates a fresh turn token."
+          : "Recovered with a fresh turn token";
+        turn.onTextDelta(answer);
+        return answer;
+      } finally {
+        prepared.release();
+      }
+    };
+
+    const adapter = createChatGptWebAdapter(provider);
+    const request = rawWireRequest(environmentXml);
+    try {
+      const firstEvents: AdapterEvent[] = [];
+      await adapter.runTurn!(request, { headers: new Headers() }, event => firstEvents.push(event));
+      expect(firstEvents.at(-1)).toMatchObject({
+        type: "error",
+        code: "codex_turn_token_rejected",
+        retryable: true,
+      });
+
+      const secondEvents: AdapterEvent[] = [];
+      await adapter.runTurn!(request, { headers: new Headers() }, event => secondEvents.push(event));
+      expect(secondEvents.at(-1)).toMatchObject({ type: "done", stopReason: "stop", endTurn: true });
+      expect(browserStarts).toBe(2);
+      expect(tokens).toHaveLength(2);
+      expect(tokens[1]).not.toBe(tokens[0]);
+    } finally {
+      (worker as unknown as { run: (turn: BrowserTurn) => Promise<string> }).run = originalRun;
+      chatGptTurnSessions.clear();
+      await TurnBroker.forSocket(socketPath).close();
+    }
+  });
+
   test("prompt preparation preserves its error instead of exposing a revoked MCP token", async () => {
     const socketPath = brokerTestEndpoint(`cgw-prepare-error-${process.pid}-${Date.now()}`);
     const provider: CodexProviderConfig = {
