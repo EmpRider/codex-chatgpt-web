@@ -2219,6 +2219,56 @@ describe("ChatGPT outer-native harness v4", () => {
     await broker.close();
   });
 
+  test("automatic native turn tokens remain lifecycle-bound when a browser timeout is configured", async () => {
+    const socketPath = brokerTestEndpoint(`cgw-native-token-lifetime-${process.pid}-${Date.now()}`);
+    const provider: CodexProviderConfig = {
+      adapter: "chatgpt-web",
+      baseUrl: "browser://chatgpt-native-token-lifetime",
+      chatgptWeb: {
+        brokerSocketPath: socketPath,
+        turnTimeoutMs: 30_000,
+        localToolsEnabled: true,
+        solAvailable: true,
+        extraHighAvailable: true,
+        proAvailable: true,
+      },
+    };
+    const worker = ChatGptBrowserWorker.forProvider(provider);
+    const originalRun = worker.run.bind(worker);
+    (worker as unknown as { run: (turn: BrowserTurn) => Promise<string> }).run = async turn => {
+      const prepared = await turn.prepare();
+      try {
+        const token = prepared.text.match(/turn_token (turn_[A-Za-z0-9_-]+)/)?.[1];
+        if (!token) throw new Error("turn token missing from compiled prompt");
+        const activityId = "activity_token_lifetime_1234567890";
+        const claimed = await callTurnBroker<{
+          bindingId: string;
+          environment: { expiresAt?: number };
+        }>(socketPath, { method: "claim", token, activityId });
+        expect(claimed.environment.expiresAt).toBeUndefined();
+        await callTurnBroker(socketPath, { method: "activity_complete", token, activityId });
+        turn.onTextDelta("Token stayed live");
+        return "Token stayed live";
+      } finally {
+        prepared.release();
+      }
+    };
+
+    try {
+      const events: AdapterEvent[] = [];
+      await createChatGptWebAdapter(provider).runTurn!(
+        rawWireRequest(environmentXml),
+        { headers: new Headers() },
+        event => events.push(event),
+      );
+      expect(events.at(-1)).toMatchObject({ type: "done", stopReason: "stop", endTurn: true });
+    } finally {
+      (worker as unknown as { run: (turn: BrowserTurn) => Promise<string> }).run = originalRun;
+      chatGptTurnSessions.clear();
+      await TurnBroker.forSocket(socketPath).close();
+    }
+  });
+
   test("recalculates usage from tool results added during the active browser turn", async () => {
     const socketPath = brokerTestEndpoint(`cgw-h3-usage-${process.pid}-${Date.now()}`);
     const provider: CodexProviderConfig = {
