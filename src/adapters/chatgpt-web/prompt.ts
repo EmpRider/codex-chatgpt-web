@@ -600,6 +600,7 @@ export function compileChatGptWebPrompt(
     : mode.localTools
     ? [
       "<codex_transport_resume>",
+      "Ignore any turn_token from earlier ChatGPT messages; those handles are retired.",
       `The task context is complete. Pass turn_token ${turnToken} unchanged to every Codex Native call in this response, including continuations after tool results; do not expose it in the answer. Execute the latest active user request now.`,
       "</codex_transport_resume>",
     ]
@@ -678,6 +679,7 @@ export function compileChatGptWebPrompt(
         `context_bytes: ${contextTransport.bytes}`,
         `context_chunks: ${totalChunks}`,
         `chunk_chars_max: ${contextTransport.chunkChars}`,
+        "Ignore any turn_token from earlier ChatGPT messages; those handles are retired.",
         `Use turn_token ${turnToken} unchanged for every Codex Native call in this response.`,
         "The canonical Codex task context is local and is not rendered in this ChatGPT message. Load every context chunk before executing the task or calling any other work tool.",
         `Load the first context batch by calling codex_tool_inventory with the turn_token above, query ${JSON.stringify(contextReadQuery)}, offset 0, limit ${CHATGPT_WEB_MCP_CONTEXT_BATCH_CHUNKS}, and include_schema false.`,
