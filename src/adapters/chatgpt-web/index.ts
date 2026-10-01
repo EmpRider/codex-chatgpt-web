@@ -294,11 +294,20 @@ function replayEvents(events: AdapterEvent[], emit: (event: AdapterEvent) => voi
   for (const event of events) emit(event);
 }
 
-function throwIfCodexTurnTokenRejected(answer: string): void {
-  const normalized = answer.replace(/\s+/g, " ").trim();
-  if (!normalized.toLowerCase().includes("codex task could not start")) return;
-  if (!normalized.toLowerCase().includes("turn token is invalid, expired, or revoked")) return;
-  if (!normalized.toLowerCase().includes("fresh turn token")) return;
+export function throwIfCodexTurnTokenRejected(answer: string): void {
+  // ChatGPT paraphrases broker errors and may render the schema key as Markdown.
+  // Require both a task-start failure and an explicit fresh-token retry instruction
+  // so ordinary answers discussing turn tokens are not mistaken for failures.
+  const normalized = answer.toLowerCase()
+    .replace(/[`*_\\]/g, " ")
+    .replace(/\s+/g, " ").trim();
+  const requestsFreshToken = /retry the codex task\b/.test(normalized)
+    && /\bfresh turn token\b/.test(normalized);
+  const taskDidNotStart = normalized.includes("codex task could not start")
+    || normalized.includes("no repository changes or commands were executed")
+    || (normalized.includes("which has already finished")
+      && normalized.includes("this codex native action can no longer run"));
+  if (!requestsFreshToken || !taskDidNotStart) return;
   throw new ChatGptWebAdapterError(
     "Codex Native rejected a stale turn token. Retry the task so the bridge can start a fresh ChatGPT turn with a new token.",
     {
