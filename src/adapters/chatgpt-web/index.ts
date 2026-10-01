@@ -301,9 +301,11 @@ export function throwIfCodexTurnTokenRejected(answer: string): void {
   const normalized = answer.toLowerCase()
     .replace(/[`*_\\]/g, " ")
     .replace(/\s+/g, " ").trim();
-  const requestsFreshToken = /retry the codex task\b/.test(normalized)
+  const requestsFreshToken = /retry the (?:codex )?task\b/.test(normalized)
     && /\bfresh turn token\b/.test(normalized);
-  const taskDidNotStart = normalized.includes("codex task could not start")
+  const taskDidNotStart = (normalized.includes("codex task not executed")
+      && normalized.includes("turn token is invalid, expired, or revoked"))
+    || normalized.includes("codex task could not start")
     || normalized.includes("no repository changes or commands were executed")
     || (normalized.includes("which has already finished")
       && normalized.includes("this codex native action can no longer run"));

@@ -3,6 +3,7 @@ import { ChatGptWebAdapterError } from "../src/adapters/chatgpt-web/adapter-erro
 import { throwIfCodexTurnTokenRejected } from "../src/adapters/chatgpt-web/index";
 
 test.each([
+  "Codex task not executed. Error from Codex Native2: turn token is invalid, expired, or revoked. Retry the task so the launcher supplies a fresh turn\\_token.",
   "Codex task could not start: provided turn token is invalid, expired, or revoked. Retry the Codex task so it generates a fresh turn token.",
   "No repository changes or commands were executed. Retry the Codex task so it supplies a fresh turn_token.",
   "No repository changes or commands were executed. Retry the Codex task so it supplies a fresh `turn\\_token`.",
