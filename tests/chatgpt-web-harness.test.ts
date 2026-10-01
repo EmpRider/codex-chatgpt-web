@@ -1291,6 +1291,8 @@ describe("ChatGPT outer-native harness v4", () => {
       adapter: "chatgpt-web",
       baseUrl: `browser://chatgpt-stale-turn-token-${Date.now()}`,
       chatgptWeb: {
+        browserHost: "launcher",
+        browserHostDescriptorPath: join(tempRoot, "stale-token-launcher.json"),
         brokerSocketPath: socketPath,
         localToolsEnabled: true,
         solAvailable: true,
@@ -1300,6 +1302,11 @@ describe("ChatGPT outer-native harness v4", () => {
     };
     const worker = ChatGptBrowserWorker.forProvider(provider);
     const originalRun = worker.run.bind(worker);
+    const retireConversation = spyOn(chatGptTurnSessions, "retireConversationAndWait")
+      .mockImplementation(async () => {
+        chatGptTurnSessions.clear();
+        return 1;
+      });
     const tokens: string[] = [];
     let browserStarts = 0;
     (worker as unknown as { run: (turn: BrowserTurn) => Promise<string> }).run = async turn => {
@@ -1329,6 +1336,7 @@ describe("ChatGPT outer-native harness v4", () => {
         code: "codex_turn_token_rejected",
         retryable: true,
       });
+      expect(retireConversation).toHaveBeenCalledTimes(1);
 
       const secondEvents: AdapterEvent[] = [];
       await adapter.runTurn!(request, { headers: new Headers() }, event => secondEvents.push(event));
@@ -1337,6 +1345,7 @@ describe("ChatGPT outer-native harness v4", () => {
       expect(tokens).toHaveLength(2);
       expect(tokens[1]).not.toBe(tokens[0]);
     } finally {
+      retireConversation.mockRestore();
       (worker as unknown as { run: (turn: BrowserTurn) => Promise<string> }).run = originalRun;
       chatGptTurnSessions.clear();
       await TurnBroker.forSocket(socketPath).close();
