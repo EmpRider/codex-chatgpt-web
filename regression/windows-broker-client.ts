@@ -19,8 +19,9 @@ for (let index = 1; index <= 2; index += 1) {
       bindingId,
       activityId,
       wireName: "exec_command",
+      invokeTimeoutMs: 100,
       arguments: { cmd: `cross-process-timeout-${index}` },
-    }, 100);
+    }, null);
     throw new Error("timed invocation unexpectedly completed");
   } catch (error) {
     if (!String(error).includes("timed out")) throw error;
