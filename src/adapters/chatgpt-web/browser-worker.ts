@@ -138,7 +138,9 @@ export const CHATGPT_COMPLETION_ACTION_GRACE_MS = 60_000;
 export const CHATGPT_COMPLETION_SETTLE_MS = 2_000;
 export const CHATGPT_TOOL_CONFIRMATION_TIMEOUT_MS = 60_000;
 export const MAX_CHATGPT_CONNECTOR_TRIGGER_ATTEMPTS = 3;
-const CHATGPT_CONNECTOR_MENTION_QUERY = "@codex";
+function chatGptConnectorMentionQuery(appName: string): string {
+  return `@${appName}`;
+}
 const CHATGPT_CONNECTOR_ACTION_TIMEOUT_MS = 10_000;
 const CHATGPT_SMOKE_TEXT = "Reply with exactly: CODEX WEB GPT READY";
 const CHATGPT_SMOKE_EXPECTED = "CODEX WEB GPT READY";
@@ -3457,6 +3459,7 @@ export class ChatGptBrowserWorker {
       throwIfPromptAttachmentAborted(abortSignal);
     };
     let composer: Locator;
+    const mentionQuery = chatGptConnectorMentionQuery(this.config.appName);
     const menuRows = page.locator('.__menu-item[tabindex="0"], [data-mention-list-scroll-area] button[data-list-navigation-item="true"]');
     const appResult = menuRows.filter({
       has: page.getByText(this.config.appName, { exact: true }),
@@ -3478,7 +3481,7 @@ export class ChatGptBrowserWorker {
             timeout: CHATGPT_CONNECTOR_ACTION_TIMEOUT_MS,
           });
           await withBrowserTurnAbort(settleChatGptUi(), personalizationSignal);
-          await composer.pressSequentially(CHATGPT_CONNECTOR_MENTION_QUERY, {
+          await composer.pressSequentially(mentionQuery, {
             delay: 25,
             signal: personalizationSignal,
             timeout: CHATGPT_CONNECTOR_ACTION_TIMEOUT_MS,
@@ -3497,9 +3500,9 @@ export class ChatGptBrowserWorker {
                 ? element.value : element.textContent ?? "",
               focused: element === document.activeElement,
             }), undefined, { timeout: CHATGPT_CONNECTOR_ACTION_TIMEOUT_MS, signal: personalizationSignal });
-            if (mention.text !== CHATGPT_CONNECTOR_MENTION_QUERY) {
+            if (mention.text !== mentionQuery) {
               throw new ChatGptPromptAttachmentIntegrityError(
-                `ChatGPT did not preserve the connector mention (expectedChars=${CHATGPT_CONNECTOR_MENTION_QUERY.length}, actualChars=${mention.text.length}, focused=${mention.focused})`,
+                `ChatGPT did not preserve the connector mention (expectedChars=${mentionQuery.length}, actualChars=${mention.text.length}, focused=${mention.focused})`,
               );
             }
           }
@@ -3542,7 +3545,7 @@ export class ChatGptBrowserWorker {
         await composer.fill("", { signal: abortSignal, timeout: CHATGPT_CONNECTOR_ACTION_TIMEOUT_MS });
         await composer.focus({ signal: abortSignal, timeout: CHATGPT_CONNECTOR_ACTION_TIMEOUT_MS });
         await withBrowserTurnAbort(settleChatGptUi(), abortSignal);
-        await composer.pressSequentially(CHATGPT_CONNECTOR_MENTION_QUERY, {
+        await composer.pressSequentially(mentionQuery, {
           delay: 25,
           signal: abortSignal,
           timeout: CHATGPT_CONNECTOR_ACTION_TIMEOUT_MS,
