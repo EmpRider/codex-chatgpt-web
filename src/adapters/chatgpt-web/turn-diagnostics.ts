@@ -65,9 +65,8 @@ let pendingBytes = 0;
 let timer: ReturnType<typeof setTimeout> | undefined;
 let writing: Promise<void> | undefined;
 
-// Bun 1.4.0's Windows named-pipe lifecycle can stall when asynchronous filesystem
-// work overlaps broker teardown. Keep the proven synchronous writer there, but
-// invoke it once per deferred, bounded batch rather than on every broker event.
+// Preserve the previous immediate writer on Windows while investigating Bun
+// named-pipe teardown stalls. Other platforms use the bounded asynchronous queue.
 function writeWindowsDiagnostics(directory: string, lines: string[]): void {
   mkdirSync(directory, { recursive: true, mode: 0o700 });
   const file = join(directory, `process-${process.pid}.jsonl`);
@@ -105,10 +104,6 @@ function drainDiagnostics(): Promise<void> {
     }
     for (const [directory, lines] of groups) {
       try {
-        if (process.platform === "win32") {
-          writeWindowsDiagnostics(directory, lines);
-          continue;
-        }
         await mkdir(directory, { recursive: true, mode: 0o700 });
         const file = join(directory, `process-${process.pid}.jsonl`);
         if (((await stat(file).catch(() => null))?.size ?? 0) >= 2 * 1024 * 1024) {
@@ -139,6 +134,10 @@ export function logTurnDiagnostic(event: TurnDiagnosticEvent, fields: TurnDiagno
   try {
     const directory = join(getConfigDir(), "diagnostics", "turn-lifecycle");
     const line = `${JSON.stringify(buildTurnDiagnostic(event, fields))}\n`;
+    if (process.platform === "win32") {
+      writeWindowsDiagnostics(directory, [line]);
+      return;
+    }
     const bytes = Buffer.byteLength(line);
     // Bound diagnostics while a disk is stalled; the live task always takes precedence.
     while (pending.length && pendingBytes + bytes > 512 * 1024) pendingBytes -= Buffer.byteLength(pending.shift()!.line);
