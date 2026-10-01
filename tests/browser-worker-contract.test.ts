@@ -1625,7 +1625,7 @@ test("connector selection re-resolves the active composer after ChatGPT replaces
     ["fill", ""],
     ["fill", ""],
     ["focus"],
-    ["pressSequentially", "@codex"],
+    ["pressSequentially", "@Codex Native2"],
     ["waitForResult"],
     ["press"],
     ["waitForSelectedConnector"],
