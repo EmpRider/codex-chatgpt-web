@@ -1,3 +1,4 @@
+import { logTurnDiagnostic } from "./turn-diagnostics";
 import { createHash, randomBytes } from "node:crypto";
 import { chmodSync, existsSync, lstatSync, mkdirSync, unlinkSync } from "node:fs";
 import { createConnection, createServer, type Server, type Socket } from "node:net";
@@ -368,6 +369,7 @@ export class TurnBroker implements TurnBrokerOwner {
     };
     this.channels.set(token, channel);
     this.pending.set(token, channel);
+    logTurnDiagnostic("token_registered", { token, traceId, brokerEndpoint: this.socketPath, activeTokens: this.channels.size });
     console.info(`[chatgpt-web] broker trace=${traceId} registered tokenHash=${handleFingerprint(token)}`);
     return token;
   }
@@ -715,6 +717,8 @@ export class TurnBroker implements TurnBrokerOwner {
   revoke(token: string, reason = new Error("Codex turn binding was revoked")): void {
     const channel = this.channels.get(token);
     if (!channel) return;
+    logTurnDiagnostic("token_retired", { token, traceId: channel.traceId, brokerEndpoint: this.socketPath,
+      completionCommitted: channel.completionCommitted, activeMcpRequests: channel.activities.size });
     console.info(`[chatgpt-web] broker_retired ${JSON.stringify({
       traceId: channel.traceId,
       pendingTools: channel.invocations.size,
@@ -1153,6 +1157,9 @@ export class TurnBroker implements TurnBrokerOwner {
       const channel = this.channels.get(token);
       let activeChannel = channel && !channel.completionCommitted ? channel : undefined;
       const retiredTurn = channel?.completionCommitted ? channel.traceId : this.retiredTokens.get(token);
+      logTurnDiagnostic("broker_claim", { token, brokerEndpoint: this.socketPath,
+        traceId: channel?.traceId ?? retiredTurn, valid: Boolean(activeChannel), activeTokens: this.channels.size,
+        ...(activeChannel ? {} : { failureClass: retiredTurn !== undefined ? "retired_token" : "invalid_token" }) });
       console.error(
         `[chatgpt-web] broker claim received (tokenChars=${token.length}, tokenHash=${handleFingerprint(token)}, valid=${Boolean(activeChannel)}`
         + `${activeChannel ? "" : `, retiredTurn=${retiredTurn ?? "unknown"}`})`,

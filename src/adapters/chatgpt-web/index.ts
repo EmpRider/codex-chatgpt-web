@@ -1,3 +1,4 @@
+import { logTurnDiagnostic } from "./turn-diagnostics";
 import { createHash, randomBytes } from "node:crypto";
 import { resolve } from "node:path";
 import { isChatGptWebZeroRiskBackendModel } from "../../chatgpt-web-models";
@@ -827,6 +828,12 @@ export function createChatGptWebAdapter(
           tokenSettled = true;
           token.resolve(turnToken);
         }
+        logTurnDiagnostic("token_prepared", {
+          traceId, token: turnToken, brokerEndpoint: brokerSocketPath(provider),
+          transport: compiled.contextTransport ? "mcp" : compiled.multipart ? "multipart" : "inline",
+          promptChars: compiled.text.length, skillFiles: compiled.skillFiles?.length ?? 0,
+          freshConversation: freshConversationPerTurn,
+        });
         return { ...compiled, release: () => {} };
       } catch (error) {
         await broker.revoke(turnToken);
@@ -1532,6 +1539,13 @@ export function createChatGptWebAdapter(
             : turnError;
           if (!(turnError instanceof ChatGptWebAdapterError && turnError.retryable)) {
             chatGptWebTurnRetryPolicy.clear(retryKey);
+          }
+          if (turnError instanceof ChatGptWebAdapterError && turnError.code === "codex_turn_token_rejected") {
+            if (session.runtime.mode === "tools") {
+              void session.runtime.token.then(token => logTurnDiagnostic("token_rejection_recovery", {
+                token, brokerEndpoint: brokerSocketPath(provider),
+              })).catch(() => {});
+            }
           }
           const staleTokenConversationKey = handledError instanceof ChatGptWebAdapterError
             && handledError.code === "codex_turn_token_rejected"

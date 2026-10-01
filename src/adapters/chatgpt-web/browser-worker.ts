@@ -1,3 +1,4 @@
+import { logTurnDiagnostic } from "./turn-diagnostics";
 import { randomUUID } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readdirSync, rmSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -5314,6 +5315,9 @@ export class ChatGptBrowserWorker {
           await diagnostics.capture(page, "connector-catalog-refreshed");
         }
       }
+      logTurnDiagnostic("prompt_verified", { traceId: turn.traceId,
+        token: finalPrompt.match(/\bturn_token (turn_[A-Za-z0-9_-]{32})\b/)?.[1],
+        promptChars: finalPrompt.length });
       await diagnostics.capture(page, "prompt-attachment-complete");
       await this.runStage(turn.traceId, "file_attachment", browserStageTimeouts.fileAttachment, () => (
         this.attachFiles(page, prepared)
@@ -5353,6 +5357,8 @@ export class ChatGptBrowserWorker {
           submissionRejection,
         ),
       );
+      logTurnDiagnostic("submission_accepted", { traceId: turn.traceId,
+        token: finalPrompt.match(/\bturn_token (turn_[A-Za-z0-9_-]{32})\b/)?.[1] });
       console.info(`[chatgpt-web] browser turn ${turn.traceId} submission accepted evidence=${finalSubmissionEvidence}`);
       let responseTurn = await this.waitForNewAssistantTurn(
         page,

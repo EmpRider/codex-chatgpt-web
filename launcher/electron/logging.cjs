@@ -51,8 +51,17 @@ function sanitizeForExport(value, seen = new WeakSet()) {
   );
 }
 
-function exportSanitizedLogs({ filePath, destinationPath }) {
+function exportSanitizedLogs({ filePath, destinationPath, lifecycleDirectory }) {
   const sourcePaths = [`${filePath}.1`, filePath];
+  if (lifecycleDirectory) {
+    try {
+      sourcePaths.push(...fs.readdirSync(lifecycleDirectory)
+        .filter(name => /^process-\d+\.jsonl(?:\.1)?$/.test(name))
+        .map(name => path.join(lifecycleDirectory, name)));
+    } catch (error) {
+      if (error?.code !== "ENOENT") throw error;
+    }
+  }
   const destination = path.resolve(destinationPath);
   const destinationStat = fs.statSync(destination, { throwIfNoEntry: false });
   if (sourcePaths.some(sourcePath => {
@@ -93,6 +102,7 @@ function exportSanitizedLogs({ filePath, destinationPath }) {
       } catch {}
     }
   }
+  records.sort((a, b) => a.at.localeCompare(b.at));
   // Replacing the directory entry also avoids following a link introduced after
   // the identity check. A failed write leaves the previous export intact.
   writePrivateFileAtomic(

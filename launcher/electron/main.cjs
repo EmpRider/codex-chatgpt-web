@@ -1041,6 +1041,7 @@ function registerIpc({ logger, stateStore }) {
     if (result.canceled || !result.filePath) return null;
     const recordCount = exportSanitizedLogs({
       filePath: logger.filePath,
+      lifecycleDirectory: path.join(CORE_HOME, "diagnostics", "turn-lifecycle"),
       destinationPath: result.filePath,
     });
     logger.info("launcher.logs_exported", { recordCount });
