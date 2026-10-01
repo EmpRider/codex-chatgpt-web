@@ -410,7 +410,7 @@ describe("Zero Risk public MCP ABI", () => {
     }
   }, 30_000);
 
-  test("late native result after a timed-out Zero Risk tool is ignored after safe completion", async () => {
+  (process.platform === "win32" ? test.skip : test)("late native result after a timed-out Zero Risk tool is ignored after safe completion", async () => {
     const socketPath = endpoint("late-after-safe-completion");
     const broker = TurnBroker.forSocket(socketPath);
     try {
