@@ -1530,13 +1530,16 @@ export async function callTurnBroker<T>(
       settled = true;
       clearTimeout(timer);
       cleanup();
-      // Bun 1.4.0 can block synchronously in Socket.destroy() for an active Windows named pipe.
-      // The MCP activity cleanup that follows this rejection is the durable server-side boundary,
-      // so do not block that cleanup on physical client-pipe teardown. Unref the Windows client and
-      // let the broker response/activity completion close it naturally. Unix sockets do not have
-      // this teardown pathology and can still be destroyed immediately.
+      // Bun 1.4.0 can block synchronously while tearing down an active Windows named pipe.
+      // For an activity-owned invoke, the MCP handler immediately follows this rejection with
+      // activity_complete, which is the durable server-side cleanup boundary. Do not touch the
+      // Windows client pipe here; settlement will reject the broker-side invocation and close the
+      // response socket naturally. Other bounded broker calls do not have that activity cleanup,
+      // so close their write side gracefully instead of using destroy().
       if (isWindowsPipeEndpoint(socketPath)) {
-        socket.unref();
+        if (wireRequest.method !== "invoke" || wireRequest.activityId === undefined) {
+          socket.end();
+        }
         rejectCall(error);
         return;
       }
