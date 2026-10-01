@@ -770,9 +770,14 @@ export function createChatGptWebAdapter(
     let tokenSettled = false;
     let activeToken: string | undefined;
     const prepareWith = async (input: CodexParsedRequest) => {
+      // The browser/session lifecycle owns cancellation. Do not mirror the browser timeout into
+      // the broker capability: a live ChatGPT task may legitimately outlive an observation/stage
+      // budget, and expiring its turn token independently produces stale-token failures while the
+      // task is still active. Explicit completion, cancellation, retirement, or runtime shutdown
+      // remains the authority that revokes this capability.
       const turnToken = activeToken ?? await broker.register(
         environment,
-        timeoutMs === undefined ? undefined : timeoutMs + 60_000,
+        undefined,
         traceId,
       );
       activeToken = turnToken;
