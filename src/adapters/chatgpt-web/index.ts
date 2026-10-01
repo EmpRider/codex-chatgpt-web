@@ -294,6 +294,22 @@ function replayEvents(events: AdapterEvent[], emit: (event: AdapterEvent) => voi
   for (const event of events) emit(event);
 }
 
+function throwIfCodexTurnTokenRejected(answer: string): void {
+  const normalized = answer.replace(/\s+/g, " ").trim();
+  if (!normalized.toLowerCase().includes("codex task could not start")) return;
+  if (!normalized.toLowerCase().includes("turn token is invalid, expired, or revoked")) return;
+  if (!normalized.toLowerCase().includes("fresh turn token")) return;
+  throw new ChatGptWebAdapterError(
+    "Codex Native rejected a stale turn token. Retry the task so the bridge can start a fresh ChatGPT turn with a new token.",
+    {
+      status: 502,
+      errorType: "server_error",
+      code: "codex_turn_token_rejected",
+      retryable: true,
+    },
+  );
+}
+
 function submittedTurnFailure(session: ChatGptTurnSession, error: unknown): Error {
   const normalized = error instanceof Error ? error : new Error(String(error));
   if (normalized instanceof ChatGptWebAdapterError) return normalized;
@@ -1301,6 +1317,7 @@ export function createChatGptWebAdapter(
               if (session.runtime.text.value() !== settled.answer) {
                 throw new Error("ChatGPT browser Markdown stream did not reproduce the completed answer");
               }
+              throwIfCodexTurnTokenRejected(settled.answer);
               structuredOutputValidator?.(settled.answer);
               if (bufferStructuredOutput) {
                 emitRoundBatch(buffer => emitTextDeltas([settled.answer], buffer));
@@ -1410,6 +1427,7 @@ export function createChatGptWebAdapter(
                 if (session.runtime.text.value() !== completedOutcome.answer) {
                   throw new Error("ChatGPT browser Markdown stream did not reproduce the completed answer");
                 }
+                throwIfCodexTurnTokenRejected(completedOutcome.answer);
                 structuredOutputValidator?.(completedOutcome.answer);
                 if (bufferStructuredOutput) {
                   emitRoundBatch(buffer => emitTextDeltas([completedOutcome.answer], buffer));
