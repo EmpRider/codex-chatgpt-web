@@ -67,7 +67,7 @@ windowsOnly("Windows broker survives repeated MCP timeouts across a separate cli
       method: "claim",
       token,
       activityId: recoveryActivity,
-    });
+    }, null);
     expect(recoveryClaim.bindingId).toBe(parsed.bindingId);
     await expect(callTurnBroker(socketPath, {
       method: "invoke",
@@ -75,7 +75,7 @@ windowsOnly("Windows broker survives repeated MCP timeouts across a separate cli
       activityId: recoveryActivity,
       wireName: "exec_command",
       arguments: { cmd: "cross-process-timeout-1" },
-    }, 2_000)).resolves.toMatchObject({
+    }, null)).resolves.toMatchObject({
       content: [{ type: "text", text: "late-one" }],
       structuredContent: { recovered: 1 },
     });
@@ -90,7 +90,7 @@ windowsOnly("Windows broker survives repeated MCP timeouts across a separate cli
       method: "claim",
       token,
       activityId: intentionalActivity,
-    });
+    }, null);
     const nextBatchPromise = broker.nextToolBatch(token);
     const intentional = callTurnBroker(socketPath, {
       method: "invoke",
@@ -98,7 +98,7 @@ windowsOnly("Windows broker survives repeated MCP timeouts across a separate cli
       activityId: intentionalActivity,
       wireName: "exec_command",
       arguments: { cmd: "cross-process-timeout-1" },
-    }, 5_000);
+    }, null);
     const [intentionalRequest] = await nextBatchPromise;
     expect(intentionalRequest?.arguments?.cmd).toBe("cross-process-timeout-1");
     broker.completeTool(token, intentionalRequest!.callId, {
