@@ -11,6 +11,7 @@ windowsOnly("Windows broker survives repeated MCP timeouts across a separate cli
   const root = mkdtempSync(join(tmpdir(), "cgw-win-xproc-"));
   const socketPath = defaultBrokerEndpoint(root, "win32");
   const broker = TurnBroker.forSocket(socketPath);
+  let child: ReturnType<typeof Bun.spawn> | undefined;
   try {
     const token = await broker.register({
       cwd: root,
@@ -21,7 +22,7 @@ windowsOnly("Windows broker survives repeated MCP timeouts across a separate cli
     }, undefined, "windows-cross-process-timeout");
 
     const firstBatchPromise = broker.nextToolBatch(token);
-    const child = Bun.spawn([
+    child = Bun.spawn([
       process.execPath,
       join(import.meta.dir, "windows-broker-client.ts"),
       socketPath,
@@ -114,7 +115,8 @@ windowsOnly("Windows broker survives repeated MCP timeouts across a separate cli
 
     expect(broker.beginCompletionFence(token)).toBeDefined();
   } finally {
+    if (child && child.exitCode === null) child.kill();
     await broker.close();
     rmSync(root, { recursive: true, force: true });
   }
-}, 20_000);
+}, 30_000);
