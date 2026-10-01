@@ -7,7 +7,7 @@ import { waitForChatGptResponseDomChange } from "../src/adapters/chatgpt-web/res
 test("the worker's mutation wakeup bounds a stalled locator with the observation recovery error", async () => {
   // Exercise the actual wait expression used by the worker with a renderer that
   // never starts evaluation, so the page-side 250 ms timer cannot provide a bound.
-  const source = readFileSync(new URL("../src/adapters/chatgpt-web/browser-worker.ts", import.meta.url), "utf8");
+  const source = readFileSync(new URL("../src/adapters/chatgpt-web/browser-worker.ts", import.meta.url), "utf8").replace(/\r\n/g, "\n");
   const call = source.indexOf("responseTurn.locator.evaluate(waitForChatGptResponseDomChange");
   expect(call).toBeGreaterThan(-1);
   const expression = source.slice(source.lastIndexOf("await ", call) + 6, source.indexOf(";\n", call));
