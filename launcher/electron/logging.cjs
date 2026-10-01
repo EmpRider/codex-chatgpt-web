@@ -1,6 +1,6 @@
 const fs = require("node:fs");
 const path = require("node:path");
-const { writePrivateFileAtomic } = require("./atomic-file.cjs");
+const { renameAtomicFileAsync, writePrivateFileAtomic } = require("./atomic-file.cjs");
 
 const MAX_LOG_BYTES = 4 * 1024 * 1024;
 const MAX_MEMORY_RECORDS = 300;
@@ -161,7 +161,7 @@ function readRecent(filePath) {
   return records.reverse();
 }
 
-function createLogger({ filePath, publish }) {
+function createLogger({ filePath, publish, platform = process.platform }) {
   const records = readRecent(filePath);
   const pending = [];
   let pendingBytes = 0;
@@ -185,7 +185,7 @@ function createLogger({ filePath, publish }) {
         const stat = await fs.promises.stat(filePath).catch(() => null);
         if (stat && stat.size >= MAX_LOG_BYTES) {
           await fs.promises.rm(`${filePath}.1`, { force: true });
-          await fs.promises.rename(filePath, `${filePath}.1`);
+          await renameAtomicFileAsync(filePath, `${filePath}.1`, { platform });
         }
         await fs.promises.appendFile(filePath, lines.join(""), { mode: 0o600 });
       } catch { /* Logging must not break a turn when the disk is unavailable. */ }

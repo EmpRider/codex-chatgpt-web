@@ -1,6 +1,28 @@
 import { expect, test } from "bun:test";
 import { createContext, runInContext } from "node:vm";
+import { readFileSync } from "node:fs";
+import { ChatGptBrowserObservationTimeoutError, withChatGptBrowserObservationTimeout } from "../src/adapters/chatgpt-web/browser-worker";
 import { waitForChatGptResponseDomChange } from "../src/adapters/chatgpt-web/response-dom-wait";
+
+test("the worker's mutation wakeup bounds a stalled locator with the observation recovery error", async () => {
+  // Exercise the actual wait expression used by the worker with a renderer that
+  // never starts evaluation, so the page-side 250 ms timer cannot provide a bound.
+  const source = readFileSync(new URL("../src/adapters/chatgpt-web/browser-worker.ts", import.meta.url), "utf8");
+  const call = source.indexOf("responseTurn.locator.evaluate(waitForChatGptResponseDomChange");
+  expect(call).toBeGreaterThan(-1);
+  const expression = source.slice(source.lastIndexOf("await ", call) + 6, source.indexOf(";\n", call));
+  const evaluateWait = new Function("responseTurn", "responseDomCache", "CHATGPT_DOM_REVISION_ATTRIBUTES", "turn", "waitForChatGptResponseDomChange", "withBrowserTurnAbort", "withChatGptBrowserObservationTimeout", `return ${expression}`);
+  const pending = evaluateWait(
+    { locator: { evaluate: () => new Promise(() => {}) } }, {}, [], {}, waitForChatGptResponseDomChange,
+    (operation: Promise<unknown>) => operation,
+    (operation: Promise<unknown>) => withChatGptBrowserObservationTimeout(operation, 5),
+  );
+  const outcome = await Promise.race([
+    pending.catch((error: unknown) => error),
+    Bun.sleep(50).then(() => "stalled without recovery"),
+  ]);
+  expect(outcome).toBeInstanceOf(ChatGptBrowserObservationTimeoutError);
+});
 
 function fixture() {
   let notify: () => void = () => {};

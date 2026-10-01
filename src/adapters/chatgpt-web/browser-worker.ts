@@ -5646,12 +5646,12 @@ export class ChatGptBrowserWorker {
           if (domError) throw new ChatGptDomHealthObservationError(domError);
         }
         if (snapshot.responsePresent) {
-          await withBrowserTurnAbort(responseTurn.locator.evaluate(waitForChatGptResponseDomChange, {
+          await withChatGptBrowserObservationTimeout(withBrowserTurnAbort(responseTurn.locator.evaluate(waitForChatGptResponseDomChange, {
             knownKey: responseDomCache.key,
             timeoutMs: 250,
             minWaitMs: 50,
             attributeFilter: [...CHATGPT_DOM_REVISION_ATTRIBUTES],
-          }), turn.abortSignal);
+          }), turn.abortSignal));
         } else {
           await new Promise(resolveSleep => setTimeout(resolveSleep, 250));
         }
