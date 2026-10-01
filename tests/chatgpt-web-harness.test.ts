@@ -451,6 +451,9 @@ describe("ChatGPT outer-native harness v4", () => {
       expect(tokens[1]).not.toBe(tokens[0]);
       expect(preparedPrompts[0]).toContain("Inspect the project");
       expect(preparedPrompts[1]).toContain("Continue in the same repository");
+      expect(preparedPrompts[1]).toContain(
+        "Ignore any turn_token from earlier ChatGPT messages; those handles are retired.",
+      );
       if (freshConversation) {
         expect(preparedPrompts[1]).toContain("First retained answer");
         expect(preparedPrompts[1]).toContain("Inspect the project");
