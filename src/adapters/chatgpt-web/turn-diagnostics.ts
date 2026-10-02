@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { getConfigDir } from "../../config";
 import { VERSION } from "../../version";
 
-type TurnDiagnosticEvent = "token_prepared" | "prompt_verified" | "submission_accepted" | "token_registered" | "token_retired" | "broker_claim" | "mcp_started" | "mcp_claim_started" | "mcp_claim_succeeded" | "mcp_claim_failed" | "token_rejection_recovery";
+type TurnDiagnosticEvent = "token_prepared" | "prompt_verified" | "submission_accepted" | "token_registered" | "token_retired" | "broker_claim" | "mcp_started" | "mcp_claim_started" | "mcp_claim_succeeded" | "mcp_claim_failed" | "token_rejection_recovery" | "native_result_timeout" | "tool_boundary_wait" | "tool_boundary_observed" | "tool_boundary_timeout" | "native_batch_emitted" | "native_result_received";
 type FailureClass = "invalid_token" | "retired_token" | "broker_unreachable" | "timeout" | "aborted" | "other";
 interface TurnDiagnosticFields {
   token?: string;

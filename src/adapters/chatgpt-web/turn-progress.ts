@@ -19,6 +19,7 @@ interface ToolBatchObservationWaiter {
   reject: (error: Error) => void;
   signal?: AbortSignal;
   onAbort?: () => void;
+  timer?: ReturnType<typeof setTimeout>;
 }
 
 /**
@@ -118,12 +119,17 @@ export class ChatGptExternalTurnProgress extends ChatGptTurnProgressBroadcaster 
     for (const waiter of [...this.toolBatchObservationWaiters]) {
       if (waiter.revision > revision) continue;
       this.toolBatchObservationWaiters.delete(waiter);
+      if (waiter.timer) clearTimeout(waiter.timer);
       if (waiter.signal && waiter.onAbort) waiter.signal.removeEventListener("abort", waiter.onAbort);
       waiter.resolve();
     }
   }
 
-  waitForToolBatchObservation(revision: number, signal?: AbortSignal): Promise<void> {
+  waitForToolBatchObservation(
+    revision: number,
+    signal?: AbortSignal,
+    timeoutMs = CHATGPT_TOOL_BOUNDARY_TIMEOUT_MS,
+  ): Promise<void> {
     this.assertToolBatchRevision(revision);
     if (this.retirementError) return Promise.reject(this.retirementError);
     if (this.observedToolBatchRevision >= revision) return Promise.resolve();
@@ -132,9 +138,19 @@ export class ChatGptExternalTurnProgress extends ChatGptTurnProgressBroadcaster 
     }
     return new Promise((resolve, reject) => {
       const waiter: ToolBatchObservationWaiter = { revision, resolve, reject, ...(signal ? { signal } : {}) };
+      waiter.timer = setTimeout(() => {
+        this.toolBatchObservationWaiters.delete(waiter);
+        if (signal && waiter.onAbort) signal.removeEventListener("abort", waiter.onAbort);
+        reject(new ChatGptWebAdapterError(
+          `The browser did not acknowledge the Codex tool boundary within ${timeoutMs}ms. No command from this batch was dispatched; check the launcher browser/helper connection.`,
+          { status: 504, errorType: "server_error", code: "browser_tool_boundary_timeout", retryable: false },
+        ));
+      }, timeoutMs);
+      waiter.timer.unref?.();
       if (signal) {
         waiter.onAbort = () => {
           this.toolBatchObservationWaiters.delete(waiter);
+          if (waiter.timer) clearTimeout(waiter.timer);
           reject(new DOMException("ChatGPT tool-boundary observation aborted", "AbortError"));
         };
         signal.addEventListener("abort", waiter.onAbort, { once: true });
@@ -158,6 +174,7 @@ export class ChatGptExternalTurnProgress extends ChatGptTurnProgressBroadcaster 
     if (this.retirementError) return false;
     this.retirementError = error;
     for (const waiter of this.toolBatchObservationWaiters) {
+      if (waiter.timer) clearTimeout(waiter.timer);
       if (waiter.signal && waiter.onAbort) waiter.signal.removeEventListener("abort", waiter.onAbort);
       waiter.reject(error);
     }
@@ -290,3 +307,6 @@ export function chatGptExternalToolCallsAreInFlight(
 ): boolean {
   return (snapshot?.activeToolCalls ?? 0) > 0;
 }
+import { ChatGptWebAdapterError } from "./adapter-error";
+
+export const CHATGPT_TOOL_BOUNDARY_TIMEOUT_MS = 30_000;

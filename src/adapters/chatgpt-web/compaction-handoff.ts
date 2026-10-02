@@ -337,6 +337,12 @@ export async function requestRetainedCompactionHandoff(
   if (!conversationKey) throw new Error("The completed ChatGPT source has no retained conversation identity");
   const operationTimeoutMs = boundedCompactionTimeout(timeoutMs);
   const deadline = new AbortController();
+  // A live observer can heartbeat forever without producing a checkpoint. Keep the
+  // renewable inactivity window, but cap this phase at twice that window.
+  const totalDeadlineTimer = setTimeout(() => deadline.abort(new Error(
+    `ChatGPT compaction exceeded its total checkpoint deadline of ${operationTimeoutMs * 2}ms`,
+  )), operationTimeoutMs * 2);
+  totalDeadlineTimer.unref?.();
   let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
   let transaction: CompactionTransactionHandle | undefined;
   const reportProgress = (): void => {
@@ -426,6 +432,7 @@ export async function requestRetainedCompactionHandoff(
     }
     operationSignal.removeEventListener("abort", abortBrowser);
     if (deadlineTimer) clearTimeout(deadlineTimer);
+    clearTimeout(totalDeadlineTimer);
   }
 }
 

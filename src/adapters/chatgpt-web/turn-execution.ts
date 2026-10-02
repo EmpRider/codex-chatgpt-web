@@ -10,6 +10,11 @@ import {
 } from "./environment";
 import { MAX_CHATGPT_BROWSER_TABS } from "./concurrency";
 import type { ChatGptExternalTurnProgress } from "./turn-progress";
+import { logTurnDiagnostic } from "./turn-diagnostics";
+
+// MCP stops waiting after 90 seconds. Allow another minute for a delayed native
+// continuation, then fail the lost round instead of retaining its browser forever.
+export const CHATGPT_NATIVE_RESULT_TIMEOUT_MS = 150_000;
 
 function awaitWithAbort<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
   if (!signal) return promise;
@@ -248,6 +253,7 @@ export type ChatGptTurnRuntime =
     mode: "tools";
     token: Promise<string>;
     externalProgress: ChatGptExternalTurnProgress;
+    toolResultTimeoutMs?: number;
   })
   | (ChatGptTurnRuntimeBase & { mode: "read-only" });
 
@@ -361,6 +367,7 @@ export class ChatGptTurnSession {
   readonly browserOutcome: Promise<ChatGptBrowserOutcome>;
   readonly physicalSettlement: Promise<void>;
   private readonly outstandingById = new Map<string, BrokerToolRequest>();
+  private toolResultTimer?: ReturnType<typeof setTimeout>;
   private readonly deliveredResultIds = new Set<string>();
   private outstandingReasoning: string[] = [];
   private finalReasoning: string[] = [];
@@ -399,6 +406,7 @@ export class ChatGptTurnSession {
       .catch(error => ({ type: "error", error: error instanceof Error ? error : new Error(String(error)) }) as ChatGptBrowserOutcome)
       .then(outcome => {
       this.settledBrowserOutcome = outcome;
+      if (this.toolResultTimer) clearTimeout(this.toolResultTimer);
       const error = outcome.type === "error" && outcome.error instanceof ChatGptWebAdapterError
         ? outcome.error : undefined;
       console.info(`[chatgpt-web] browser_settled ${JSON.stringify({
@@ -478,6 +486,18 @@ export class ChatGptTurnSession {
     }
     this.outstandingReasoning = [...reasoning];
     this.outstandingPrelude = [...prelude];
+    if (requests.length && this.runtime.mode === "tools" && !this.runtime.manualControl) {
+      const timeoutMs = this.runtime.toolResultTimeoutMs ?? CHATGPT_NATIVE_RESULT_TIMEOUT_MS;
+      this.toolResultTimer = setTimeout(() => {
+        if (!this.outstandingById.size || this.settledBrowserOutcome) return;
+        logTurnDiagnostic("native_result_timeout", { traceId: this.traceId, failureClass: "timeout" });
+        this.cancel(new ChatGptWebAdapterError(
+          `Codex did not return this tool batch within ${timeoutMs}ms. Its native outcome is unknown; check Codex before retrying the operation.`,
+          { status: 504, errorType: "server_error", code: "codex_tool_result_timeout", retryable: false },
+        ));
+      }, timeoutMs);
+      this.toolResultTimer.unref?.();
+    }
   }
 
   hasOutstanding(callId: string): boolean {
@@ -488,6 +508,7 @@ export class ChatGptTurnSession {
     if (!this.outstandingById.delete(callId)) throw new Error(`ChatGPT bridge tool result does not match an outstanding call: ${callId}`);
     this.deliveredResultIds.add(callId);
     if (this.outstandingById.size === 0) {
+      if (this.toolResultTimer) clearTimeout(this.toolResultTimer);
       this.outstandingReasoning = [];
       this.outstandingPrelude = [];
     }
@@ -566,6 +587,7 @@ export class ChatGptTurnSession {
   }
 
   cancel(reason?: Error): void {
+    if (this.toolResultTimer) clearTimeout(this.toolResultTimer);
     this.runtime.cancel(reason);
   }
 
