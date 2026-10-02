@@ -30,14 +30,14 @@ import { chatGptReadOnlyContextWarning, compileChatGptWebPrompt } from "./prompt
 import { createChatGptStructuredOutputValidator } from "./output-validation";
 import { chatGptWebTurnRetryPolicy } from "./retry-policy";
 import { TurnBroker, type BrokerToolRequest, type BrokerToolResult, type TurnBrokerOwner } from "./turn-broker";
-import { ChatGptTextFeed, ChatGptTraceFeed, ChatGptTurnActivity, chatGptCompactionSourceExecutionKey, chatGptInstructionLineage, chatGptThreadOwnershipKey, chatGptTurnExecutionKey, chatGptTurnRetryKey, chatGptTurnRoundKey, chatGptTurnSessions, type ChatGptBrowserOutcome, type ChatGptTraceEvent, type ChatGptTurnRuntime, type ChatGptTurnSession } from "./turn-execution";
+import { CHATGPT_NATIVE_RESULT_TIMEOUT_MS, ChatGptTextFeed, ChatGptTraceFeed, ChatGptTurnActivity, chatGptCompactionSourceExecutionKey, chatGptInstructionLineage, chatGptThreadOwnershipKey, chatGptTurnExecutionKey, chatGptTurnRetryKey, chatGptTurnRoundKey, chatGptTurnSessions, type ChatGptBrowserOutcome, type ChatGptTraceEvent, type ChatGptTurnRuntime, type ChatGptTurnSession } from "./turn-execution";
 import { estimateChatGptWebUsage, resolveBiggerContextMultipartParts } from "./usage";
 import { ChatGptThreadEnvironmentStore } from "./thread-environment";
 import {
   ChatGptLunaCheckpointStore,
   type CapturedChatGptLunaCheckpoint,
 } from "./rolling-checkpoint";
-import { ChatGptExternalTurnProgress } from "./turn-progress";
+import { ChatGptExternalTurnProgress, CHATGPT_TOOL_BOUNDARY_TIMEOUT_MS } from "./turn-progress";
 import {
   canonicalizeCompactionHandoff,
   existingStructuredCompactionRun,
@@ -890,6 +890,7 @@ export function createChatGptWebAdapter(
       mode: "tools",
       token: token.promise,
       externalProgress,
+      toolResultTimeoutMs: Math.min(timeoutMs ?? CHATGPT_NATIVE_RESULT_TIMEOUT_MS, CHATGPT_NATIVE_RESULT_TIMEOUT_MS),
       browser: browserTurn.browser,
       physicalSettlement: browserTurn.physicalSettlement,
       activity,
@@ -1040,6 +1041,11 @@ export function createChatGptWebAdapter(
                     handoffTimer.unref?.();
                   };
                   armHandoffDeadline();
+                  const totalHandoffTimer = setTimeout(() => handoffDeadline.abort(new ChatGptWebAdapterError(
+                    `ChatGPT compaction exceeded its total checkpoint deadline of ${handoffTimeoutMs * 2}ms`,
+                    { status: 504, errorType: "server_error", code: "compaction_handoff_timeout", retryable: false },
+                  )), handoffTimeoutMs * 2);
+                  totalHandoffTimer.unref?.();
                   const operationSignal = AbortSignal.any([operatorSignal, handoffDeadline.signal]);
                   const sourceConversationKey = chatGptConversationKey(parsed, executionNamespace);
                   const runFreshCompaction = async (reason: string): Promise<string> => {
@@ -1187,18 +1193,22 @@ export function createChatGptWebAdapter(
                     try {
                       // Operator cancellation ends the logical compaction, but cancel-all must not
                       // acknowledge until the retained browser/helper owner has physically retired.
-                      await (preserveFinalResponse
+                      const retirement = preserveFinalResponse
                         ? chatGptTurnSessions.retireConversationPreservingFinalResponse(
                           retainedKey,
                           source!,
                           compactedSourceExecutionKey,
                         )
-                        : chatGptTurnSessions.retireConversationAndWait(retainedKey));
+                        : chatGptTurnSessions.retireConversationAndWait(retainedKey);
+                      retainOwnershipUntil(retirement.then(() => {}));
+                      await withAbort(retirement, operationSignal);
                     } catch (retirementError) {
-                      handoffError = new AggregateError(
-                        [handoffError, retirementError instanceof Error ? retirementError : new Error(String(retirementError))],
-                        "Structured compaction failed and its retained conversation could not be retired",
-                      );
+                      if (!operationSignal.aborted) {
+                        handoffError = new AggregateError(
+                          [handoffError, retirementError instanceof Error ? retirementError : new Error(String(retirementError))],
+                          "Structured compaction failed and its retained conversation could not be retired",
+                        );
+                      }
                     }
                     if (handoffError instanceof ChatGptWebAdapterError
                       && handoffError.code === "compaction_source_unavailable") {
@@ -1207,6 +1217,7 @@ export function createChatGptWebAdapter(
                     throw handoffError;
                   } finally {
                     if (handoffTimer) clearTimeout(handoffTimer);
+                    clearTimeout(totalHandoffTimer);
                   }
                 },
               );
@@ -1378,6 +1389,7 @@ export function createChatGptWebAdapter(
                   throw new Error(`Codex returned ${results.length} of ${outstanding.length} results for a parallel ChatGPT tool batch`);
                 }
                 for (const message of results) {
+                  logTurnDiagnostic("native_result_received", { traceId: session.traceId });
                   await broker.completeTool(turnToken, message.toolCallId, brokerResult(message));
                   session.runtime.externalProgress.recordToolResult();
                   session.markResultDelivered(message.toolCallId);
@@ -1414,15 +1426,23 @@ export function createChatGptWebAdapter(
                   if (requests.length > 0) {
                     const revision = externalProgress.recordToolBatch(requests.length);
                     if (!session.runtime.manualControl) {
-                      // The browser outcome is in the same race below and owns the semantic DOM and
-                      // renderer deadlines. A second fixed timer here can retire an accepted turn
-                      // while its same-tab observer is still recovering. Keep the causal barrier —
-                      // tools are not emitted until the browser captures their text boundary — but
-                      // let browser settlement or request cancellation end the wait.
-                      await externalProgress.waitForToolBatchObservation(
-                        revision,
-                        toolWaitAbort.signal,
-                      );
+                      // Keep the causal barrier: tools cannot execute until their browser text
+                      // boundary is captured. A lost helper acknowledgement must fail this round
+                      // even if the observer keeps emitting process heartbeats.
+                      logTurnDiagnostic("tool_boundary_wait", { traceId: session.traceId });
+                      try {
+                        await externalProgress.waitForToolBatchObservation(
+                          revision,
+                          toolWaitAbort.signal,
+                          Math.min(timeoutMs ?? CHATGPT_TOOL_BOUNDARY_TIMEOUT_MS, CHATGPT_TOOL_BOUNDARY_TIMEOUT_MS),
+                        );
+                        logTurnDiagnostic("tool_boundary_observed", { traceId: session.traceId });
+                      } catch (error) {
+                        if (error instanceof ChatGptWebAdapterError && error.code === "browser_tool_boundary_timeout") {
+                          logTurnDiagnostic("tool_boundary_timeout", { traceId: session.traceId, failureClass: "timeout" });
+                        }
+                        throw error;
+                      }
                     }
                     externalProgress.assertToolBatchActive(revision);
                   }
@@ -1515,6 +1535,7 @@ export function createChatGptWebAdapter(
                   buffer,
                 ));
                 session.completeRound(roundKey);
+                logTurnDiagnostic("native_batch_emitted", { traceId: session.traceId });
                 return;
               }
             } finally {

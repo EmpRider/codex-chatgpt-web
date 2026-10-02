@@ -9,6 +9,10 @@ const rootRegressionFiles = [
   "tests/mcp-context-read-safety.test.ts",
   // Structured/retained compaction, heartbeat + TTL renewal, handoff recovery.
   "tests/retained-compaction.test.ts",
+  // Lost helper acknowledgements, native result recovery, and absolute checkpoint deadlines.
+  "tests/tool-boundary-deadline.test.ts",
+  "tests/native-result-deadline.test.ts",
+  "tests/compaction-total-deadline.test.ts",
   // Capacity retry turn_id rollover and trusted Codex environment recovery.
   "tests/environment.test.ts",
   // Launcher control channel, cancellation, retained conversations, auth-required propagation.

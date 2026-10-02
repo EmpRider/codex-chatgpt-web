@@ -1456,7 +1456,9 @@ test.each([false, true])("fresh multipart compaction preserves phase budgets wit
       localToolsEnabled: true,
       solAvailable: true,
       extraHighAvailable: true, proAvailable: true,
-      turnTimeoutMs: 40,
+      // The 375ms phased run exceeds its renewable 200ms window,
+      // while remaining below the new 400ms total checkpoint deadline.
+      turnTimeoutMs: 200,
       experimentalFreshConversationPerTurn: freshConversation,
     },
   };
@@ -1467,7 +1469,7 @@ test.each([false, true])("fresh multipart compaction preserves phase budgets wit
     expect(turn.onMultipartStageAcknowledged).toBeDefined();
     expect(turn.onSubmitted).toBeDefined();
     for (let part = 1; part <= 5; part++) {
-      mock.timers.tick(25);
+      mock.timers.tick(45);
       expect(turn.abortSignal?.aborted).toBeFalse();
       await turn.onMultipartStageAcknowledged!(part);
     }
