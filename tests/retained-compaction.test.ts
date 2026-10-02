@@ -1456,7 +1456,9 @@ test.each([false, true])("fresh multipart compaction preserves phase budgets wit
       localToolsEnabled: true,
       solAvailable: true,
       extraHighAvailable: true, proAvailable: true,
-      turnTimeoutMs: 40,
+      // The 275ms phased run exceeds its renewable 200ms window,
+      // while remaining below the new 400ms total checkpoint deadline.
+      turnTimeoutMs: 200,
       experimentalFreshConversationPerTurn: freshConversation,
     },
   };
