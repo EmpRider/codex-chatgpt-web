@@ -1,5 +1,9 @@
 # Stalled native tool recovery
 
+Included in v6.2.7. If an older task is already stuck, stop it and restart the
+launcher after upgrading to clear the old browser session. Check Codex for the
+native command outcome before resubmitting the task.
+
 Automatic mode now bounds three waits that previously could keep an accepted
 browser turn open indefinitely:
 
