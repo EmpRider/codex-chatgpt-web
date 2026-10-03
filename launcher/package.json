@@ -39,7 +39,8 @@
   "overrides": {
     "@xmldom/xmldom": "0.8.15",
     "fast-uri": "3.1.8",
-    "js-yaml": "4.3.2"
+    "js-yaml": "4.3.2",
+    "@electron/get": "5.1.0"
   },
   "build": {
     "appId": "dev.codexwebgpt.launcher",
@@ -101,5 +102,8 @@
       "createStartMenuShortcut": true,
       "runAfterFinish": true
     }
+  },
+  "patchedDependencies": {
+    "app-builder-lib@26.15.3": "patches/app-builder-lib@26.15.3.patch"
   }
 }

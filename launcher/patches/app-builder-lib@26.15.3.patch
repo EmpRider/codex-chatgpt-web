@@ -1,0 +1,11 @@
+--- a/out/util/electronGet.js
++++ b/out/util/electronGet.js
+@@ -211,7 +211,7 @@
+     let lastLoggedMilestone = -1;
+     const state = { bar: undefined };
+     const downloadOptions = {
+-        timeout: { request: 10 * 60 * 1000 }, // prevent indefinite hang on stalled connections
++        signal: AbortSignal.timeout(10 * 60 * 1000), // Fetch downloader: bound stalled connections
+         ...config.downloadOptions,
+         agent: (_b = (_a = config.downloadOptions) === null || _a === void 0 ? void 0 : _a.agent) !== null && _b !== void 0 ? _b : (0, builder_util_1.buildGotProxyAgent)(),
+         getProgressCallback: info => {
