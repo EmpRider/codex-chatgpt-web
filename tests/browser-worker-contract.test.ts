@@ -1805,7 +1805,7 @@ test("connector verification preserves the host-refreshed catalog evidence", asy
     filter: (options: { has?: unknown; visible?: boolean }) => options.visible ? visibleRows : appResult,
   };
   const initialComposer = connectorEntryFixture({
-    fill: async () => { calls.push("clear"); },
+    fill: async (_text: string) => { calls.push("clear"); },
     focus: async () => { calls.push("focus"); },
     insertMention: async () => { calls.push("type"); },
   });
@@ -1857,7 +1857,7 @@ test("connector verification preserves the host-refreshed catalog evidence", asy
     connectorIsSelected: async () => selected,
     connectorMentionFailure: prototype.connectorMentionFailure,
     connectorMentionRowTitles: prototype.connectorMentionRowTitles,
-    clearChatGptComposerState: async () => { await initialComposer.fill(); },
+    clearChatGptComposerState: async () => { await initialComposer.fill(""); },
     selectedConnectorControl: () => selectedConnector,
     selectConnector: prototype.selectConnector,
   };
@@ -2652,12 +2652,12 @@ function thinkSlashFixture() {
   const rows = { filter: () => rows, first: () => row, count: async () => state.optionCount };
   const popup = { filter: () => popup, locator: () => rows, count: async () => state.popupCount };
   const page = { locator: (selector: string) => selector === '[role="dialog"]' ? dialogPage("").page.locator(selector) : popup };
-  const composer = connectorEntryFixture({
+  const composer = {
     filter: () => composer, first: () => composer, locator: () => composerForm,
     evaluate: async () => ({ text: state.draft.trim(), connectors: [...state.connectors] }),
     focus: async () => {},
     fill: async (text: string) => { state.draft = text; state.connectors = []; },
-    insertMention: async (text: string) => { state.commands.push(text); state.draft += text; },
+    pressSequentially: async (text: string) => { state.commands.push(text); state.draft += text; },
     press: async (key: string) => {
       if (key === "ArrowDown") state.highlighted = true;
       if (key === "Enter") {
@@ -2666,7 +2666,7 @@ function thinkSlashFixture() {
         if (state.loseConnector) state.connectors = [];
       }
     },
-  });
+  };
   const composerForm = { getByRole: () => ({ filter: () => controls }), locator: () => composer, page: () => page };
   return { state, composer, composerForm, page };
 }
