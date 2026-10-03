@@ -30,6 +30,10 @@ if (target !== nativeTarget) {
 }
 
 const env = { ...process.env };
+// @electron/get 5 uses Fetch; opt into its environment proxy support for build downloads.
+if (env.ELECTRON_GET_USE_PROXY === undefined && (env.HTTPS_PROXY || env.HTTP_PROXY || env.https_proxy || env.http_proxy)) {
+  env.ELECTRON_GET_USE_PROXY = "true";
+}
 if (!env.CSC_LINK && !env.CSC_NAME) env.CSC_IDENTITY_AUTO_DISCOVERY = "false";
 const builderArgs = [
   electronBuilderCli,

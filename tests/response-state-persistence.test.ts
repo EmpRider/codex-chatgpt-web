@@ -1,4 +1,4 @@
-import { afterAll, expect, test } from "bun:test";
+import { afterAll, beforeEach, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -6,6 +6,9 @@ import { expandPreviousResponseInput, flushResponseState, rememberResponseState 
 
 const home = mkdtempSync(join(tmpdir(), "cgw-async-state-"));
 const previousHome = process.env.CODEX_CHATGPT_WEB_HOME;
+// Other suites share the response-state module and may leave a debounce pending.
+// Drain its captured destination before this suite changes the configuration home.
+beforeEach(async () => { await flushResponseState(); });
 afterAll(async () => {
   await flushResponseState();
   if (previousHome === undefined) delete process.env.CODEX_CHATGPT_WEB_HOME;

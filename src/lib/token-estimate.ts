@@ -1,4 +1,5 @@
 import { get_encoding, type Tiktoken } from "tiktoken";
+import { createHash } from "node:crypto";
 import { AsyncLocalStorage } from "node:async_hooks";
 
 /**
@@ -18,13 +19,20 @@ interface EstimateCache {
   retainedBytes: number;
   hits: number;
   misses: number;
+  sharedHits: number;
 }
 const requestCache = new AsyncLocalStorage<EstimateCache>();
 
-/** Cache exact text only for the owning request, never across conversations. */
+// Retain only exact-content digests and counts across requests, never prompt strings.
+// This process uses one fixed tokenizer/algorithm; process restart invalidates all entries.
+const sharedEstimates = new Map<string, { count: number; expiresAt: number }>();
+const SHARED_ESTIMATE_LIMIT = 1024;
+const SHARED_ESTIMATE_TTL_MS = 5 * 60_000;
+
+/** Keep request-local prompt retention scoped to the owning request. */
 export function withTokenEstimateCache<T>(work: () => T): T {
   if (requestCache.getStore()?.active) return work();
-  const cache: EstimateCache = { active: true, values: new Map(), retainedBytes: 0, hits: 0, misses: 0 };
+  const cache: EstimateCache = { active: true, values: new Map(), retainedBytes: 0, hits: 0, misses: 0, sharedHits: 0 };
   const release = () => {
     // Async resources (including broker listeners and retained timers) can outlive
     // their request. They must not keep prompt strings or reuse its expired cache.
@@ -50,7 +58,7 @@ export function withTokenEstimateCache<T>(work: () => T): T {
 
 export function tokenEstimateCacheStats() {
   const cache = requestCache.getStore();
-  return cache?.active ? { hits: cache.hits, misses: cache.misses, entries: cache.values.size, retainedBytes: cache.retainedBytes } : undefined;
+  return cache?.active ? { hits: cache.hits, misses: cache.misses, sharedHits: cache.sharedHits, entries: cache.values.size, retainedBytes: cache.retainedBytes } : undefined;
 }
 
 function chatGptTokenizer(): Tiktoken {
@@ -78,19 +86,38 @@ export function estimateTokens(text: string, modelId?: string): number {
   }
   if (cache) cache.misses += 1;
 
-  const encoding = chatGptTokenizer();
-  let count = 0;
-  for (let start = 0; start < text.length;) {
-    let end = Math.min(start + TOKENIZER_CHUNK_CHARS, text.length);
-    if (end < text.length) {
-      const previous = text.charCodeAt(end - 1);
-      const next = text.charCodeAt(end);
-      if (previous >= 0xD800 && previous <= 0xDBFF && next >= 0xDC00 && next <= 0xDFFF) {
-        end -= 1;
+  // Small inputs cost less to tokenize than to hash; very large inputs bypass shared caching.
+  const key = text.length >= 256 && text.length <= 2 * 1024 * 1024
+    ? createHash("sha256").update(text, "utf16le").digest("hex") : undefined;
+  const shared = key ? sharedEstimates.get(key) : undefined;
+  let count: number;
+  if (shared && shared.expiresAt > Date.now()) {
+    count = shared.count;
+    if (cache) cache.sharedHits += 1;
+    sharedEstimates.delete(key!);
+    sharedEstimates.set(key!, shared);
+  } else {
+    const encoding = chatGptTokenizer();
+    count = 0;
+    for (let start = 0; start < text.length;) {
+      let end = Math.min(start + TOKENIZER_CHUNK_CHARS, text.length);
+      if (end < text.length) {
+        const previous = text.charCodeAt(end - 1);
+        const next = text.charCodeAt(end);
+        if (previous >= 0xD800 && previous <= 0xDBFF && next >= 0xDC00 && next <= 0xDFFF) {
+          end -= 1;
+        }
       }
+      count += encoding.encode_ordinary(text.slice(start, end)).length;
+      start = end;
     }
-    count += encoding.encode_ordinary(text.slice(start, end)).length;
-    start = end;
+    if (key) {
+      sharedEstimates.delete(key);
+      while (sharedEstimates.size >= SHARED_ESTIMATE_LIMIT) {
+        sharedEstimates.delete(sharedEstimates.keys().next().value!);
+      }
+      sharedEstimates.set(key, { count, expiresAt: Date.now() + SHARED_ESTIMATE_TTL_MS });
+    }
   }
   // Charge two bytes per UTF-16 code unit even when the engine can use compact strings.
   const bytes = text.length * 2;

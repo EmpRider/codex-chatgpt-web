@@ -84,7 +84,7 @@ import {
   resolveChatGptWebTransportLimits,
 } from "../../chatgpt-web-models";
 import { LauncherBrowserHelperClient } from "./launcher-helper-client";
-import { assertChatGptModelFamily, selectChatGptModelFamily } from "./model-selection";
+import { assertChatGptModelFamily, chatGptClosedEffortMatches, selectChatGptModelFamily } from "./model-selection";
 import { MAX_CHATGPT_BROWSER_TABS } from "./concurrency";
 import {
   ChatGptCompactionHandoffAccepted,
@@ -2732,17 +2732,29 @@ export class ChatGptBrowserWorker {
     if (selectedState.min !== initialMin || selectedState.value !== targetValue) {
       throw chatGptModelControlUnavailableAdapterError("ChatGPT changed its effort range or selection before the menu closed");
     }
+    if (modelFamily) await assertChatGptModelFamily(activation, modelFamily, mode.effort, uiEffortIndex, 1_000);
+    const usageModel = trackUsage
+      ? await readChatGptUsageModel(activation.slider, mode.effort === "max")
+        .catch(() => mode.effort === "max" ? "pro-unknown" as const : "other" as const)
+      : undefined;
     await captureDiagnostic?.("effort-selected");
     await page.keyboard.press("Escape");
     await settleChatGptUi();
     // While open, the trigger reads "Thinking effort", not the selected value. Read its
-    // closed label and reopen the menu once to prove the selection survived the commit.
+    // closed label; reopen only if it cannot prove which family survived the commit.
     const selectedMode: SelectedChatGptWebModelMode = {
       ...mode,
       ...(modelFamily ? { modelFamily } : {}),
       selection: { url: selectionUrl, label: (await currentEffort.innerText()).trim() },
     };
     await this.assertSelectedEffort(page, selectedMode, false);
+    // An explicit closed label proves the family survived commit. Generic labels (notably
+    // bare Pro) still require the existing confirmation-menu evidence.
+    if (modelFamily && chatGptClosedEffortMatches(selectedMode.selection!.label, modelFamily, mode.effort)) {
+      if (usageModel) selectedMode.usageModel = usageModel;
+      await captureDiagnostic?.("effort-selection-confirmed");
+      return selectedMode;
+    }
     const confirmation = await activateChatGptEffortMenu(page, currentEffort);
     await confirmation.slider.waitFor({ state: "attached", timeout: 5_000 });
     const confirmedState = await readAvailableEffort(confirmation.sliderContainer, confirmation.menu);
@@ -2779,7 +2791,8 @@ export class ChatGptBrowserWorker {
         "ChatGPT did not retain the selected effort in its ready composer; the message was not submitted",
       );
     }
-    if (verifyFamily && mode.modelFamily && mode.uiEffortIndex !== null) {
+    if (verifyFamily && mode.modelFamily && mode.uiEffortIndex !== null
+      && !chatGptClosedEffortMatches(mode.selection.label, mode.modelFamily, mode.effort)) {
       const menu = await activateChatGptEffortMenu(page, control);
       try {
         await assertChatGptModelFamily(menu, mode.modelFamily, mode.effort, mode.uiEffortIndex);

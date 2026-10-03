@@ -3331,6 +3331,14 @@ describe("ChatGPT outer-native harness v4", () => {
       broker.completeTool(token, writeRequest!.callId, toolResult({ output: "continued" }));
       expect((await write).structuredContent).toEqual({ output: "continued" });
 
+      const longPoll = call("codex_write_stdin", {
+        turn_token: token, session_id: 42, chars: "n\n", yield_time_ms: 300_000,
+      });
+      const [pollRequest] = await broker.nextToolBatch(token);
+      expect(pollRequest?.arguments).toEqual({ session_id: 42, chars: "n\n", yield_time_ms: 30_000 });
+      broker.completeTool(token, pollRequest!.callId, toolResult({ output: "still running", session_id: 42 }));
+      expect((await longPoll).structuredContent).toMatchObject({ session_id: 42 });
+
       const patch = "*** Begin Patch\n*** Add File: direct-token.txt\n+ok\n*** End Patch";
       const apply = call("codex_apply_patch", { turn_token: token, patch });
       const [applyRequest] = await broker.nextToolBatch(token);

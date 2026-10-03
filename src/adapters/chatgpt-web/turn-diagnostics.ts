@@ -12,6 +12,10 @@ interface TurnDiagnosticFields {
   brokerEndpoint?: string;
   traceId?: string;
   toolName?: string;
+  callId?: string;
+  elapsedMs?: number;
+  unresolvedCalls?: number;
+  completedCalls?: number;
   transport?: "inline" | "multipart" | "mcp";
   promptChars?: number;
   skillFiles?: number;
@@ -41,6 +45,7 @@ export function classifyTurnDiagnosticError(error: unknown): FailureClass {
 // Explicit projection: never serialize supplied errors, prompts, endpoints or capability handles.
 export function buildTurnDiagnostic(event: TurnDiagnosticEvent, fields: TurnDiagnosticFields) {
   const detail: Record<string, string | number | boolean> = { pid: process.pid, version: VERSION };
+  if (fields.callId) detail.callHash = diagnosticFingerprint(fields.callId);
   if (fields.token) { detail.tokenHash = diagnosticFingerprint(fields.token); detail.tokenChars = fields.token.length; }
   if (fields.brokerEndpoint) detail.endpointHash = diagnosticFingerprint(fields.brokerEndpoint);
   for (const key of ["traceId", "toolName"] as const) {
@@ -49,7 +54,7 @@ export function buildTurnDiagnostic(event: TurnDiagnosticEvent, fields: TurnDiag
   }
   if (fields.transport && ["inline", "multipart", "mcp"].includes(fields.transport)) detail.transport = fields.transport;
   if (fields.failureClass && ["invalid_token", "retired_token", "broker_unreachable", "timeout", "aborted", "other"].includes(fields.failureClass)) detail.failureClass = fields.failureClass;
-  for (const key of ["promptChars", "skillFiles", "activeMcpRequests", "activeTokens"] as const) {
+  for (const key of ["promptChars", "skillFiles", "activeMcpRequests", "activeTokens", "elapsedMs", "unresolvedCalls", "completedCalls"] as const) {
     const value = fields[key];
     if (typeof value === "number" && Number.isSafeInteger(value) && value >= 0) detail[key] = value;
   }

@@ -94,3 +94,12 @@ test("browser helper graceful shutdown flushes its final lifecycle records", asy
     expect(records).toContain('"traceId":"shutdown-final"');
   } finally { rmSync(home, { recursive: true, force: true }); }
 });
+
+test("native result diagnostics correlate calls and counts without recording call identifiers", () => {
+  const result = buildTurnDiagnostic("native_result_received", {
+    callId: "private-call-id", elapsedMs: 20, unresolvedCalls: 1, completedCalls: 2,
+  });
+  expect(result.detail).toMatchObject({ elapsedMs: 20, unresolvedCalls: 1, completedCalls: 2 });
+  expect(result.detail.callHash).toHaveLength(12);
+  expect(JSON.stringify(result)).not.toContain("private-call-id");
+});

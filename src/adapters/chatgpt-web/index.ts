@@ -1389,7 +1389,6 @@ export function createChatGptWebAdapter(
                   throw new Error(`Codex returned ${results.length} of ${outstanding.length} results for a parallel ChatGPT tool batch`);
                 }
                 for (const message of results) {
-                  logTurnDiagnostic("native_result_received", { traceId: session.traceId });
                   await broker.completeTool(turnToken, message.toolCallId, brokerResult(message));
                   session.runtime.externalProgress.recordToolResult();
                   session.markResultDelivered(message.toolCallId);

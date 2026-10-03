@@ -5,6 +5,9 @@ import { chmod, mkdir, rename, rm, writeFile } from "node:fs/promises";
 import { setImmediate as yieldToRequests, setTimeout as delay } from "node:timers/promises";
 import { getConfigDir } from "../config";
 
+import { bindPreparedResponseHistory, forgetResponseHistory, scheduleResponseHistoryPreparation } from "./prepared-history";
+export { preparedResponseHistoryStats } from "./prepared-history";
+
 const MAX_STORED_RESPONSES = 1_000;
 const RESPONSE_TTL_MS = 60 * 60 * 1_000;
 const SNAPSHOT_DEBOUNCE_MS = 2_000;
@@ -54,6 +57,7 @@ function setEntry(id: string, entry: Omit<StoredResponseState, "sizeBytes">): vo
 function deleteEntry(id: string): void {
   const existing = states.get(id);
   if (!existing) return;
+  forgetResponseHistory(existing.items);
   storedResponseBytes -= existing.sizeBytes ?? 0;
   if (storedResponseBytes < 0) storedResponseBytes = 0;
   states.delete(id);
@@ -250,6 +254,7 @@ export function expandPreviousResponseInput(body: unknown): unknown {
     input: [...previous.items, ...inputItems(request.input)],
   };
   replayedInputPrefixLengths.set(expanded, previous.items.length);
+  bindPreparedResponseHistory(expanded, previous.items);
   return expanded;
 }
 
@@ -288,5 +293,7 @@ export function rememberResponseState(
     items: [...inputItems(request.input), ...response.output],
   });
   pruneResponses();
+  const stored = states.get(response.id);
+  if (stored) scheduleResponseHistoryPreparation(stored.items, stored.sizeBytes ?? Infinity, request);
   schedulePersist();
 }

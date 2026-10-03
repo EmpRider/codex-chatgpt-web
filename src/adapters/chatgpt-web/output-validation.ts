@@ -5,6 +5,39 @@ import { ChatGptWebAdapterError } from "./adapter-error";
 
 export type ChatGptStructuredOutputValidator = (answer: string) => void;
 
+const validators = new Map<string, { ajv: Ajv; validate: ValidateFunction; bytes: number }>();
+const MAX_VALIDATORS = 16;
+const MAX_SCHEMA_BYTES = 512 * 1024;
+let retainedSchemaBytes = 0;
+
+function compiledSchema(schema: object | boolean) {
+  const key = JSON.stringify(schema);
+  const cached = validators.get(key);
+  if (cached) {
+    validators.delete(key);
+    validators.set(key, cached);
+    return cached;
+  }
+  const ajv = new Ajv({
+    allErrors: true, strict: false, coerceTypes: false,
+    removeAdditional: false, useDefaults: false, validateFormats: true,
+  });
+  addFormats(ajv);
+  // Detach from caller mutation; each distinct schema has its own AJV $id registry.
+  const validate = ajv.compile(JSON.parse(key));
+  const entry = { ajv, validate, bytes: key.length * 2 };
+  if (entry.bytes <= MAX_SCHEMA_BYTES) {
+    while (validators.size >= MAX_VALIDATORS || retainedSchemaBytes + entry.bytes > MAX_SCHEMA_BYTES) {
+      const oldest = validators.keys().next().value!;
+      retainedSchemaBytes -= validators.get(oldest)!.bytes;
+      validators.delete(oldest);
+    }
+    validators.set(key, entry);
+    retainedSchemaBytes += entry.bytes;
+  }
+  return entry;
+}
+
 function validationError(message: string): ChatGptWebAdapterError {
   return new ChatGptWebAdapterError(message, {
     status: 502,
@@ -19,19 +52,10 @@ export function createChatGptStructuredOutputValidator(
 ): ChatGptStructuredOutputValidator | undefined {
   if (!format?.strict) return undefined;
 
-  const ajv = new Ajv({
-    allErrors: true,
-    strict: false,
-    coerceTypes: false,
-    removeAdditional: false,
-    useDefaults: false,
-    validateFormats: true,
-  });
-  addFormats(ajv);
-
+  let ajv: Ajv;
   let validate: ValidateFunction;
   try {
-    validate = ajv.compile(format.schema as object | boolean);
+    ({ ajv, validate } = compiledSchema(format.schema as object | boolean));
   } catch (cause) {
     throw new ChatGptWebAdapterError(
       `Codex supplied an invalid strict JSON schema ${JSON.stringify(format.name)}: ${cause instanceof Error ? cause.message : String(cause)}`,
