@@ -256,12 +256,15 @@ for (const format of ["v1", "v2"] as const) test(`${format} pre-turn compaction 
   ] });
   expect(toolRound.status).toBe(200);
   expect((await toolRound.json() as { status: string }).status).toBe("completed");
-  // A checkpoint's text alone is not authority to start another task, another native turn,
-  // a different model, or a rewritten source instruction.
+  // Routing effort may change without changing the authenticated native task.
+  const rerouted = await send({ ...continuation, model: "chatgpt-web/medium" });
+  expect(rerouted.status).toBe(200);
+  expect((await rerouted.json() as { status: string }).status).toBe("completed");
+  // A checkpoint's text alone is not authority for another task, another native turn,
+  // a rewritten source instruction, or an explicitly aborted source.
   for (const changed of [
     { ...continuation, client_metadata: { "x-codex-turn-metadata": JSON.stringify({ ...metadata, thread_id: "another_thread" }) } },
     { ...continuation, client_metadata: { "x-codex-turn-metadata": JSON.stringify({ ...metadata, turn_id: "another_turn" }) } },
-    { ...continuation, model: "chatgpt-web/medium" },
     { ...continuation, input: input.map(item => (item as { id?: string }).id === source.id
       ? { ...source, content: [{ type: "input_text", text: "Different task" }] } : item) },
     { ...continuation, input: [source, { type: "compaction", encrypted_content: encodeCompactionSummary("Unrecognized checkpoint") }] },
@@ -272,7 +275,7 @@ for (const format of ["v1", "v2"] as const) test(`${format} pre-turn compaction 
   ]) {
     expect((await send(changed)).status).toBe(400);
   }
-  expect(starts).toBe(2);
+  expect(starts).toBe(3);
 });
 
 test("v1 goal compaction authorizes the human instruction that native Codex retains", async () => {
