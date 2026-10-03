@@ -1570,19 +1570,19 @@ test("connector selection re-resolves the active composer after ChatGPT replaces
       };
     },
   };
-  const initialComposer = {
+  const initialComposer = connectorEntryFixture({
     fill: async (value: string) => { calls.push(["fill", value]); },
     focus: async () => { calls.push(["focus"]); },
-    pressSequentially: async (value: string, options: { delay: number; signal?: AbortSignal; timeout: number }) => {
+    insertMention: async (value: string, options: { delay: number; signal?: AbortSignal; timeout: number }) => {
       expect(options).toEqual({ delay: 25, signal: undefined, timeout: 10_000 });
-      calls.push(["pressSequentially", value]);
+      calls.push(["insertMention", value]);
     },
     press: async (key: string) => {
       expect(key).toBe("Enter");
       connectorSelected = true;
       calls.push(["press"]);
     },
-  };
+  });
   const page = {
     url: () => "https://chatgpt.com/?temporary-chat=true",
     getByRole: personalizedTemporaryChatRole,
@@ -1625,7 +1625,7 @@ test("connector selection re-resolves the active composer after ChatGPT replaces
     ["fill", ""],
     ["fill", ""],
     ["focus"],
-    ["pressSequentially", "@Codex Native2"],
+    ["insertMention", "@Codex Native2"],
     ["waitForResult"],
     ["press"],
     ["waitForSelectedConnector"],
@@ -1648,16 +1648,16 @@ test("connector selection moves highlight to the exact hidden-viewport row befor
       ? { count: async () => 3 }
       : appResult,
   };
-  const initialComposer = {
+  const initialComposer = connectorEntryFixture({
     fill: async () => {},
     focus: async () => {},
-    pressSequentially: async () => {},
+    insertMention: async () => {},
     press: async (key: string) => {
       keys.push(key);
       if (key === "ArrowDown") arrowCount += 1;
       if (key === "Enter") selected = true;
     },
-  };
+  });
   const selectedComposer = { selected: true };
   const page = {
     url: () => "https://chatgpt.com/?temporary-chat=true",
@@ -1730,10 +1730,10 @@ test("connector selection retriggers the complete mention after a fresh-page hyd
   const selectedComposer = {
     locator: () => ({ filter: () => selectedConnector }),
   };
-  const initialComposer = {
+  const initialComposer = connectorEntryFixture({
     fill: async () => { calls.push("clear"); },
     focus: async (_options?: { signal?: AbortSignal }) => { calls.push("focus"); },
-    pressSequentially: async (value: string) => {
+    insertMention: async (value: string) => {
       expect(value).toBe("@Codex Native2");
       calls.push("type");
     },
@@ -1742,7 +1742,7 @@ test("connector selection retriggers the complete mention after a fresh-page hyd
       selected = true;
       calls.push("activate");
     },
-  };
+  });
   const page = {
     url: () => "https://chatgpt.com/?temporary-chat=true",
     getByRole: personalizedTemporaryChatRole,
@@ -1804,11 +1804,11 @@ test("connector verification preserves the host-refreshed catalog evidence", asy
   const menuRows = {
     filter: (options: { has?: unknown; visible?: boolean }) => options.visible ? visibleRows : appResult,
   };
-  const initialComposer = {
+  const initialComposer = connectorEntryFixture({
     fill: async () => { calls.push("clear"); },
     focus: async () => { calls.push("focus"); },
-    pressSequentially: async () => { calls.push("type"); },
-  };
+    insertMention: async () => { calls.push("type"); },
+  });
   const selectedComposer = { selected: true };
   const page = {
     url: () => "https://chatgpt.com/?temporary-chat=true",
@@ -2038,11 +2038,11 @@ test("connector catalog refresh stays fail-closed for absent, legacy, and exact 
     try {
       return await selectConnector.call({
         config: { appName: CHATGPT_CONNECTOR_NAME },
-        activeComposer: async () => ({
+        activeComposer: async () => (connectorEntryFixture({
           fill: async () => {},
           focus: async () => {},
-          pressSequentially: async () => {},
-        }),
+          insertMention: async () => {},
+        })),
         connectorIsSelected: async () => false,
         clearChatGptComposerState: async () => {},
         connectorMentionRowTitles: async () => visibleRows,
@@ -2110,7 +2110,7 @@ test("tool-capable prompts use the shared Playwright connector selection before 
       return true;
     },
   };
-  const initialComposer = {
+  const initialComposer = connectorEntryFixture({
     fill: async (value: string, options?: { signal?: AbortSignal }) => {
       expect(options?.signal).toBeDefined();
       calls.push(["fill", value]);
@@ -2119,7 +2119,7 @@ test("tool-capable prompts use the shared Playwright connector selection before 
       expect(options?.signal).toBeDefined();
       calls.push(["focus"]);
     },
-    pressSequentially: async (value: string, options?: { signal?: AbortSignal }) => {
+    insertMention: async (value: string, options?: { signal?: AbortSignal }) => {
       expect(options?.signal).toBeDefined();
       calls.push(["type", value]);
     },
@@ -2129,7 +2129,7 @@ test("tool-capable prompts use the shared Playwright connector selection before 
       selected = true;
       calls.push(["selectConnector"]);
     },
-  };
+  });
   const page = {
     url: () => "https://chatgpt.com/?temporary-chat=true",
     getByRole: personalizedTemporaryChatRole,
@@ -2203,7 +2203,7 @@ test("an aborted connector proof clears its mention before the preflight release
   const menuRows = {
     filter: () => appResult,
   };
-  const composer = {
+  const composer = connectorEntryFixture({
     fill: async (_value: string, { signal }: { signal?: AbortSignal }) => {
       expect(signal).toBeDefined();
       fillSignals.push(signal!);
@@ -2214,9 +2214,9 @@ test("an aborted connector proof clears its mention before the preflight release
       expect(signal?.aborted).toBeFalse();
       calls.push(key === CHATGPT_COMPOSER_SELECT_ALL_KEY ? "cleanup-select-all" : "cleanup-backspace");
     },
-    pressSequentially: async () => { calls.push("type"); },
+    insertMention: async () => { calls.push("type"); },
     evaluate: async () => { calls.push("cleanup-read"); return ""; },
-  };
+  });
   const page = {
     url: () => "https://chatgpt.com/?temporary-chat=true",
     getByRole: () => absent,
@@ -2268,10 +2268,10 @@ test("a lost connector mention cannot be used as evidence to change personalizat
   const checkpoints: string[] = [];
   let cleanupCalls = 0;
   let stateReads = 0;
-  const composer = {
-    fill: async () => {}, focus: async () => {}, pressSequentially: async () => {},
+  const composer = connectorEntryFixture({
+    fill: async () => {}, focus: async () => {}, insertMention: async () => {},
     evaluate: async () => ({ text: "", focused: false }),
-  };
+  });
   const page = {
     url: () => "https://chatgpt.com/?temporary-chat=true",
     getByRole: () => absent,
@@ -2311,7 +2311,7 @@ test("an aborted real connector selection clears the typed mention before return
     },
   };
   const menuRows = { filter: () => appResult };
-  const composer = {
+  const composer = connectorEntryFixture({
     fill: async (value: string, { signal }: { signal?: AbortSignal }) => {
       expect(signal).toBeDefined();
       composerText = value;
@@ -2322,12 +2322,12 @@ test("an aborted real connector selection clears the typed mention before return
       calls.push(key === CHATGPT_COMPOSER_SELECT_ALL_KEY ? "cleanup-select-all" : "cleanup-backspace");
       if (key === "Backspace") composerText = "";
     },
-    pressSequentially: async (value: string) => {
+    insertMention: async (value: string) => {
       composerText += value;
       calls.push("type");
     },
     evaluate: async () => { calls.push("cleanup-read"); return composerText.trim(); },
-  };
+  });
   const page = {
     url: () => "https://chatgpt.com/?temporary-chat=true",
     getByRole: personalizedTemporaryChatRole,
@@ -2406,13 +2406,13 @@ test("an abort after connector activation removes the selected pill before retur
     getAttribute: async () => "",
   };
   const menuRows = { filter: () => appResult };
-  const composer = {
+  const composer = connectorEntryFixture({
     fill: async (value: string) => {
       composerText = value;
       if (controller.signal.aborted) connectorSelected = false;
     },
     focus: async () => {},
-    pressSequentially: async (value: string) => { composerText += value; },
+    insertMention: async (value: string) => { composerText += value; },
     press: async (key: string) => {
       if (key === "Enter") {
         connectorSelected = true;
@@ -2425,7 +2425,7 @@ test("an abort after connector activation removes the selected pill before retur
       }
     },
     evaluate: async () => composerText.trim(),
-  };
+  });
   const page = {
     url: () => "https://chatgpt.com/?temporary-chat=true",
     getByRole: personalizedTemporaryChatRole,
@@ -2652,12 +2652,12 @@ function thinkSlashFixture() {
   const rows = { filter: () => rows, first: () => row, count: async () => state.optionCount };
   const popup = { filter: () => popup, locator: () => rows, count: async () => state.popupCount };
   const page = { locator: (selector: string) => selector === '[role="dialog"]' ? dialogPage("").page.locator(selector) : popup };
-  const composer = {
+  const composer = connectorEntryFixture({
     filter: () => composer, first: () => composer, locator: () => composerForm,
     evaluate: async () => ({ text: state.draft.trim(), connectors: [...state.connectors] }),
     focus: async () => {},
     fill: async (text: string) => { state.draft = text; state.connectors = []; },
-    pressSequentially: async (text: string) => { state.commands.push(text); state.draft += text; },
+    insertMention: async (text: string) => { state.commands.push(text); state.draft += text; },
     press: async (key: string) => {
       if (key === "ArrowDown") state.highlighted = true;
       if (key === "Enter") {
@@ -2666,7 +2666,7 @@ function thinkSlashFixture() {
         if (state.loseConnector) state.connectors = [];
       }
     },
-  };
+  });
   const composerForm = { getByRole: () => ({ filter: () => controls }), locator: () => composer, page: () => page };
   return { state, composer, composerForm, page };
 }
@@ -4619,3 +4619,13 @@ test("a stage that spans a system sleep is not charged for the slept time", asyn
   await stage;
   expect(outcome).toEqual(["ChatGPT browser stage timed out: probe"]);
 }, 10_000);
+
+// Model atomic editor insertion separately from clearing; fixture event assertions stay explicit.
+function connectorEntryFixture<T extends { fill: (...args: any[]) => Promise<void>; insertMention: (...args: any[]) => Promise<void> }>(fixture: T): T {
+  const clear = fixture.fill;
+  fixture.fill = async (value: string, options?: { signal?: AbortSignal; timeout?: number }) => {
+    if (value.startsWith("@")) await fixture.insertMention(value, { delay: 25, ...options });
+    else await clear(value, options);
+  };
+  return fixture;
+}
