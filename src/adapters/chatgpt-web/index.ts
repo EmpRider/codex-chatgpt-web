@@ -986,7 +986,10 @@ export function createChatGptWebAdapter(
           }
           if (structuredCompactionRequired) {
             const compactionExecutionKey = `${executionNamespace}:${chatGptTurnExecutionKey(parsed)}`;
-            const compactedSourceExecutionKey = `${executionNamespace}:${chatGptCompactionSourceExecutionKey(parsed)}`;
+            const compactedSourceExecutionKey = chatGptTurnSessions.compactionSourceKey(
+              `${executionNamespace}:${chatGptCompactionSourceExecutionKey(parsed)}`,
+              `${executionNamespace}:${chatGptThreadOwnershipKey(parsed)}`, parsed,
+            );
             const handoffTraceId = createHash("sha256")
               .update(`${compactionExecutionKey}:handoff`)
               .digest("hex")
@@ -1269,7 +1272,10 @@ export function createChatGptWebAdapter(
             chatGptWebTurnRetryPolicy.clear(retryKey);
             return;
           }
-          const responseExecutionKey = `${executionNamespace}:${chatGptCompactionSourceExecutionKey(parsed)}`;
+          const responseExecutionKey = chatGptTurnSessions.compactionSourceKey(
+            `${executionNamespace}:${chatGptCompactionSourceExecutionKey(parsed)}`,
+            `${executionNamespace}:${chatGptThreadOwnershipKey(parsed)}`, parsed,
+          );
           await chatGptTurnSessions.retireAndWait(responseExecutionKey, incoming.abortSignal);
         }
         const executionKey = `${executionNamespace}:${chatGptTurnExecutionKey(parsed)}`;

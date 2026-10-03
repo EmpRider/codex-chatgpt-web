@@ -764,6 +764,35 @@ export class ChatGptTurnSessions {
     return session;
   }
 
+  /** Compaction routing can change effort or retain an instruction from an earlier turn. */
+  compactionSourceKey(exactKey: string, ownerKey: string, parsed: CodexParsedRequest): string {
+    if (this.entries.has(exactKey) || this.retirements.has(exactKey)) return exactKey;
+    const identity = extractChatGptTurnIdentity(parsed);
+    const source = extractChatGptCompactionSourceRevision(parsed);
+    const instruction = createHash("sha256")
+      .update(JSON.stringify([source.itemId ?? null, source.content])).digest("hex");
+    const owned = [...this.entries].filter(([, session]) => session.ownerKey === ownerKey);
+    const matches = owned.filter(([, session]) => identity.threadId !== undefined
+      && session.nativeThreadId === identity.threadId
+      && (session.nativeTurnId === identity.turnId || session.nativeTurnId === source.turnId)
+      && session.instruction === instruction);
+    // Prefer the current native turn after repeated compactions of an older human instruction.
+    const current = matches.filter(([, session]) => session.nativeTurnId === identity.turnId);
+    const candidates = current.length ? current : matches;
+    const occupied = owned.filter(([, session]) => session.occupiesBrowserSlot());
+    const selected = candidates.length === 1 ? candidates[0] : undefined;
+    const conflict = candidates.length > 1 || occupied.some(([key]) => key !== selected?.[0]);
+    console.info(`[chatgpt-web] compaction_source_lookup ${JSON.stringify({
+      result: conflict ? "conflict" : selected ? "native_identity" : "absent",
+      candidates: candidates.length, occupied: occupied.length, traceId: selected?.[1].traceId,
+    })}`);
+    if (conflict) throw new ChatGptWebAdapterError(
+      "Compaction could not uniquely identify the active source turn; refusing overlapping browser work",
+      { status: 409, errorType: "invalid_request_error", code: "compaction_source_conflict", retryable: false },
+    );
+    return selected?.[0] ?? exactKey;
+  }
+
   findConversationHead(conversationKey: string): ChatGptTurnSession | undefined {
     const session = this.conversationHeads.get(conversationKey);
     session?.touch();
