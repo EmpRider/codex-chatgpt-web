@@ -222,6 +222,9 @@ describe("trusted current Codex environment envelope", () => {
 
       expect(extractChatGptTurnEnvironment(request).cwd).toBe(root);
       expect(extractChatGptTurnUserRevision(request)).toEqual(source.content);
+      // Model and effort selection may differ between compaction and continuation.
+      const rerouted = { ...request, modelId: "another-backend", options: { ...request.options, reasoning: "low" as const } };
+      expect(extractChatGptTurnUserRevision(rerouted)).toEqual(source.content);
       // Tool rounds after the summary must keep the same authenticated task revision.
       body.input.push({ type: "function_call", name: "exec_command", call_id: "call_after_summary", arguments: "{}" });
       expect(extractChatGptTurnEnvironment(request).cwd).toBe(root);

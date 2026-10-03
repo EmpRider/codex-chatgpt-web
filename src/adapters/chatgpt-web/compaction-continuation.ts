@@ -14,9 +14,10 @@ interface CompletedCheckpoint {
 const checkpoints = new Map<string, CompletedCheckpoint>();
 const MAX_CHECKPOINTS = 256;
 
-function scope(parsed: CodexParsedRequest, identity: ChatGptTurnIdentity): string | undefined {
+function scope(_parsed: CodexParsedRequest, identity: ChatGptTurnIdentity): string | undefined {
   if (!identity.threadId || !identity.turnId) return undefined;
-  return JSON.stringify([identity.threadId, identity.turnId, parsed.modelId, parsed.options.reasoning]);
+  // Routing choices do not change native task authority. Summary and source still match exactly.
+  return JSON.stringify([identity.threadId, identity.turnId]);
 }
 
 function digest(value: unknown): string {
@@ -48,7 +49,14 @@ export function isAcceptedCompactionContinuation(
   identity: ChatGptTurnIdentity,
   source: ChatGptTurnUserRevision,
 ): boolean {
-  return acceptedCheckpoint(parsed, identity)?.checkpoint.sourceHashes.has(sourceDigest(source)) === true;
+  const accepted = acceptedCheckpoint(parsed, identity);
+  const matches = accepted?.checkpoint.sourceHashes.has(sourceDigest(source)) === true;
+  if (!matches) console.warn(`[chatgpt-web] compaction_continuation_rejected ${JSON.stringify({
+    checkpointPresent: checkpoints.has(scope(parsed, identity) ?? ""),
+    summaryAccepted: accepted !== undefined,
+    sourceTurnMatches: source.turnId === identity.turnId,
+  })}`);
+  return matches;
 }
 
 /** Native compaction may retain only its summary; recover the task solely from our completed handoff. */

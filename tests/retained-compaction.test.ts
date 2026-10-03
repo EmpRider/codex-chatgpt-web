@@ -33,6 +33,8 @@ import {
   ChatGptTurnSession,
   ChatGptTurnSessions,
   chatGptCompactionSourceExecutionKey,
+  chatGptInstructionLineage,
+  chatGptThreadOwnershipKey,
   chatGptTurnExecutionKey,
   chatGptTurnSessions,
 } from "../src/adapters/chatgpt-web/turn-execution";
@@ -1394,7 +1396,7 @@ test.each([false, true])("structured compact rebuilds canonical context when its
   }
 });
 
-test.each([false, true])("configured fresh compaction waits for cleanup and preserves committed final=%s", async committed => {
+test.each([false, true].flatMap(committed => ["exact", "effort", "continued"].map(mode => ({ committed, mode }))))("configured fresh compaction waits for cleanup and preserves final: %j", async ({ committed, mode }) => {
   const root = mkdtempSync(join(shortSocketTempRoot(), "cgw-fresh-owner-"));
   const provider: CodexProviderConfig = {
     adapter: "chatgpt-web", baseUrl: `browser://fresh-owner-${root}`,
@@ -1403,7 +1405,14 @@ test.each([false, true])("configured fresh compaction waits for cleanup and pres
       experimentalFreshConversationPerTurn: true },
   };
   const compact = request(true);
-  const sourceKey = `${chatGptWebExecutionNamespace(provider)}:${chatGptCompactionSourceExecutionKey(compact)}`;
+  const namespace = chatGptWebExecutionNamespace(provider);
+  const owner = `${namespace}:${chatGptThreadOwnershipKey(compact)}`;
+  const sourceRequest = request();
+  if (mode === "effort") sourceRequest.options.reasoning = "low";
+  // A prior compaction can leave an older instruction in a newer native turn.
+  const sourceTurn = mode === "continued" ? "turn_compact" : "turn_source";
+  const sourceKey = mode === "continued" ? `${namespace}:continued-session`
+    : `${namespace}:${chatGptTurnExecutionKey(sourceRequest)}`;
   let finishSource!: (answer: string) => void;
   let releaseSource!: () => void;
   let cancelled = false;
@@ -1412,7 +1421,13 @@ test.each([false, true])("configured fresh compaction waits for cleanup and pres
     mode: "read-only", browser: new Promise<string>(resolve => { finishSource = resolve; }),
     physicalSettlement: cleanup, trace: new ChatGptTraceFeed(), text: new ChatGptTextFeed(),
     cancel: () => { cancelled = true; finishSource("retired source"); },
-  }));
+  }), "source_fixture", owner, sourceTurn, "thread_retained_compaction",
+    chatGptInstructionLineage(sourceRequest).current);
+  const unrelated = structuredClone(compact);
+  const unrelatedBody = unrelated._rawBody as { input: Array<{ content: unknown }> };
+  unrelatedBody.input[0]!.content = "Different task";
+  expect(() => chatGptTurnSessions.compactionSourceKey("missing-exact-key", owner, unrelated))
+    .toThrow("could not uniquely identify");
   if (committed) {
     finishSource("committed final");
     await source.browserOutcome;
