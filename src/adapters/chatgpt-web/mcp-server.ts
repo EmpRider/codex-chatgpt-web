@@ -54,6 +54,18 @@ const AGENT_WAIT_TRANSPORT_RULE = `ChatGPT Web transport rule: wait for exactly 
 // letting the tunnel tear down and poison its long-lived stdio transport.
 export const CHATGPT_WEB_MCP_INVOCATION_TIMEOUT_MS = 90_000;
 
+/** Bound observation, not command execution: a running session is polled again by its caller. */
+export function nativeStdinPollArguments(input: {
+  session_id: number; chars?: string; yield_time_ms?: number; max_output_tokens?: number;
+}): Record<string, unknown> {
+  return {
+    session_id: input.session_id,
+    ...(input.chars !== undefined ? { chars: input.chars } : {}),
+    ...(input.yield_time_ms !== undefined ? { yield_time_ms: Math.min(input.yield_time_ms, 30_000) } : {}),
+    ...(input.max_output_tokens !== undefined ? { max_output_tokens: input.max_output_tokens } : {}),
+  };
+}
+
 const ZERO_RISK_MCP_INSTRUCTIONS = [
   "For each pasted Codex Web GPT request, begin with codex_turn_start using the request_id in its request block.",
   "Use that request_id with the Codex tools needed for the task.",
@@ -788,12 +800,7 @@ export async function runChatGptMcpServer(options: {
         const { session_id, chars, yield_time_ms, max_output_tokens } = input;
         const bound = claimed.environment;
         const tool = exactTool(bound, "write_stdin");
-        const payload = { arguments: {
-          session_id,
-          ...(chars !== undefined ? { chars } : {}),
-          ...(yield_time_ms !== undefined ? { yield_time_ms } : {}),
-          ...(max_output_tokens !== undefined ? { max_output_tokens } : {}),
-        } };
+        const payload = { arguments: nativeStdinPollArguments({ session_id, chars, yield_time_ms, max_output_tokens }) };
         return tool
           ? invoke(claimed, tool, payload, extra.signal, {})
           : invokeNestedNative(claimed, "write_stdin", false, payload, extra.signal);

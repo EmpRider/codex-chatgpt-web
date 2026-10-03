@@ -12,6 +12,11 @@ const rootRegressionFiles = [
   // Lost helper acknowledgements, native result recovery, and absolute checkpoint deadlines.
   "tests/tool-boundary-deadline.test.ts",
   "tests/native-result-deadline.test.ts",
+  "tests/native-poll-budget.test.ts",
+  "tests/prepared-response-history.test.ts",
+  "tests/performance-cache.test.ts",
+  "tests/structured-validator-cache.test.ts",
+  "tests/effort-pre-send.test.ts",
   "tests/compaction-total-deadline.test.ts",
   // Capacity retry turn_id rollover and trusted Codex environment recovery.
   "tests/environment.test.ts",

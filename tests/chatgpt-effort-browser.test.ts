@@ -41,7 +41,9 @@ test.skipIf(!process.env.CHATGPT_DOM_TEST_BROWSER)(`model selection reuses the $
       localToolsEnabled: false, solAvailable: true, extraHighAvailable: true, proAvailable: true,
     }, undefined, false, "5.6");
     expect(result.selection.label).toBe("5.6 Sol Extra High");
-    expect(await page.evaluate(() => (window as any).pickerOpens)).toBe(2);
+    expect(await page.evaluate(() => (window as any).pickerOpens)).toBe(1);
+    await worker.assertSelectedEffort(page, result);
+    expect(await page.evaluate(() => (window as any).pickerOpens)).toBe(1);
     expect(await page.locator('#prompt-textarea').innerText()).toBe("Draft");
   } finally { await browser.close(); }
 }, 30_000);

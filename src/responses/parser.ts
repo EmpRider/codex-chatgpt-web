@@ -15,6 +15,7 @@ import { namespacedToolName } from "../types";
 import { responsesRequestSchema } from "./schema";
 import { compactionItemToText, isNativeTextCompaction } from "./compaction";
 import { previousResponseReplayPrefixLength } from "./state";
+import { preparedResponseHistory, registerResponseHistoryPreparer, type PreparedConversation } from "./prepared-history";
 import { decodeReasoningEnvelope } from "./reasoning-envelope";
 
 function isObj(v: unknown): v is Record<string, unknown> {
@@ -263,32 +264,19 @@ function normalizeImageDetail(detail: string): string {
   return detail === "original" ? "high" : detail;
 }
 
-function findToolById(messages: CodexMessage[], callId: string): { name: string; namespace?: string } {
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const m = messages[i];
-    if (m.role !== "assistant") continue;
-    for (const part of m.content) {
-      if (part.type === "toolCall" && part.id === callId) return { name: part.name, namespace: part.namespace };
-    }
-  }
-  return { name: "" };
-}
-
 const REASONING_EFFORTS = new Set(["none", "minimal", "low", "medium", "high", "xhigh", "max"]);
 
-export function parseRequest(body: unknown): CodexParsedRequest {
-  const replayedInputPrefixLength = previousResponseReplayPrefixLength(body);
-  const parsed = responsesRequestSchema.safeParse(body);
-  if (!parsed.success) {
-    throw new Error(`responses parse error: ${parsed.error.message}`);
+function parseConversation(
+  data: { input?: unknown; model: string }, now: number, seed?: PreparedConversation,
+): PreparedConversation {
+  const messages: CodexMessage[] = seed?.messages ?? [];
+  const systemPrompt = seed?.systemPrompt ?? [];
+  const pendingReasoning = seed?.pendingReasoning ?? [];
+  const toolCallIndex: PreparedConversation["toolCallIndex"] = seed?.toolCallIndex ?? new Map();
+  for (const message of messages) {
+    message.timestamp = now;
+    if (message.role === "assistant") message.model = data.model;
   }
-  const data = parsed.data;
-  const now = Date.now();
-  const messages: CodexMessage[] = [];
-  const systemPrompt: string[] = [];
-  // Responses reasoning siblings belong to the following assistant, including across call items.
-  // Keep them off the message list until that assistant arrives; turn boundaries clear the array.
-  const pendingReasoning: Array<{ part: CodexThinkingContent; envelopeSigned: boolean }> = [];
   // Assistant placeholder that folds pending reasoning into the same turn before tool calls.
   const assistantHolderWithReasoning = (): CodexAssistantMessage => {
     const holder = ensureAssistantPlaceholder(messages, data.model, now);
@@ -298,21 +286,26 @@ export function parseRequest(body: unknown): CodexParsedRequest {
     }
     return holder;
   };
+  const appendToolCall = (call: CodexToolCall): void => {
+    const holder = assistantHolderWithReasoning();
+    const messageIndex = messages.length - 1;
+    holder.content.push(call);
+    // Match the old backwards-message / forwards-content search exactly for duplicate IDs.
+    if (toolCallIndex.get(call.id)?.messageIndex !== messageIndex) {
+      toolCallIndex.set(call.id, { messageIndex, name: call.name, namespace: call.namespace });
+    }
+  };
   // Tool specs surfaced by a prior tool_search (deferred tools, e.g. subagents). Codex does not
   // re-list these in `tools`, but chat models can only call listed tools — so we re-inject them.
-  const loadedToolSpecs: unknown[] = [];
+  const loadedToolSpecs: unknown[] = seed?.loadedToolSpecs ?? [];
   // Remote compaction v2: the input tail carries `{type:"compaction_trigger"}` and Codex expects a
   // synthetic `{type:"compaction"}` output item (src/responses/compaction.ts). Flagged for the server.
-  let compactionRequest = false;
-  let opaqueMultiAgentV2Payload = false;
-
-  if (typeof data.instructions === "string" && data.instructions.length > 0) {
-    systemPrompt.push(data.instructions);
-  }
+  let compactionRequest = seed?.compactionRequest ?? false;
+  let opaqueMultiAgentV2Payload = seed?.opaqueMultiAgentV2Payload ?? false;
 
   if (typeof data.input === "string") {
     messages.push({ role: "user", content: data.input, timestamp: now });
-  } else if (data.input) {
+  } else if (Array.isArray(data.input)) {
     for (const item of data.input) {
       const effectiveType = (item as { type?: string }).type ?? ("role" in item ? "message" : undefined);
 
@@ -478,7 +471,7 @@ export function parseRequest(body: unknown): CodexParsedRequest {
           type: "toolCall", id: call.call_id, name: call.name, arguments: args,
           ...(call.namespace ? { namespace: call.namespace } : {}),
         };
-        assistantHolderWithReasoning().content.push(toolCall);
+        appendToolCall(toolCall);
         continue;
       }
 
@@ -488,7 +481,7 @@ export function parseRequest(body: unknown): CodexParsedRequest {
           type: "toolCall", id: call.call_id, name: call.name,
           arguments: { input: call.input ?? "" },
         };
-        assistantHolderWithReasoning().content.push(toolCall);
+        appendToolCall(toolCall);
         continue;
       }
 
@@ -499,7 +492,7 @@ export function parseRequest(body: unknown): CodexParsedRequest {
         const callId = call.call_id ?? call.id;
         if (callId) {
           const command = Array.isArray(call.action?.command) ? call.action.command : [];
-          assistantHolderWithReasoning().content.push({
+          appendToolCall({
             type: "toolCall", id: callId, name: "shell",
             arguments: command.length > 0 ? { command } : {},
           });
@@ -519,7 +512,7 @@ export function parseRequest(body: unknown): CodexParsedRequest {
         // history stays complete (otherwise the model re-issues tool_search forever).
         const call = item as { id?: string; call_id?: string; arguments?: unknown };
         const callId = call.call_id ?? call.id ?? "";
-        assistantHolderWithReasoning().content.push({
+        appendToolCall({
           type: "toolCall", id: callId, name: "tool_search",
           arguments: isObj(call.arguments) ? call.arguments : {},
         });
@@ -561,7 +554,7 @@ export function parseRequest(body: unknown): CodexParsedRequest {
       if (effectiveType === "function_call_output") {
         pendingReasoning.length = 0;
         const output = item as { call_id: string; output?: string | unknown[] };
-        const toolInfo = findToolById(messages, output.call_id);
+        const toolInfo = (toolCallIndex.get(output.call_id) ?? { name: "", namespace: undefined });
         messages.push({
           role: "toolResult", toolCallId: output.call_id,
           toolName: toolInfo.name, toolNamespace: toolInfo.namespace,
@@ -573,7 +566,7 @@ export function parseRequest(body: unknown): CodexParsedRequest {
       if (effectiveType === "custom_tool_call_output") {
         pendingReasoning.length = 0;
         const output = item as { call_id: string; output: string | unknown[] };
-        const toolInfo = findToolById(messages, output.call_id);
+        const toolInfo = (toolCallIndex.get(output.call_id) ?? { name: "", namespace: undefined });
         messages.push({
           role: "toolResult", toolCallId: output.call_id,
           toolName: toolInfo.name, toolNamespace: toolInfo.namespace,
@@ -584,6 +577,27 @@ export function parseRequest(body: unknown): CodexParsedRequest {
       }
     }
   }
+
+  return { messages, systemPrompt, pendingReasoning, loadedToolSpecs, toolCallIndex, compactionRequest, opaqueMultiAgentV2Payload };
+}
+
+registerResponseHistoryPreparer((items, seed) => {
+  const data = responsesRequestSchema.parse({ model: "prepared-history", input: items });
+  return parseConversation(data, 0, seed);
+});
+
+export function parseRequest(body: unknown): CodexParsedRequest {
+  const replayedInputPrefixLength = previousResponseReplayPrefixLength(body);
+  const seed = preparedResponseHistory(body);
+  const freshBody = seed && replayedInputPrefixLength > 0
+    ? { ...(body as object), input: (body as { input: unknown[] }).input.slice(replayedInputPrefixLength) }
+    : body;
+  const parsed = responsesRequestSchema.safeParse(freshBody);
+  if (!parsed.success) throw new Error(`responses parse error: ${parsed.error.message}`);
+  const data = parsed.data;
+  const { messages, systemPrompt, loadedToolSpecs, compactionRequest, opaqueMultiAgentV2Payload }
+    = parseConversation(data, Date.now(), seed);
+  if (typeof data.instructions === "string" && data.instructions.length > 0) systemPrompt.unshift(data.instructions);
 
   const declaredTools = buildTools(data.tools as unknown[] | undefined) ?? [];
   const loadedTools = buildTools(loadedToolSpecs) ?? [];

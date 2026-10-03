@@ -368,6 +368,9 @@ export class ChatGptTurnSession {
   readonly physicalSettlement: Promise<void>;
   private readonly outstandingById = new Map<string, BrokerToolRequest>();
   private toolResultTimer?: ReturnType<typeof setTimeout>;
+  private nativeBatchStartedAt = 0;
+  private nativeBatchSize = 0;
+  private nativeBatchDeadline = 0;
   private readonly deliveredResultIds = new Set<string>();
   private outstandingReasoning: string[] = [];
   private finalReasoning: string[] = [];
@@ -478,26 +481,47 @@ export class ChatGptTurnSession {
 
   setOutstanding(requests: BrokerToolRequest[], reasoning: string[] = [], prelude: AdapterEvent[] = []): void {
     if (this.outstandingById.size > 0) throw new Error("cannot emit a new ChatGPT tool batch while the previous batch is unresolved");
+    const ids = new Set<string>();
+    // Validate before publishing: a rejected batch must not leave untimed pending calls.
     for (const request of requests) {
-      if (this.deliveredResultIds.has(request.callId) || this.outstandingById.has(request.callId)) {
+      if (this.deliveredResultIds.has(request.callId) || ids.has(request.callId)) {
         throw new Error(`duplicate ChatGPT bridge tool call id: ${request.callId}`);
       }
-      this.outstandingById.set(request.callId, request);
+      ids.add(request.callId);
     }
+    for (const request of requests) this.outstandingById.set(request.callId, request);
     this.outstandingReasoning = [...reasoning];
     this.outstandingPrelude = [...prelude];
+    this.nativeBatchStartedAt = Date.now();
+    this.nativeBatchSize = requests.length;
     if (requests.length && this.runtime.mode === "tools" && !this.runtime.manualControl) {
       const timeoutMs = this.runtime.toolResultTimeoutMs ?? CHATGPT_NATIVE_RESULT_TIMEOUT_MS;
-      this.toolResultTimer = setTimeout(() => {
-        if (!this.outstandingById.size || this.settledBrowserOutcome) return;
-        logTurnDiagnostic("native_result_timeout", { traceId: this.traceId, failureClass: "timeout" });
-        this.cancel(new ChatGptWebAdapterError(
-          `Codex did not return this tool batch within ${timeoutMs}ms. Its native outcome is unknown; check Codex before retrying the operation.`,
-          { status: 504, errorType: "server_error", code: "codex_tool_result_timeout", retryable: false },
-        ));
-      }, timeoutMs);
-      this.toolResultTimer.unref?.();
+      this.nativeBatchDeadline = this.nativeBatchStartedAt + timeoutMs * 2;
+      this.armNativeResultDeadline();
     }
+  }
+
+  private armNativeResultDeadline(): void {
+    if (this.toolResultTimer) clearTimeout(this.toolResultTimer);
+    if (this.runtime.mode !== "tools" || this.runtime.manualControl || this.settledBrowserOutcome) return;
+    const timeoutMs = this.runtime.toolResultTimeoutMs ?? CHATGPT_NATIVE_RESULT_TIMEOUT_MS;
+    const remainingMs = Math.min(timeoutMs, this.nativeBatchDeadline - Date.now());
+    this.toolResultTimer = setTimeout(() => {
+      if (!this.outstandingById.size || this.settledBrowserOutcome) return;
+      const elapsedMs = Math.max(0, Date.now() - this.nativeBatchStartedAt);
+      const unresolvedCalls = this.outstandingById.size;
+      logTurnDiagnostic("native_result_timeout", {
+        traceId: this.traceId, failureClass: "timeout", elapsedMs,
+        unresolvedCalls, completedCalls: this.nativeBatchSize - unresolvedCalls,
+      });
+      this.cancel(new ChatGptWebAdapterError(
+        `Codex tool batch has ${unresolvedCalls} unresolved call(s) after ${elapsedMs}ms `
+          + `(inactivity allowance ${timeoutMs}ms; overall limit ${timeoutMs * 2}ms). `
+          + "Its native outcome is unknown; check Codex before retrying the operation.",
+        { status: 504, errorType: "server_error", code: "codex_tool_result_timeout", retryable: false },
+      ));
+    }, Math.max(0, remainingMs));
+    this.toolResultTimer.unref?.();
   }
 
   hasOutstanding(callId: string): boolean {
@@ -511,7 +535,16 @@ export class ChatGptTurnSession {
       if (this.toolResultTimer) clearTimeout(this.toolResultTimer);
       this.outstandingReasoning = [];
       this.outstandingPrelude = [];
+    } else {
+      // Only an actual, distinct result is progress. Heartbeats and reconnects never renew this.
+      this.armNativeResultDeadline();
     }
+    logTurnDiagnostic("native_result_received", {
+      traceId: this.traceId, callId,
+      elapsedMs: Math.max(0, Date.now() - this.nativeBatchStartedAt),
+      unresolvedCalls: this.outstandingById.size,
+      completedCalls: this.nativeBatchSize - this.outstandingById.size,
+    });
   }
 
   reasoningForOutstandingReplay(): string[] {

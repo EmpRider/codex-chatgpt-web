@@ -59,3 +59,30 @@ test("cached MCP boundaries preserve Unicode and refresh when the source changes
   context.text = "replacement";
   expect(chatGptWebMcpContextChunkBatch(context, context.contextId, 0, 5).text).toBe("replacement");
 });
+
+test("unchanged long text reuses its token count across requests without retaining prompt entries", () => {
+  const text = `cross-turn-${crypto.randomUUID()} ` + "repeat unchanged historical message ".repeat(100);
+  let original = 0;
+  withTokenEstimateCache(() => {
+    original = estimateTokens(text);
+    expect(tokenEstimateCacheStats()).toMatchObject({ sharedHits: 0 });
+  });
+  withTokenEstimateCache(() => {
+    expect(estimateTokens(text)).toBe(original);
+    expect(tokenEstimateCacheStats()).toMatchObject({ sharedHits: 1, entries: 1 });
+    estimateTokens(text + " altered suffix");
+    expect(tokenEstimateCacheStats()).toMatchObject({ sharedHits: 1 });
+  });
+  expect(tokenEstimateCacheStats()).toBeUndefined();
+});
+
+test("cross-request token reuse evicts old digests instead of growing without bound", () => {
+  const prefix = crypto.randomUUID();
+  const sentinel = prefix + " first unchanged message".repeat(20);
+  estimateTokens(sentinel);
+  for (let i = 0; i < 1024; i++) estimateTokens(prefix + i + " other unchanged message".repeat(20));
+  withTokenEstimateCache(() => {
+    estimateTokens(sentinel);
+    expect(tokenEstimateCacheStats()).toMatchObject({ sharedHits: 0 });
+  });
+});

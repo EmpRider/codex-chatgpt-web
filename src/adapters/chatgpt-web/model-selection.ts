@@ -83,6 +83,17 @@ export function chatGptModelFamilyMatches(
     && (effort === "max" ? /^Pro$/i.test(state.mode) : !/^Pro$/i.test(state.mode)));
 }
 
+/** Only explicit family AND exact effort evidence can replace reopening the picker. */
+export function chatGptClosedEffortMatches(
+  label: string, family: ChatGptWebModelFamily, effort: ChatGptWebAdapterEffort,
+): boolean {
+  if (!chatGptModelFamilyMatches([label], family, effort)) return false;
+  const mode = /^(?:GPT[-\s]?)?\d+(?:\.\d+)?(?:\s+(?:Sol|Astra))?\s+(.+)$/i
+    .exec(label.replace(/\s+/g, " ").trim())?.[1]?.toLowerCase();
+  const expected = { low: "instant", medium: "medium", high: "high", xhigh: "extra high", max: "pro" };
+  return mode === expected[effort];
+}
+
 export async function assertChatGptModelFamily(
   menu: EffortMenu,
   family: ChatGptWebModelFamily,
