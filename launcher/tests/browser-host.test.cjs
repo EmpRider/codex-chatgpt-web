@@ -25,6 +25,64 @@ const {
   navigationOriginForLog,
 } = require("../electron/browser-host.cjs");
 
+function primaryLoginFixture() {
+  let loads = 0;
+  let probes = 0;
+  const contents = Object.assign(new EventEmitter(), {
+    setWindowOpenHandler() {}, isDestroyed: () => false, isLoadingMainFrame: () => true, stop() {},
+    getURL: () => "https://chatgpt.com/?temporary-chat=true",
+    loadURL: async url => { loads++; contents.emit("did-start-navigation", {}, url, false, true); },
+  });
+  const host = Object.assign(Object.create(BrowserHost.prototype), {
+    state: { authenticated: false }, turnTabs: new Map(), view: { webContents: contents },
+    setState(patch) { Object.assign(this.state, patch); }, snapshot() { return { ...this.state }; },
+    logger: { info() {}, error() {} }, show() {}, activateHomeSurface() {},
+    armHomeNavigationTimeout() {}, clearHomeNavigationTimeout() {},
+    withManualOperation: async (_name, action) => action(),
+    probeAuthentication: async () => { probes++; return { authenticated: true }; },
+    runSessionInspection: async () => {},
+  });
+  host.bindWebContents();
+  return { host, contents, loads: () => loads, probes: () => probes };
+}
+
+test("failed primary navigation rejects login and an explicit retry replaces the failed document", async () => {
+  const { host, contents, loads, probes } = primaryLoginFixture();
+  contents.emit("did-fail-load", {}, -331, "ERR_NETWORK_IO_SUSPENDED", contents.getURL(), true);
+  await assert.rejects(host.waitForAuthenticated(), /ERR_NETWORK_IO_SUSPENDED/);
+  assert.equal(probes(), 0, "cached authentication cannot validate a failed page");
+  contents.emit("did-finish-load"); // Chromium's error document is not a recovered ChatGPT page.
+  assert.equal(host.state.status, "error");
+  host.state.authenticated = true; // The account cookie can outlive the failed document.
+  await host.openLogin();
+  assert.equal(loads(), 1);
+  assert.equal(host.primaryNavigationError, null);
+  await host.openLogin();
+  assert.equal(loads(), 1, "an authenticated, valid document is preserved");
+});
+
+test("only failed main-frame loads and renderer exits invalidate the primary login document", async () => {
+  const { host, contents, loads } = primaryLoginFixture();
+  contents.emit("did-fail-load", {}, -331, "ERR_NETWORK_IO_SUSPENDED", contents.getURL(), false);
+  contents.emit("did-fail-load", {}, -3, "ERR_ABORTED", contents.getURL(), true);
+  await host.openLogin();
+  assert.equal(loads(), 0);
+  contents.emit("render-process-gone", {}, { reason: "crashed", exitCode: 1 });
+  await assert.rejects(host.waitForAuthenticated(), /renderer stopped: crashed/);
+  contents.emit("did-start-navigation", {}, contents.getURL(), true, true);
+  await assert.rejects(host.waitForAuthenticated(), /renderer stopped: crashed/);
+  await host.openLogin();
+  assert.equal(loads(), 1);
+});
+
+test("the primary navigation deadline is reported to the login waiter", async t => {
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: 1_000_000 });
+  const { host, contents } = primaryLoginFixture();
+  BrowserHost.prototype.armHomeNavigationTimeout.call(host, contents, contents.getURL());
+  t.mock.timers.tick(60_000);
+  await assert.rejects(host.waitForAuthenticated(), /did not finish loading within 60 seconds/);
+});
+
 test("manual prompt handoff keeps ordinary turns at one minute and compaction at two minutes", () => {
   assert.equal(MANUAL_SUBMIT_TIMEOUT_MS, 60_000);
   assert.equal(MANUAL_COMPACTION_SUBMIT_TIMEOUT_MS, 120_000);
@@ -3656,7 +3714,7 @@ test("off-on-off fresh conversation changes retire completed history before it c
     const property = savedChats ? "useSavedChats" : "experimentalFreshConversationPerTurn";
     const method = savedChats ? "setUseSavedChats" : "setFreshConversationPerTurn";
     const channel = savedChats ? "launcher:use-saved-chats" : "launcher:fresh-conversation-per-turn";
-    const nextChannel = savedChats ? "launcher:zero-risk-pro" : "launcher:use-saved-chats";
+    const nextChannel = savedChats ? "launcher:auto-approve-tool-calls" : "launcher:use-saved-chats";
     const key = "a".repeat(64);
     const stale = { id: "old-chat", traceId: "old-turn", status: "ready", interactionMode: "automatic",
       conversationKey: key, connectorIdentity: "Codex Native2", connectorBound: true };
@@ -3677,7 +3735,7 @@ test("off-on-off fresh conversation changes retire completed history before it c
       },
       createTurnTab: async () => ({ id: "new-chat", surfaceId: "new-surface" }),
     });
-    vm.runInNewContext(main.slice(main.indexOf("function syncFreshConversationPreference("), main.indexOf("function registerIpc(")) +
+    vm.runInNewContext(main.slice(main.indexOf("function syncBrowserPreferences("), main.indexOf("function registerIpc(")) +
       main.slice(main.indexOf(`handle("${channel}",`),
       main.indexOf(`handle("${nextChannel}",`)), {
       handle: (_channel, callback) => { handler = callback; }, browserHost: fixture, releaseRetainedConversation,

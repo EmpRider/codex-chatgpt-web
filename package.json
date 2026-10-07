@@ -55,7 +55,12 @@
     "regression:fork": "bun run scripts/fork-regression.ts"
   },
   "dependencies": {
+<<<<<<< ours
     "@modelcontextprotocol/sdk": "^1.30.0",
+=======
+    "@modelcontextprotocol/sdk": "^1.31.0",
+    "@mixmark-io/domino": "2.2.0",
+>>>>>>> theirs
     "ajv": "8.20.0",
     "ajv-formats": "3.0.1",
     "chromium-bidi": "12.1.0",
