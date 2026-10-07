@@ -1288,6 +1288,17 @@ export function createChatGptWebAdapter(
           chatGptTurnSessions.retireAbortedOwnerTurns(ownerKey, abortedTurnIds, executionKey);
         }
         const traceId = chatGptWebTraceId(provider, parsed);
+        // Recovery: the watchdog killed the browser turn while Codex was still running the tool.
+        // If Codex has now returned that tool's result, its canonical context already contains
+        // the outcome, so continue in a fresh browser turn instead of replaying the cached error.
+        // Without a result we keep the old behavior: never re-run a call whose outcome is unknown.
+        const timedOutSession = chatGptTurnSessions.toolResultTimeoutSession(executionKey);
+        if (timedOutSession && currentToolResults(parsed, timedOutSession).length > 0) {
+          console.info(`[chatgpt-web] tool_result_timeout_recovery ${JSON.stringify({
+            traceId: timedOutSession.traceId, resumedTraceId: traceId,
+          })}`);
+          await chatGptTurnSessions.retireAndWait(executionKey, incoming.abortSignal);
+        }
         const session = await chatGptTurnSessions.getOrCreateAfterOwnerRetirement(
           executionKey,
           ownerKey,

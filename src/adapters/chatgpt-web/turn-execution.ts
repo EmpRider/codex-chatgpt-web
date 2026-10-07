@@ -14,7 +14,18 @@ import { logTurnDiagnostic } from "./turn-diagnostics";
 
 // MCP stops waiting after 90 seconds. Allow another minute for a delayed native
 // continuation, then fail the lost round instead of retaining its browser forever.
-export const CHATGPT_NATIVE_RESULT_TIMEOUT_MS = 150_000;
+const DEFAULT_NATIVE_RESULT_TIMEOUT_MS = 150_000;
+/**
+ * Inactivity allowance for a Codex tool batch. Override with
+ * CODEX_CHATGPT_WEB_TOOL_RESULT_TIMEOUT_MS (150s..30min). Raising it only helps slow commands:
+ * ChatGPT's own connector call gives up after ~100s, so recovery below is the real safety net.
+ */
+export const CHATGPT_NATIVE_RESULT_TIMEOUT_MS = (() => {
+  const raw = Number(process.env.CODEX_CHATGPT_WEB_TOOL_RESULT_TIMEOUT_MS);
+  return Number.isFinite(raw) && raw >= DEFAULT_NATIVE_RESULT_TIMEOUT_MS
+    ? Math.min(raw, 30 * 60_000)
+    : DEFAULT_NATIVE_RESULT_TIMEOUT_MS;
+})();
 
 function awaitWithAbort<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
   if (!signal) return promise;
@@ -461,6 +472,14 @@ export class ChatGptTurnSession {
     return this.settledBrowserOutcome === undefined;
   }
 
+  /** True when the native tool-result watchdog (not ChatGPT or the browser) ended this turn. */
+  endedByToolResultTimeout(): boolean {
+    const outcome = this.settledBrowserOutcome;
+    return outcome?.type === "error"
+      && outcome.error instanceof ChatGptWebAdapterError
+      && outcome.error.code === "codex_tool_result_timeout";
+  }
+
   /** The client-visible browser result can settle before launcher/helper cleanup does. */
   isPhysicallySettled(): boolean {
     return this.settledPhysical;
@@ -896,6 +915,12 @@ export class ChatGptTurnSessions {
     this.forgetConversationHead(session);
     await awaitWithAbort(this.beginRetirement(key, session), signal);
     return true;
+  }
+
+  /** The registered session for `key`, if the tool-result watchdog is what settled it. */
+  toolResultTimeoutSession(key: string): ChatGptTurnSession | undefined {
+    const session = this.entries.get(key);
+    return session?.endedByToolResultTimeout() ? session : undefined;
   }
 
   retire(key: string, session: ChatGptTurnSession): boolean {
