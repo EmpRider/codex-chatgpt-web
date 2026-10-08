@@ -1,0 +1,26 @@
+name: Retag and republish v6.2.14
+
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - ".github/workflows/retag-v6.2.14.yml"
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  retag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Move v6.2.14 to the Windows smoke fix and rerun release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git tag -f v6.2.14 e9392ebf3b7dd4bbd9bb99c49ce8d68be984fc9a
+          git push origin refs/tags/v6.2.14 --force
+          gh workflow run release.yml --repo "$GITHUB_REPOSITORY" --ref v6.2.14
