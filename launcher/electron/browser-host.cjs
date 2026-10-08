@@ -49,6 +49,18 @@ const RETAINED_TURN_TAB_TTL_MS = 30 * 60 * 1000;
 // Automatic turns have a full-context fallback. Reclaim their idle renderer sooner;
 // manual turns keep their existing lease because the browser owns that transcript.
 const AUTOMATIC_RETAINED_TURN_TAB_TTL_MS = 5 * 60 * 1000;
+
+function recordTurnActivity(tab, now = Date.now()) {
+  const state = tab.approvalPending ? "approval"
+    : tab.turnProgress?.activeToolCalls > 0 ? "tools" : tab.turnProgress?.stage ?? "unknown";
+  tab.activity = {
+    state,
+    since: tab.activity?.state === state ? tab.activity.since : now,
+    updatedAt: now,
+    activeToolCalls: tab.turnProgress?.activeToolCalls ?? 0,
+  };
+}
+
 const BROWSER_NAVIGATION_TIMEOUT_MS = 60_000;
 const CHATGPT_AUTH_SESSION_TIMEOUT_MS = 5_000;
 const WINDOW_VISIBILITY_EVENTS = ["show", "hide", "minimize", "restore"];
@@ -380,6 +392,7 @@ class BrowserHost {
     this.shellZoomShortcutBindings = new Map();
     this.authView = null;
     this.authNavigationError = null;
+    this.primaryNavigationError = null;
     this.homeNavigationTimeout = null;
     this.lastTurnSweepAt = Date.now();
     this.powerSaveBlockerId = null;
@@ -530,6 +543,11 @@ class BrowserHost {
       loading: tab.loading === true,
       active: this.selectedTabId === tab.id,
       closable: true,
+      ...(tab.status === "running" && tab.authenticationRequired ? { authenticationRequired: true } : {}),
+      ...(tab.status === "running" && !tab.authenticationRequired && tab.activity
+        ? { activity: { ...tab.activity } } : {}),
+      ...(tab.status === "running" && !tab.authenticationRequired && tab.approvalPending === true
+        ? { approvalPending: true } : {}),
     };
     if (tab.interactionMode === "manual") {
       Object.assign(snapshot, {
@@ -1058,6 +1076,7 @@ class BrowserHost {
         this.setState({ url });
         return;
       }
+      this.primaryNavigationError = null;
       this.primaryRendererReady = false;
       this.primaryDeviceEmulationDirty = true;
       this.armHomeNavigationTimeout(contents, url);
@@ -1073,6 +1092,7 @@ class BrowserHost {
     });
     contents.on("did-finish-load", () => {
       this.clearHomeNavigationTimeout();
+      if (this.primaryNavigationError) return;
       this.primaryRendererReady = true;
       this.syncViewVisibility();
       if (this.manualOperation === "ChatGPT login") {
@@ -1127,6 +1147,8 @@ class BrowserHost {
     contents.on("did-fail-load", (_event, errorCode, errorDescription, url, mainFrame) => {
       if (!mainFrame || errorCode === -3) return;
       this.clearHomeNavigationTimeout();
+      this.primaryNavigationError = new Error(`ChatGPT page failed to load: ${errorDescription}`);
+      this.primaryRendererReady = false;
       this.logger.error(
         this.manualOperation === "ChatGPT login"
           ? "browser.auth_navigation_failed"
@@ -1142,6 +1164,8 @@ class BrowserHost {
     });
     contents.on("render-process-gone", (_event, details) => {
       this.clearHomeNavigationTimeout();
+      this.primaryNavigationError = new Error(`ChatGPT renderer stopped: ${details.reason}`);
+      this.primaryRendererReady = false;
       this.logger.error("browser.renderer_gone", { reason: details.reason, exitCode: details.exitCode });
       this.setState({ status: "error", message: `Browser renderer stopped: ${details.reason}`, loading: false });
     });
@@ -1154,6 +1178,8 @@ class BrowserHost {
       if (contents.isDestroyed() || !contents.isLoadingMainFrame()) return;
       contents.stop();
       const message = "ChatGPT did not finish loading within 60 seconds. Check your connection and retry.";
+      this.primaryNavigationError = new Error(message);
+      this.primaryRendererReady = false;
       this.logger.error("browser.navigation_timeout", { origin: navigationOriginForLog(url) });
       this.setState({ status: "error", message, url, loading: false });
     }, BROWSER_NAVIGATION_TIMEOUT_MS);
@@ -1430,7 +1456,7 @@ class BrowserHost {
     this.publishState?.(this.snapshot());
   }
 
-  heartbeatTurn(traceId, helperPid, refreshViewport = false) {
+  heartbeatTurn(traceId, helperPid, refreshViewport = false, progress) {
     if (typeof refreshViewport !== "boolean") throw new Error("refreshViewport is invalid");
     const tab = [...this.turnTabs.values()].find(candidate => candidate.traceId === traceId);
     if (!tab) {
@@ -1442,6 +1468,17 @@ class BrowserHost {
       throw new Error(`Browser helper ownership mismatch: expected ${tab.helperPid}, received ${helperPid}`);
     }
     if (tab.status !== "running") throw new Error(`Browser turn ${traceId} is no longer running`);
+    if (progress !== undefined) {
+      if (tab.interactionMode !== "automatic" || !progress || typeof progress !== "object"
+        || Object.keys(progress).length !== 2
+        || !["preparing", "sending", "chatgpt"].includes(progress.stage)
+        || !Number.isSafeInteger(progress.activeToolCalls) || progress.activeToolCalls < 0) {
+        throw new Error("Browser turn progress is invalid");
+      }
+      tab.turnProgress = { stage: progress.stage, activeToolCalls: progress.activeToolCalls };
+      recordTurnActivity(tab);
+      this.publishState?.(this.snapshot());
+    }
     tab.lastHeartbeatAt = Date.now();
     if (refreshViewport) {
       // Closing an external Playwright CDP session can clear Chromium's effective emulation while
@@ -1451,6 +1488,16 @@ class BrowserHost {
       this.syncViewVisibility();
     }
     return this.snapshot();
+  }
+
+  setTurnApprovalPending(traceId, helperPid, pending) {
+    if (typeof pending !== "boolean") throw new Error("Tool approval pending state must be a boolean");
+    this.heartbeatTurn(traceId, helperPid);
+    const tab = [...this.turnTabs.values()].find(candidate => candidate.traceId === traceId);
+    if (tab.interactionMode !== "automatic") throw new Error("Tool approval requires an automatic browser turn");
+    tab.approvalPending = pending;
+    recordTurnActivity(tab);
+    this.publishState?.(this.snapshot());
   }
 
   refreshTurnLeases(reason, now = Date.now()) {
@@ -2462,6 +2509,9 @@ class BrowserHost {
       existing.helperPid = helperPid;
       existing.traceId = traceId;
       existing.status = "running";
+      existing.approvalPending = false;
+      existing.turnProgress = undefined;
+      existing.activity = undefined;
       existing.loading = true;
       existing.message = "ChatGPT is working";
       if (!reused) {
@@ -2528,6 +2578,9 @@ class BrowserHost {
     const authenticationRequired = tab.authenticationRequired === true;
     if (authenticationRequired && status === "completed") status = "failed";
     tab.status = status === "completed" ? "ready" : status === "aborted" ? "aborted" : "error";
+    tab.approvalPending = false;
+    tab.turnProgress = undefined;
+    tab.activity = undefined;
     this.syncPowerSaveBlocker();
     tab.message = status === "completed" ? "Task completed" : message || `ChatGPT turn ${status}`;
     tab.loading = false;
@@ -2569,7 +2622,7 @@ class BrowserHost {
 
   openLogin() {
     requireAutomaticBrowserInspection(this, "Automated ChatGPT sign-in verification");
-    if (this.state.authenticated) {
+    if (this.state.authenticated && !this.primaryNavigationError) {
       this.activateHomeSurface();
       this.show();
       return Promise.resolve(this.snapshot());
@@ -2593,7 +2646,7 @@ class BrowserHost {
         this.show();
         this.logger.info("browser.login_opened");
         const current = this.view.webContents.getURL();
-        if (this.reauthenticationRequired || !current.startsWith(CHATGPT_ORIGIN)) {
+        if (this.primaryNavigationError || this.reauthenticationRequired || !current.startsWith(CHATGPT_ORIGIN)) {
           await this.view.webContents.loadURL(TEMPORARY_CHAT_URL);
         }
         await this.probeAuthentication();
@@ -2897,6 +2950,7 @@ class BrowserHost {
   async waitForAuthenticated(timeoutMs = 180_000) {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
+      if (this.primaryNavigationError) throw this.primaryNavigationError;
       if (this.authNavigationError) {
         const error = this.authNavigationError;
         this.authNavigationError = null;

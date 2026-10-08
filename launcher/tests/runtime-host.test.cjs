@@ -173,7 +173,7 @@ test("DEV core setup configures only the isolated harness contract", async () =>
 });
 
 test("Bigger Context uses the setup transaction and refreshes the production Codex catalog", async () => {
-  const fixture = hostFor({ mode: "full", appName: "Codex Native2" });
+  const fixture = hostFor({ mode: "full", appName: "Codex Native2", solAvailable: true });
   const result = await fixture.host.setBiggerContext(true);
   assert.equal(result.enabled, true);
   assert.deepEqual(fixture.invocation(), {
@@ -212,6 +212,17 @@ test("Chat Clean uses the setup transaction without changing the Codex model cat
       "--no-chat-clean",
     ],
   });
+});
+
+test("Luna cannot enable Bigger Context, but can turn off an existing unsupported setting", async () => {
+  for (const createHost of [hostFor, devHostFor]) {
+    const fixture = createHost({ mode: "browser-only", solAvailable: false, experimentalBiggerContext: true });
+    await assert.rejects(fixture.host.setBiggerContext(true), /unavailable for Luna and Think/);
+    assert.equal(fixture.invocation(), undefined);
+    const result = await fixture.host.setBiggerContext(false);
+    assert.equal(result.enabled, false);
+    assert.ok(fixture.invocation().args.includes("--standard-context"));
+  }
 });
 
 test("Bigger Context updates the isolated DEV config without installing a Codex route", async () => {
@@ -1322,6 +1333,34 @@ test("skill file experiment uses the setup transaction in production and DEV, an
   assert.equal(manual.invocation(), undefined);
 });
 
+
+test("tool approvals opt in and out through setup without refreshing models or changing chat settings", async () => {
+  for (const makeHost of [hostFor, devHostFor]) {
+    for (const mode of ["browser-only", "full"]) {
+      for (const enabled of [true, false]) {
+        const fixture = makeHost({ mode, browserInteractionMode: "automatic", autoApproveToolCalls: !enabled });
+        assert.equal((await fixture.host.setAutoApproveToolCalls(enabled)).enabled, enabled);
+        const { name, args } = fixture.invocation();
+        assert.equal(name, "auto-approve-tool-calls");
+        assert.equal(args.includes("--auto-approve-tool-calls"), enabled);
+        assert.equal(args.includes(`--${mode}`), true);
+        assert.equal(args.includes("--restart-service"), makeHost === hostFor);
+        assert.equal(args.includes("dev"), makeHost === devHostFor);
+        for (const flag of ["--refresh-account-capabilities", "--login", "--fresh-conversation", "--retained-conversation", "--temporary-chats", "--saved-chats"]) {
+          assert.equal(args.includes(flag), false);
+        }
+      }
+    }
+    for (const config of [null, { mode: "full", browserInteractionMode: "manual" }]) {
+      const fixture = makeHost(config);
+      await assert.rejects(() => fixture.host.setAutoApproveToolCalls(true), /Initialize|Zero Risk/);
+      assert.equal(fixture.invocation(), undefined);
+    }
+    const fixture = makeHost({ mode: "full" });
+    await assert.rejects(() => fixture.host.setAutoApproveToolCalls("true"), /boolean/);
+    assert.equal(fixture.invocation(), undefined);
+  }
+});
 
 test("fresh-conversation preference uses production and DEV setup without forcing mode or other preferences", async () => {
   for (const makeHost of [hostFor, devHostFor]) {
