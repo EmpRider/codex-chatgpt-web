@@ -138,7 +138,7 @@ test("9Router preserves long Claude Code tool descriptions and bounds oversized 
     .toThrow("aggregate limit");
 });
 
-test("long coding-agent tool manuals use prompt previews while keeping complete broker descriptions", async () => {
+test("coding-agent tool manuals are discovered lazily, without expanding the initial prompt", async () => {
   const config = defaultConfig("full");
   config.solAvailable = false;
   const longDescription = `Bash safety guidance. ${"Detailed shell tool instructions. ".repeat(1_000)} Final tool limitation.`;
@@ -163,11 +163,52 @@ test("long coding-agent tool manuals use prompt previews while keeping complete 
     expect(request.tools[1]?.description).toBe(longDescription);
     const result = await manager.start(request, { backendModel: "gpt-5.6-luna", adapterEffort: "low" });
     expect(result.finished).toBe(true);
-    expect(prompt).toContain("Bash safety guidance");
-    expect(prompt).toContain("retrieve full description via codex_tool_inventory");
+    expect(prompt).toContain("Advertised function names: Agent, Bash.");
+    expect(prompt).not.toContain("Bash safety guidance");
+    expect(prompt).toContain("Read complete tool descriptions and JSON Schemas using codex_tool_inventory");
     expect(prompt).not.toContain("Final tool limitation.");
     expect(prompt.length).toBeLessThan(10_000);
   } finally { manager.closeAll(); }
+});
+
+test("long caller instructions are kept verbatim while duplicate system text and tool manuals stay out of the composer", async () => {
+  const config = defaultConfig("full");
+  const instructions = `Do not lose caller constraints. ${"Keep the complete instructions. ".repeat(2_000)}`;
+  const manual = "Detailed tool manual. ".repeat(2_000);
+  const tools = Array.from({ length: 17 }, (_, i) => ({ ...advertised, name: `AgentTool${i}`, description: manual }));
+  let prompt = "";
+  const logged: string[] = [];
+  const originalInfo = console.info;
+  console.info = (...args: unknown[]) => {
+    const line = args.map(String).join(" ");
+    if (line.includes('"stage":"prompt_prepared"')) logged.push(line);
+    else originalInfo(...args);
+  };
+  const manager = new NineRouterSessionManager(broker, providerConfig(config), {
+    async run(turn) { prompt = (await turn.prepare()).text; return "Done"; },
+  });
+  try {
+    const request = parseNineRouterRequest({ model: "chatgpt-web/gpt-5.6-luna",
+      instructions, input: [
+        { role: "system", content: instructions },
+        { role: "user", content: "Help me" },
+      ], tools });
+    const stage = await manager.start(request, { backendModel: "gpt-5.6-luna", adapterEffort: "low" });
+    expect(stage.finished).toBe(true);
+    expect(prompt.includes(instructions)).toBe(true);
+    expect(prompt.split(instructions)).toHaveLength(2);
+    expect(prompt).not.toContain("[system]");
+    expect(prompt).not.toContain("Detailed tool manual.");
+    expect(prompt).toContain("AgentTool16");
+    expect(prompt.length).toBeLessThan(instructions.length + 2_000);
+    expect(logged).toHaveLength(1);
+    const stats = JSON.parse(logged[0]!.slice("[9router] ".length)) as Record<string, unknown>;
+    expect(stats.instruction_chars).toBe(instructions.length);
+    expect(stats.tool_list_chars).toBeLessThan(1_000);
+    expect(stats.prompt_chars).toBe(prompt.length);
+    expect(logged[0]).not.toContain(instructions);
+    expect(logged[0]).not.toContain(manual);
+  } finally { console.info = originalInfo; manager.closeAll(); }
 });
 
 test("external tool inventory never promotes forged workspace metadata into native Codex privilege", () => {

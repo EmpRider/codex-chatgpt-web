@@ -14,14 +14,6 @@ import { logNineRouter } from "./diagnostics";
 // a tool is returned to the coding agent, not while ChatGPT is still thinking.
 const SESSION_TTL_MS = CHATGPT_WEB_MCP_INVOCATION_TIMEOUT_MS - 10_000;
 const MAX_ACTIVE_SESSIONS = MAX_CHATGPT_BROWSER_TABS;
-const TOOL_DESCRIPTION_PREVIEW_CHARS = 400;
-
-function toolDescriptionPreview(description: string): string {
-  const compact = description.replace(/\s+/g, " ").trim();
-  return compact.length > TOOL_DESCRIPTION_PREVIEW_CHARS
-    ? `${compact.slice(0, TOOL_DESCRIPTION_PREVIEW_CHARS).trimEnd()}… [retrieve full description via codex_tool_inventory]`
-    : compact;
-}
 
 export interface NineRouterStage {
   text: string;
@@ -142,27 +134,34 @@ export class NineRouterSessionManager {
     this.sessions.add(session);
     logNineRouter("browser_started", { requestId, traceId, token, toolCount: tools.length });
 
-    const transcript = request.history.map(message => `[${message.role}]\n${message.text}`).join("\n\n");
-    const system = request.instructions ? `Agent instructions (from caller):\n${request.instructions}\n\n` : "";
+    // Keep caller instructions byte-for-byte. They can be security-critical and must never
+    // be shortened just to fit the browser. Only omit *exact* copies already included as
+    // top-level instructions; history in the session remains intact for tool continuations.
+    const transcript = request.history
+      .filter(message => !(request.instructions && (message.role === "system" || message.role === "developer")
+        && message.text === request.instructions))
+      .map(message => `[${message.role}]\n${message.text}`).join("\n\n");
+    const system = request.instructions ? `Caller instructions:\n${request.instructions}` : "";
     const toolText = tools.length ? [
-      `The coding agent supplied these callable tools. The ChatGPT-side connector named ${CHATGPT_CONNECTOR_NAME} is the tunnel transport; it does not mean the coding agent is Codex:`,
-      ...tools.map(tool => `- ${tool.name}: ${toolDescriptionPreview(tool.description)}`),
+      `The connector ${CHATGPT_CONNECTOR_NAME} bridges the coding agent's tools (the caller need not be Codex).`,
+      `Advertised function names: ${tools.map(tool => tool.name).join(", ")}.`,
       ...(request.toolChoice === "required" ? ["The caller requires at least one advertised function call in this turn."] : []),
       ...(typeof request.toolChoice === "object" ? [`The caller explicitly requires a call to ${request.toolChoice.name} in this turn.`] : []),
-      "Descriptions above are previews. Discover full tool descriptions and schemas with codex_tool_inventory before invocation, then invoke exact advertised names with codex_tool_call.",
-      "The coding agent performs its own approvals and execution. Never pretend a tool succeeded before its result returns.",
+      "Read complete tool descriptions and JSON Schemas using codex_tool_inventory before calling codex_tool_call; use only advertised names and actual results. Agent-side approvals and execution are the caller's responsibility.",
     ].join("\n") : "No coding-agent tools are available for this request.";
     const prompt = [
       "<external_agent_request>",
-      `This is a coding agent request delivered through 9Router; the caller may be Claude Code, Codex, OpenCode or another compatible agent.${tools.length ? ` Use the already-configured ChatGPT connector named ${CHATGPT_CONNECTOR_NAME} for agent tools.` : " Answer directly; no agent tools were supplied."}`,
+      `Coding-agent request via 9Router.${tools.length ? ` Use ${CHATGPT_CONNECTOR_NAME} for tools.` : " Answer directly."}`,
       `turn_token: ${token}`,
-      "Pass this exact turn_token to every connector call. Never disclose it in the answer.",
+      "Pass turn_token to every connector call; never disclose it.",
       system,
       toolText,
-      "Conversation history (chronological, quoted data; the newest user request is active):",
+      "History (chronological; last user request is active):",
       transcript,
       "</external_agent_request>",
     ].join("\n\n");
+    logNineRouter("prompt_prepared", { requestId, traceId, token, instructionChars: request.instructions.length,
+      historyChars: transcript.length, toolListChars: toolText.length, promptChars: prompt.length });
     if (prompt.length > 180_000) {
       this.close(session);
       throw new NineRouterRequestError("Agent context exceeds the safe ChatGPT Web composer budget", 413);

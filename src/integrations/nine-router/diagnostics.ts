@@ -4,7 +4,7 @@ import { createHash, randomUUID } from "node:crypto";
 export type NineRouterDiagnosticStage =
   | "auth_rejected" | "parse_rejected" | "model_rejected" | "request_started"
   | "browser_started" | "tool_batch_delivered" | "tool_results_returned"
-  | "browser_finished" | "session_retired" | "request_failed";
+  | "browser_finished" | "session_retired" | "request_failed" | "prompt_prepared";
 
 interface SafeNineRouterFields {
   requestId?: string;
@@ -14,6 +14,10 @@ interface SafeNineRouterFields {
   toolCount?: number;
   durationMs?: number;
   status?: number;
+  instructionChars?: number;
+  historyChars?: number;
+  toolListChars?: number;
+  promptChars?: number;
   category?: "auth" | "input" | "model" | "browser" | "broker" | "agent" | "timeout" | "cancelled";
 }
 
@@ -31,6 +35,10 @@ export function logNineRouter(stage: NineRouterDiagnosticStage, fields: SafeNine
     ...(fields.toolCount !== undefined ? { tool_count: fields.toolCount } : {}),
     ...(fields.durationMs !== undefined ? { duration_ms: Math.max(0, Math.round(fields.durationMs)) } : {}),
     ...(fields.status !== undefined ? { status: fields.status } : {}),
+    ...(fields.instructionChars !== undefined ? { instruction_chars: fields.instructionChars } : {}),
+    ...(fields.historyChars !== undefined ? { history_chars: fields.historyChars } : {}),
+    ...(fields.toolListChars !== undefined ? { tool_list_chars: fields.toolListChars } : {}),
+    ...(fields.promptChars !== undefined ? { prompt_chars: fields.promptChars } : {}),
     ...(fields.category ? { category: fields.category } : {}),
   };
   console.info(`[9router] ${JSON.stringify(evidence)}`);

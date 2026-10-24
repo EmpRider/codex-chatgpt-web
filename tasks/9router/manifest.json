@@ -790,6 +790,19 @@
       "evidence": [],
       "blockedReason": null,
       "updatedAt": "2026-10-24T15:44:17.390Z"
+    },
+    {
+      "id": "R9-047",
+      "epic": "R9-E06",
+      "title": "Minimize 9Router ChatGPT browser prompt while preserving caller instructions",
+      "file": "items/R9-047-minimize-browser-prompt-without-dropping-instructions.md",
+      "status": "in_progress",
+      "dependsOn": ["R9-027", "R9-033"],
+      "evidence": [
+        "src/integrations/nine-router/session-manager.ts; src/integrations/nine-router/diagnostics.ts; tests/nine-router-provider.test.ts; TypeScript offline check passed; real Windows Composer integrity still unverified"
+      ],
+      "blockedReason": null,
+      "updatedAt": "2026-10-24T16:35:00.000Z"
     }
   ]
 }
