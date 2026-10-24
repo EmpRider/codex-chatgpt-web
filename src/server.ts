@@ -52,6 +52,7 @@ import { namespacedToolName, type AdapterEvent, type CodexParsedRequest } from "
 import type { CodexProviderConfig } from "./types";
 import type { ProviderAdapter } from "./adapters/base";
 import { VERSION } from "./version";
+import { NINE_ROUTER_BASE_PATH, NineRouterProvider } from "./integrations/nine-router/routes";
 
 type HttpTrackedEndpoint = "models" | "responses" | "compact" | "search" | "unspecified" | NativeImageEndpoint;
 
@@ -975,6 +976,7 @@ export function startServer(
   }
   const startedAt = Date.now();
   const turnBroker = config.mode === "full" ? TurnBroker.forSocket(config.brokerSocketPath) : undefined;
+  const nineRouter = turnBroker ? new NineRouterProvider(config, turnBroker) : undefined;
   if (config.mode === "full") {
     void turnBroker!.listen().catch(error => {
       console.error(
@@ -994,7 +996,7 @@ export function startServer(
   const modelCatalogFetches = dependencies.modelCatalogFetches ?? new ModelCatalogFetches();
   const activity = () => ({
     active_http_turns: httpTurns.count(),
-    active_browser_turns: chatGptTurnSessions.activeCount() + (turnBroker?.externalOwnerActiveCount() ?? 0),
+    active_browser_turns: chatGptTurnSessions.activeCount() + (turnBroker?.externalOwnerActiveCount() ?? 0) + (nineRouter?.activeCount ?? 0),
   });
   const controlAuthorized = (req: Request): boolean => {
     const header = req.headers.get("authorization") ?? "";
@@ -1017,6 +1019,10 @@ export function startServer(
           "invalid_request_error",
           "Browser-originated requests are not accepted by the local Codex route",
         );
+      }
+      if (url.pathname.startsWith(`${NINE_ROUTER_BASE_PATH}/`)) {
+        return nineRouter?.handle(req, url.pathname, draining)
+          ?? formatErrorResponse(404, "invalid_request_error", "9Router integration requires Full mode");
       }
       if (req.method === "GET" && url.pathname === "/healthz") {
         return Response.json({
@@ -1142,6 +1148,7 @@ export function startServer(
       if (req.method === "POST" && url.pathname === "/admin/cancel-turns") {
         if (!controlAuthorized(req)) return new Response("Unauthorized", { status: 401 });
         const reason = new Error("Active turn cancelled by launcher");
+        nineRouter?.close();
         // Abort shared compaction owners before clearing their retained source sessions. The
         // owner signal is the only cancellation boundary for a fresh fallback not in the session
         // registry.
@@ -1292,6 +1299,7 @@ export function startServer(
   function shutdown(): void {
     if (shutdownPromise) return;
     draining = true;
+    nineRouter?.close();
     chatGptTurnSessions.clear();
     modelCatalogFetches.close();
     flushResponseState();

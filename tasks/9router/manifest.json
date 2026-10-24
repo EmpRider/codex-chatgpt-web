@@ -51,135 +51,135 @@
       "epic": "R9-E01",
       "title": "Record pinned source baselines and upstream divergence",
       "file": "items/R9-001-record-pinned-source-baselines-and-upstream-divergence.md",
-      "status": "todo",
+      "status": "done",
       "dependsOn": [],
-      "evidence": [],
+      "evidence": ["tasks/9router/IMPLEMENTATION.md#immutable-references-and-fork-divergence-r9-001; pinned GitHub SHAs and inherited-module change ledger"],
       "blockedReason": null,
-      "updatedAt": null
+      "updatedAt": "2026-10-24T11:42:13.000Z"
     },
     {
       "id": "R9-002",
       "epic": "R9-E01",
       "title": "Capture 9Router wire contracts and protocol fixtures",
       "file": "items/R9-002-capture-9router-wire-contracts-and-protocol-fixtures.md",
-      "status": "todo",
+      "status": "done",
       "dependsOn": [
         "R9-001"
       ],
-      "evidence": [],
+      "evidence": ["tests/fixtures/nine-router/*.responses.json; tasks/9router/IMPLEMENTATION.md#verified-9router-wire-contract-r9-002-repository-source-observation; unmodified 9Router translator executed at f39d8f07481ae8518e93175f0ecaaafa61573c6c"],
       "blockedReason": null,
-      "updatedAt": null
+      "updatedAt": "2026-10-24T11:42:13.000Z"
     },
     {
       "id": "R9-003",
       "epic": "R9-E01",
       "title": "Approve agent-neutral execution and trust-boundary design",
       "file": "items/R9-003-approve-agent-neutral-execution-and-trust-boundary-design.md",
-      "status": "todo",
+      "status": "done",
       "dependsOn": [
         "R9-001",
         "R9-002"
       ],
-      "evidence": [],
+      "evidence": ["tasks/9router/IMPLEMENTATION.md#agent-neutral-authority-decision-and-acceptance-gates-r9-003--r9-004; src/adapters/chatgpt-web/turn-broker.ts; tests/nine-router-provider.test.ts"],
       "blockedReason": null,
-      "updatedAt": null
+      "updatedAt": "2026-10-24T11:42:13.000Z"
     },
     {
       "id": "R9-004",
       "epic": "R9-E01",
       "title": "Define MVP acceptance gates and unsupported behaviors",
       "file": "items/R9-004-define-mvp-acceptance-gates-and-unsupported-behaviors.md",
-      "status": "todo",
+      "status": "done",
       "dependsOn": [
         "R9-002",
         "R9-003"
       ],
-      "evidence": [],
+      "evidence": ["tasks/9router/IMPLEMENTATION.md#agent-neutral-authority-decision-and-acceptance-gates-r9-003--r9-004; offline vs account-bound acceptance matrix and unsupported-feature ledger"],
       "blockedReason": null,
-      "updatedAt": null
+      "updatedAt": "2026-10-24T11:42:13.000Z"
     },
     {
       "id": "R9-005",
       "epic": "R9-E02",
       "title": "Introduce a namespaced, feature-gated integration route",
       "file": "items/R9-005-introduce-a-namespaced-feature-gated-integration-route.md",
-      "status": "todo",
+      "status": "done",
       "dependsOn": [
         "R9-003"
       ],
-      "evidence": [],
+      "evidence": ["src/server.ts named /integrations/9router/v1 dispatch; src/integrations/nine-router/routes.ts; tests/nine-router-provider.test.ts (feature gating, models, Responses SSE)"],
       "blockedReason": null,
-      "updatedAt": null
+      "updatedAt": "2026-10-24T11:42:13.000Z"
     },
     {
       "id": "R9-006",
       "epic": "R9-E02",
       "title": "Create an independent provider integration secret",
       "file": "items/R9-006-create-an-independent-provider-integration-secret.md",
-      "status": "todo",
+      "status": "done",
       "dependsOn": [
         "R9-005"
       ],
-      "evidence": [],
+      "evidence": ["src/integrations/nine-router/key-manager.ts and src/cli.ts 9router-key command (owner-only create/rotate/disable, independent key); tests/nine-router-provider.test.ts auth and key tests"],
       "blockedReason": null,
-      "updatedAt": null
+      "updatedAt": "2026-10-24T11:42:13.000Z"
     },
     {
       "id": "R9-007",
       "epic": "R9-E02",
       "title": "Implement OpenAI-style model discovery",
       "file": "items/R9-007-implement-openai-style-model-discovery.md",
-      "status": "todo",
+      "status": "done",
       "dependsOn": [
         "R9-005",
         "R9-006"
       ],
-      "evidence": [],
+      "evidence": ["src/integrations/nine-router/routes.ts GET models via availableChatGptWebModelRoutes; tests/nine-router-provider.test.ts authenticated listing and unavailable mode tests"],
       "blockedReason": null,
-      "updatedAt": null
+      "updatedAt": "2026-10-24T11:42:13.000Z"
     },
     {
       "id": "R9-008",
       "epic": "R9-E02",
       "title": "Accept, validate and stream external Responses requests",
       "file": "items/R9-008-accept-validate-and-stream-external-responses-requests.md",
-      "status": "todo",
+      "status": "done",
       "dependsOn": [
         "R9-005",
         "R9-006"
       ],
-      "evidence": [],
+      "evidence": ["src/integrations/nine-router/routes.ts authenticated POST with media-type/body validation, nonstream+SSE, draining and abort handling; tests/nine-router-provider.test.ts"],
       "blockedReason": null,
-      "updatedAt": null
+      "updatedAt": "2026-10-24T11:42:13.000Z"
     },
     {
       "id": "R9-009",
       "epic": "R9-E02",
       "title": "Resolve provider aliases and endpoint URL compatibility",
       "file": "items/R9-009-resolve-provider-aliases-and-endpoint-url-compatibility.md",
-      "status": "todo",
+      "status": "done",
       "dependsOn": [
         "R9-002",
         "R9-007",
         "R9-008"
       ],
-      "evidence": [],
+      "evidence": ["tasks/9router/IMPLEMENTATION.md exact URL/Auth observation from unmodified 9Router DefaultExecutor at f39d8f0; src/integrations/nine-router/routes.ts canonicalNineRouterModel; tests/nine-router-provider.test.ts alias tests"],
       "blockedReason": null,
-      "updatedAt": null
+      "updatedAt": "2026-10-24T11:42:13.000Z"
     },
     {
       "id": "R9-010",
       "epic": "R9-E03",
       "title": "Normalize system, developer, user and assistant history",
       "file": "items/R9-010-normalize-system-developer-user-and-assistant-history.md",
-      "status": "todo",
+      "status": "in_progress",
       "dependsOn": [
         "R9-008",
         "R9-002"
       ],
       "evidence": [],
       "blockedReason": null,
-      "updatedAt": null
+      "updatedAt": "2026-10-24T11:42:13.000Z"
     },
     {
       "id": "R9-011",

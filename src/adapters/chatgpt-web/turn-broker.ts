@@ -8,6 +8,7 @@ import {
   type CompactionTransactionHandle,
 } from "./compaction-transaction";
 import type { ChatGptTurnEnvironment } from "./environment";
+import type { CodexTool } from "../../types";
 import { chatGptToolTimeoutError } from "./adapter-error";
 import { subagentModelObservation } from "./mcp-observation";
 
@@ -26,9 +27,14 @@ function assertRetirementFailure(value: unknown): asserts value is BrokerRetirem
   }
 }
 
-interface PendingTurn extends ChatGptTurnEnvironment {
-  expiresAt?: number;
+/** An external coding agent offers tools, never trusted Codex filesystem authority. */
+export interface ExternalAgentTurnEnvironment {
+  kind: "external-agent";
+  tools: CodexTool[];
 }
+
+export type BrokerTurnEnvironment = ChatGptTurnEnvironment | ExternalAgentTurnEnvironment;
+type PendingTurn = BrokerTurnEnvironment & { expiresAt?: number };
 
 export interface BrokerToolRequest {
   callId: string;
@@ -155,7 +161,7 @@ interface BrokerRequest {
   freeform?: boolean;
   arguments?: Record<string, unknown>;
   input?: string;
-  environment?: ChatGptTurnEnvironment;
+  environment?: BrokerTurnEnvironment;
   ttlMs?: number;
   traceId?: string;
   callId?: string;
@@ -235,7 +241,10 @@ function retiredTurnLabel(traceId: string): string {
   return traceId && traceId !== "unknown" ? `Codex turn ${traceId}` : "a Codex turn";
 }
 
-function environmentIdentity(environment: ChatGptTurnEnvironment): string {
+function environmentIdentity(environment: BrokerTurnEnvironment): string {
+  if ("kind" in environment) {
+    return JSON.stringify({ kind: environment.kind });
+  }
   return JSON.stringify({
     cwd: environment.cwd,
     roots: environment.roots,
@@ -244,8 +253,20 @@ function environmentIdentity(environment: ChatGptTurnEnvironment): string {
   });
 }
 
-function ownerEnvironment(value: unknown): ChatGptTurnEnvironment {
+function ownerEnvironment(value: unknown): BrokerTurnEnvironment {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("turn owner environment is invalid");
+  if ((value as Record<string, unknown>).kind === "external-agent") {
+    const external = value as Partial<ExternalAgentTurnEnvironment> & Record<string, unknown>;
+    if (Object.keys(external).some(key => key !== "kind" && key !== "tools")
+      || !Array.isArray(external.tools)
+      || external.tools.length > 256
+      || external.tools.some(tool => !tool || typeof tool.name !== "string"
+        || typeof tool.description !== "string"
+        || !tool.parameters || typeof tool.parameters !== "object" || Array.isArray(tool.parameters))) {
+      throw new Error("external agent environment is invalid");
+    }
+    return structuredClone(external as ExternalAgentTurnEnvironment);
+  }
   const environment = value as Partial<ChatGptTurnEnvironment>;
   const paths = (candidate: unknown): candidate is string[] => Array.isArray(candidate)
     && candidate.length > 0
@@ -273,14 +294,14 @@ function assertSurfaceNonce(value: unknown): asserts value is string {
 }
 
 export interface TurnBrokerOwner {
-  register(environment: ChatGptTurnEnvironment, ttlMs?: number, traceId?: string): Promise<string>;
+  register(environment: BrokerTurnEnvironment, ttlMs?: number, traceId?: string): Promise<string>;
   registerSafe(
     environment: ChatGptTurnEnvironment,
     surfaceNonce: string,
     ttlMs?: number,
     traceId?: string,
   ): Promise<string>;
-  updateEnvironment(token: string, environment: ChatGptTurnEnvironment): void | Promise<void>;
+  updateEnvironment(token: string, environment: BrokerTurnEnvironment): void | Promise<void>;
   confirmSafeTurnSent(
     token: string,
     surfaceNonce: string,
@@ -343,7 +364,7 @@ export class TurnBroker implements TurnBrokerOwner {
   }
 
   async register(
-    environment: ChatGptTurnEnvironment,
+    environment: BrokerTurnEnvironment,
     ttlMs?: number,
     traceId = "unknown",
     externalOwner = false,
@@ -426,7 +447,7 @@ export class TurnBroker implements TurnBrokerOwner {
     this.compactionTransactions.abortTrace(traceId);
   }
 
-  updateEnvironment(token: string, environment: ChatGptTurnEnvironment): void {
+  updateEnvironment(token: string, environment: BrokerTurnEnvironment): void {
     this.prune();
     const channel = this.channels.get(token);
     if (!channel) throw new Error("turn token is invalid or expired");
@@ -1025,6 +1046,7 @@ export class TurnBroker implements TurnBrokerOwner {
     }
     if (request.method === "owner_register_safe") {
       const environment = ownerEnvironment(request.environment);
+      if ("kind" in environment) throw new Error("external agent cannot claim a manual Codex turn");
       assertSurfaceNonce(request.surfaceNonce);
       if (request.traceId !== undefined && !/^[A-Za-z0-9_-]{6,128}$/.test(request.traceId)) {
         throw new Error("turn owner trace id is invalid");
@@ -1451,7 +1473,7 @@ export class RemoteTurnBroker implements TurnBrokerOwner {
     }
   }
 
-  async register(environment: ChatGptTurnEnvironment, ttlMs?: number, traceId = "unknown"): Promise<string> {
+  async register(environment: BrokerTurnEnvironment, ttlMs?: number, traceId = "unknown"): Promise<string> {
     const response = await callTurnBroker<{ token?: unknown }>(this.socketPath, {
       method: "owner_register",
       environment,
@@ -1484,7 +1506,7 @@ export class RemoteTurnBroker implements TurnBrokerOwner {
     return response.token;
   }
 
-  async updateEnvironment(token: string, environment: ChatGptTurnEnvironment): Promise<void> {
+  async updateEnvironment(token: string, environment: BrokerTurnEnvironment): Promise<void> {
     await callTurnBroker(this.socketPath, { method: "owner_update", token, environment });
   }
 

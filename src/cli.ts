@@ -30,6 +30,7 @@ import { installRuntimeKeyBytes, managedRuntimeKeyPath, stopTunnel, tunnelStatus
 import { getTunnelServiceStatus, restartTunnelService, startTunnelService, stopTunnelService, uninstallTunnelService } from "./tunnel-service";
 import { VERSION } from "./version";
 import { runDevCommand } from "./dev-chat/cli";
+import { disableNineRouterKey, nineRouterKeyPath, provisionNineRouterKey } from "./integrations/nine-router/key-manager";
 
 const HELP = `codex-chatgpt-web ${VERSION}
 
@@ -52,6 +53,7 @@ Usage:
   codex-chatgpt-web mcp [--broker-socket PATH]
   codex-chatgpt-web service <status|install|start|restart|stop|cancel-turns>
   codex-chatgpt-web tunnel <status|start|restart|stop|key-import>
+  codex-chatgpt-web 9router-key <create|rotate|disable|path>
   codex-chatgpt-web open <tunnels|runtime-keys|connectors>
   codex-chatgpt-web uninstall --yes
 
@@ -628,6 +630,17 @@ async function main(): Promise<void> {
     await interruptHookCommand(args);
   }
   else if (command === "tunnel") await tunnelCommand(args);
+  else if (command === "9router-key") {
+    const action = args.shift();
+    assertNoArgs(args);
+    if (action === "create" || action === "rotate") {
+      stdout.write(`9Router key saved: ${provisionNineRouterKey(action)}\nRestart the daemon to use it. Enter the key value only in 9Router's local provider UI.\n`);
+    } else if (action === "disable") {
+      const backup = disableNineRouterKey();
+      stdout.write(`${backup ? `Saved key disabled (recoverable at ${backup})` : "No saved key found"}. Restart the daemon to apply.\n`);
+    } else if (action === "path") stdout.write(`${nineRouterKeyPath()}\n`);
+    else throw new Error("9router-key action must be create, rotate, disable or path");
+  }
   else if (command === "open") await openCommand(args);
   else if (command === "uninstall") await uninstallCommand(args);
   else throw new Error(`Unknown command: ${command}\n\n${HELP}`);

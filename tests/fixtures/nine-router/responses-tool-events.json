@@ -1,0 +1,36 @@
+[
+  {
+    "type": "response.output_item.added",
+    "output_index": 0,
+    "item": {
+      "type": "function_call",
+      "id": "fc_test",
+      "call_id": "call_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef",
+      "name": "Read",
+      "arguments": "",
+      "status": "in_progress"
+    }
+  },
+  {
+    "type": "response.function_call_arguments.delta",
+    "item_id": "fc_test",
+    "output_index": 0,
+    "delta": "{\"path\":\"main.ts\"}"
+  },
+  {
+    "type": "response.output_item.done",
+    "output_index": 0,
+    "item": {
+      "type": "function_call",
+      "id": "fc_test",
+      "call_id": "call_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef",
+      "name": "Read",
+      "arguments": "{\"path\":\"main.ts\"}",
+      "status": "completed"
+    }
+  },
+  {
+    "type": "response.completed",
+    "response": { "usage": { "input_tokens": 10, "output_tokens": 5, "total_tokens": 15 } }
+  }
+]

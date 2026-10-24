@@ -1,0 +1,35 @@
+{
+  "model": "chatgpt-web/gpt-5.6-luna",
+  "input": [
+    {
+      "type": "message",
+      "role": "user",
+      "content": [{ "type": "input_text", "text": "Read main.ts" }]
+    },
+    {
+      "type": "function_call",
+      "call_id": "call_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef",
+      "name": "Read",
+      "arguments": "{\"path\":\"main.ts\"}"
+    },
+    {
+      "type": "function_call_output",
+      "call_id": "call_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef",
+      "output": "export default 42"
+    }
+  ],
+  "stream": true,
+  "store": false,
+  "instructions": "Be helpful",
+  "tools": [
+    {
+      "type": "function",
+      "name": "Read",
+      "description": "Read file",
+      "parameters": {
+        "type": "object",
+        "properties": { "path": { "type": "string" } }
+      }
+    }
+  ]
+}

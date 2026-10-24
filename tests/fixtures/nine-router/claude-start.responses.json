@@ -1,0 +1,24 @@
+{
+  "model": "chatgpt-web/gpt-5.6-luna",
+  "input": [
+    {
+      "type": "message",
+      "role": "user",
+      "content": [{ "type": "input_text", "text": "Read main.ts" }]
+    }
+  ],
+  "stream": true,
+  "store": false,
+  "instructions": "Be helpful",
+  "tools": [
+    {
+      "type": "function",
+      "name": "Read",
+      "description": "Read file",
+      "parameters": {
+        "type": "object",
+        "properties": { "path": { "type": "string" } }
+      }
+    }
+  ]
+}

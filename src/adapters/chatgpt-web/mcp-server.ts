@@ -4,7 +4,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import * as z from "zod/v4";
 import { namespacedToolName, type CodexTool } from "../../types";
 import { VERSION } from "../../version";
-import type { ChatGptTurnEnvironment } from "./environment";
+import type { BrokerTurnEnvironment } from "./turn-broker";
 import { CODEX_COMPACTION_CONTROL_WIRE_NAME } from "./native-compaction-control";
 import { callTurnBroker, TurnBrokerTimeoutError, type BrokerRetirementDiagnostics, type BrokerToolResult } from "./turn-broker";
 import { observeMcpToolCalls } from "./mcp-observation";
@@ -12,7 +12,7 @@ import { observeMcpToolCalls } from "./mcp-observation";
 interface ClaimedTurn {
   bindingId: string;
   activityId: string;
-  environment: ChatGptTurnEnvironment & { expiresAt?: number };
+  environment: BrokerTurnEnvironment & { expiresAt?: number };
 }
 
 export type ChatGptMcpContract = "native" | "safe";
@@ -118,7 +118,7 @@ function wireName(tool: CodexTool): string {
   return namespacedToolName(tool.namespace, tool.name);
 }
 
-function exactTool(environment: ChatGptTurnEnvironment, name: string): CodexTool | undefined {
+function exactTool(environment: BrokerTurnEnvironment, name: string): CodexTool | undefined {
   return environment.tools.find(tool => !tool.namespace && tool.name === name);
 }
 
@@ -126,7 +126,11 @@ function gatewayToolNameIsValid(name: string): boolean {
   return /^[A-Za-z0-9_$]+$/.test(name);
 }
 
-function safeVisibleTools(environment: ChatGptTurnEnvironment, contract: ChatGptMcpContract): CodexTool[] {
+function safeVisibleTools(environment: BrokerTurnEnvironment, contract: ChatGptMcpContract): CodexTool[] {
+  if ("kind" in environment && environment.kind === "external-agent") {
+    // Never expose native Codex helper tools or nested exec discovery for an external client.
+    return environment.tools;
+  }
   if (contract === "native") return environment.tools;
   const bridgeNamespaces = new Set(environment.tools
     .filter(tool => tool.namespace && BRIDGE_TOOL_NAMES.has(tool.name))
@@ -209,7 +213,7 @@ function assertGatewayToolArguments(name: string, args: Record<string, unknown>)
 }
 
 export function chatGptMcpInvocationTimeout(
-  environment: ChatGptTurnEnvironment & { expiresAt?: number },
+  environment: BrokerTurnEnvironment & { expiresAt?: number },
   now = Date.now(),
 ): number {
   const remaining = environment.expiresAt === undefined
@@ -231,7 +235,8 @@ function asMcpResult(value: BrokerToolResult) {
   };
 }
 
-function execGateway(environment: ChatGptTurnEnvironment): CodexTool | undefined {
+function execGateway(environment: BrokerTurnEnvironment): CodexTool | undefined {
+  if ("kind" in environment && environment.kind === "external-agent") return undefined;
   const tool = exactTool(environment, "exec");
   return tool?.freeform ? tool : undefined;
 }
@@ -554,7 +559,7 @@ export async function runChatGptMcpServer(options: {
 
   const invoke = async (
     bindingId: string,
-    bound: ChatGptTurnEnvironment & { expiresAt?: number },
+    bound: BrokerTurnEnvironment & { expiresAt?: number },
     tool: CodexTool,
     payload: { arguments?: Record<string, unknown>; input?: string },
     signal?: AbortSignal,
@@ -610,7 +615,7 @@ export async function runChatGptMcpServer(options: {
 
   const invokeNestedNative = (
     bindingId: string,
-    bound: ChatGptTurnEnvironment & { expiresAt?: number },
+    bound: BrokerTurnEnvironment & { expiresAt?: number },
     nestedToolName: string,
     freeform: boolean,
     payload: { arguments?: Record<string, unknown>; input?: string },

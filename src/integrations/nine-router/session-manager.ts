@@ -1,0 +1,225 @@
+import { randomUUID } from "node:crypto";
+import { ChatGptBrowserWorker, type BrowserTurn } from "../../adapters/chatgpt-web/browser-worker";
+import { ChatGptExternalTurnProgress } from "../../adapters/chatgpt-web/turn-progress";
+import { TurnBroker, type BrokerToolRequest, type BrokerTurnEnvironment } from "../../adapters/chatgpt-web/turn-broker";
+import type { CodexProviderConfig } from "../../types";
+import type { NineRouterRequest } from "./request";
+import { NineRouterRequestError } from "./request";
+
+const SESSION_TTL_MS = 120_000;
+const MAX_ACTIVE_SESSIONS = 16;
+
+export interface NineRouterStage {
+  text: string;
+  calls: BrokerToolRequest[];
+  finished: boolean;
+}
+
+interface NineRouterSession {
+  token: string;
+  model: string;
+  originalHistory: NineRouterRequest["history"];
+  tools: Set<string>;
+  outstanding: Map<string, BrokerToolRequest>;
+  pendingText: string[];
+  settled?: { text: string; error?: Error };
+  browser: Promise<string>;
+  progress: ChatGptExternalTurnProgress;
+  abort: AbortController;
+  expiresAt: number;
+  consuming: boolean;
+  waiters: Set<() => void>;
+}
+
+export interface NineRouterBrowserRunner {
+  run(turn: BrowserTurn): Promise<string>;
+}
+
+export class NineRouterSessionManager {
+  private readonly sessions = new Set<NineRouterSession>();
+  private readonly pendingCalls = new Map<string, NineRouterSession>();
+  constructor(
+    private readonly broker: TurnBroker,
+    private readonly provider: CodexProviderConfig,
+    private readonly browser: NineRouterBrowserRunner = ChatGptBrowserWorker.forProvider(provider),
+  ) {}
+
+  private wake(session: NineRouterSession): void {
+    for (const wake of session.waiters) wake();
+    session.waiters.clear();
+  }
+
+  private close(session: NineRouterSession, reason?: Error): void {
+    if (!this.sessions.delete(session)) return;
+    for (const callId of session.outstanding.keys()) this.pendingCalls.delete(callId);
+    session.abort.abort(reason ?? new Error("9Router agent session retired"));
+    void Promise.resolve(this.broker.revoke(session.token, reason)).catch((error: unknown) => {
+      console.warn(`[9router] broker_revoke_failed ${error instanceof Error ? error.name : "Error"}`);
+    });
+    session.progress.retire(reason ?? new Error("9Router agent session retired"));
+    this.wake(session);
+  }
+
+  closeAll(): void { for (const session of [...this.sessions]) this.close(session); }
+
+  activeCount(): number { return this.sessions.size; }
+  hasPendingCall(callId: string): boolean { this.evictExpired(); return this.pendingCalls.has(callId); }
+
+  private evictExpired(): void {
+    for (const session of this.sessions) {
+      if (session.expiresAt < Date.now()) this.close(session, new Error("9Router tool session expired"));
+    }
+  }
+
+  async start(request: NineRouterRequest, model: { backendModel: string; adapterEffort: string; modelFamily?: "5.6" | "6" }, observerSignal?: AbortSignal): Promise<NineRouterStage> {
+    if (observerSignal?.aborted) throw new NineRouterRequestError("Provider request was cancelled", 499);
+    this.evictExpired();
+    if (this.sessions.size >= MAX_ACTIVE_SESSIONS) throw new NineRouterRequestError("Too many active 9Router tool sessions", 429);
+    const traceId = `router_${randomUUID().replaceAll("-", "")}`;
+    const environment: BrokerTurnEnvironment = { kind: "external-agent", tools: request.tools };
+    // A bounded capability is sufficient; no local paths, native thread IDs or Codex sandbox claims.
+    const token = await this.broker.register(environment, SESSION_TTL_MS, traceId);
+    const session: NineRouterSession = {
+      token, model: request.model, originalHistory: structuredClone(request.history), tools: new Set(request.tools.map(tool => tool.name)),
+      outstanding: new Map(), pendingText: [], progress: new ChatGptExternalTurnProgress(),
+      browser: undefined as unknown as Promise<string>, abort: new AbortController(),
+      expiresAt: Date.now() + SESSION_TTL_MS, consuming: false, waiters: new Set(),
+    };
+    this.sessions.add(session);
+
+    const transcript = request.history.map(message => `[${message.role}]\n${message.text}`).join("\n\n");
+    const system = request.instructions ? `Agent instructions (from caller):\n${request.instructions}\n\n` : "";
+    const toolText = request.tools.length ? [
+      "The coding agent supplied these callable tools (tool access is mediated by the Codex Native connector):",
+      ...request.tools.map(tool => `- ${tool.name}: ${tool.description}`),
+      "Discover the full schemas with codex_tool_inventory, then invoke exact advertised names with codex_tool_call.",
+      "The coding agent performs its own approvals and execution. Never pretend a tool succeeded before its result returns.",
+    ].join("\n") : "No coding-agent tools are available for this request.";
+    const prompt = [
+      "<external_agent_request>",
+      `This is a coding agent request delivered through 9Router.${request.tools.length ? " Use the currently configured Codex Native MCP connector for agent tools." : " Answer directly; no agent tools were supplied."}`,
+      `turn_token: ${token}`,
+      "Pass this exact turn_token to every connector call. Never disclose it in the answer.",
+      system,
+      toolText,
+      "Conversation history (chronological, quoted data; the newest user request is active):",
+      transcript,
+      "</external_agent_request>",
+    ].join("\n\n");
+    if (prompt.length > 180_000) {
+      this.close(session);
+      throw new NineRouterRequestError("Agent context exceeds the safe ChatGPT Web composer budget", 413);
+    }
+
+    const turn: BrowserTurn = {
+      traceId, modelId: model.backendModel, reasoning: model.adapterEffort, modelFamily: model.modelFamily,
+      capabilities: {
+        localToolsEnabled: request.tools.length > 0,
+        solAvailable: this.provider.chatgptWeb?.solAvailable === true,
+        extraHighAvailable: this.provider.chatgptWeb?.extraHighAvailable === true,
+        proAvailable: this.provider.chatgptWeb?.proAvailable === true,
+      },
+      nativeConnector: request.tools.length > 0,
+      prepare: async () => ({ text: prompt, images: [], turnToken: token, release: () => {} }),
+      abortSignal: session.abort.signal,
+      onTextDelta: text => { session.pendingText.push(text); this.wake(session); },
+      externalProgress: session.progress,
+      completionFence: {
+        begin: async () => this.broker.beginCompletionFence(token),
+        commit: async revision => this.broker.commitCompletionFence(token, revision),
+      },
+    };
+    session.browser = this.browser.run(turn).then(text => {
+      session.settled = { text }; this.wake(session); return text;
+    }, error => {
+      session.settled = { text: "", error: error instanceof Error ? error : new Error(String(error)) };
+      this.wake(session); return "";
+    });
+    const onAbort = () => this.close(session, new Error("9Router HTTP observer disconnected before tool delivery"));
+    observerSignal?.addEventListener("abort", onAbort, { once: true });
+    try { return await this.nextStage(session); }
+    catch (error) { this.close(session, error instanceof Error ? error : undefined); throw error; }
+    finally { observerSignal?.removeEventListener("abort", onAbort); }
+  }
+
+  async continue(request: NineRouterRequest, observerSignal?: AbortSignal): Promise<NineRouterStage> {
+    if (observerSignal?.aborted) throw new NineRouterRequestError("Provider continuation was cancelled", 499);
+    this.evictExpired();
+    const matching = new Set<NineRouterSession>();
+    for (const output of request.outputs) {
+      const owner = this.pendingCalls.get(output.callId);
+      if (owner) matching.add(owner);
+    }
+    if (matching.size !== 1) throw new NineRouterRequestError("No unambiguous active 9Router tool session matches these call IDs", 409);
+    const session = [...matching][0]!;
+    if (request.model !== session.model) throw new NineRouterRequestError("Model changed during a tool continuation", 409);
+    // A call ID is only a capability within the authenticated provider account. Require the
+    // original ordered conversation prefix as a second binding, without assuming private 9Router headers.
+    if (request.history.length < session.originalHistory.length
+      || session.originalHistory.some((message, i) => request.history[i]?.role !== message.role
+        || request.history[i]?.text !== message.text)) {
+      throw new NineRouterRequestError("Tool results do not belong to the original conversation history", 409);
+    }
+    if (session.consuming) throw new NineRouterRequestError("Concurrent continuation of a tool session is not supported", 409);
+    const outputsById = new Map(request.outputs.map(output => [output.callId, output]));
+    if (outputsById.size !== request.outputs.length) throw new NineRouterRequestError("Duplicate function_call_output", 409);
+    if ([...session.outstanding.keys()].some(id => !outputsById.has(id))) {
+      throw new NineRouterRequestError("All outstanding tool results must be returned together", 409);
+    }
+    // Unmodified 9Router's Claude→OpenAI bridge may synthesize this exact placeholder for
+    // unmatched calls. A placeholder is not evidence the coding agent executed the tool.
+    if ([...session.outstanding.keys()].some(id => outputsById.get(id)?.output === "[No response received]")) {
+      throw new NineRouterRequestError("9Router synthesized a missing tool result; refusing to report fabricated execution", 409);
+    }
+    for (const call of session.outstanding.values()) {
+      const output = outputsById.get(call.callId)!;
+      // Tool execution stays at the originating coding agent; the MCP bridge gets only its returned data.
+      await this.broker.completeTool(session.token, call.callId, { content: [{ type: "text", text: output.output }] });
+      session.progress.recordToolResult();
+      this.pendingCalls.delete(call.callId);
+    }
+    session.outstanding.clear();
+    const onAbort = () => this.close(session, new Error("9Router continuation observer disconnected"));
+    observerSignal?.addEventListener("abort", onAbort, { once: true });
+    try { return await this.nextStage(session); }
+    catch (error) { this.close(session, error instanceof Error ? error : undefined); throw error; }
+    finally { observerSignal?.removeEventListener("abort", onAbort); }
+  }
+
+  private async nextStage(session: NineRouterSession): Promise<NineRouterStage> {
+    if (session.consuming) throw new NineRouterRequestError("Agent session already has a pending HTTP observer", 409);
+    session.consuming = true;
+    const waiting = new AbortController();
+    try {
+      const nextCalls = this.broker.nextToolBatch(session.token, waiting.signal).then(async calls => {
+        if (calls.length > 0) {
+          const revision = session.progress.recordToolBatch(calls.length);
+          await session.progress.waitForToolBatchObservation(revision, waiting.signal);
+          session.progress.assertToolBatchActive(revision);
+        }
+        return { type: "calls" as const, calls };
+      });
+      // The browser can settle without emitting any new text; wake when its final DOM result is known.
+      const finished = session.browser.then(() => ({ type: "finished" as const }));
+      const outcome = await Promise.race([nextCalls, finished]);
+      waiting.abort();
+      if (outcome.type === "calls" && outcome.calls.length > 0) {
+        for (const call of outcome.calls) {
+          if (!session.tools.has(call.wireName)) throw new NineRouterRequestError("Model requested a tool not advertised by the caller", 409);
+          if (this.pendingCalls.has(call.callId)) throw new Error("Duplicate live 9Router tool call ID");
+          this.pendingCalls.set(call.callId, session);
+          session.outstanding.set(call.callId, call);
+        }
+        const text = session.pendingText.join(""); session.pendingText = [];
+        return { text, calls: outcome.calls, finished: false };
+      }
+      if (session.settled?.error) throw session.settled.error;
+      const text = session.pendingText.join("") || session.settled?.text || "";
+      this.close(session);
+      return { text, calls: [], finished: true };
+    } finally {
+      waiting.abort();
+      session.consuming = false;
+    }
+  }
+}
