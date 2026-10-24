@@ -5,7 +5,7 @@ import { NineRouterRequestError } from "./errors";
 
 export { NineRouterRequestError } from "./errors";
 
-export interface NineRouterToolOutput { callId: string; output: string; }
+export interface NineRouterToolOutput { callId: string; output: string; isError?: boolean; }
 export interface NineRouterRequest {
   model: string;
   instructions: string;
@@ -101,8 +101,12 @@ export function parseNineRouterRequest(value: unknown): NineRouterRequest {
       if (typeof entry.call_id !== "string" || !/^call_[A-Za-z0-9_-]{1,59}$/.test(entry.call_id)) {
         throw new NineRouterRequestError("Invalid tool result call_id");
       }
-      outputs.push({ callId: entry.call_id, output: extractText(entry.output) });
-      history.push({ role: "tool", text: `Tool result ${entry.call_id}:\n${extractText(entry.output)}` });
+      const envelope = object(entry.output);
+      const toolText = envelope && Array.isArray(envelope.content)
+        ? extractText(envelope.content) : extractText(entry.output);
+      const isError = entry.is_error === true || entry.isError === true || envelope?.isError === true;
+      outputs.push({ callId: entry.call_id, output: toolText, ...(isError ? { isError: true } : {}) });
+      history.push({ role: "tool", text: `Tool ${isError ? "error" : "result"} ${entry.call_id}:\n${toolText}` });
       lastToolResultIndex = index;
       continue;
     }

@@ -209,7 +209,10 @@ export class NineRouterSessionManager {
     for (const call of session.outstanding.values()) {
       const output = outputsById.get(call.callId)!;
       // Tool execution stays at the originating coding agent; the MCP bridge gets only its returned data.
-      await this.broker.completeTool(session.token, call.callId, { content: [{ type: "text", text: output.output }] });
+      await this.broker.completeTool(session.token, call.callId, {
+        content: [{ type: "text", text: output.output }],
+        ...(output.isError ? { isError: true } : {}),
+      });
       session.progress.recordToolResult();
       this.pendingCalls.delete(call.callId);
     }

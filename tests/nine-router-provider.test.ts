@@ -120,6 +120,21 @@ test("inline images preserve attachment order while remote and unknown blocks fa
   ] })).toThrow("Unsupported content block");
 });
 
+test("explicit error-bearing agent result envelopes retain MCP isError without guessing from ordinary text", () => {
+  const model = "chatgpt-web/gpt-5.6-luna";
+  const callId = `call_${"e".repeat(32)}`;
+  const toRequest = (output: unknown, extra?: Record<string, unknown>) => parseNineRouterRequest({ model,
+    input: [{ role: "user", content: "Do work" }, { type: "function_call_output", call_id: callId, output, ...extra }],
+  });
+  const structured = toRequest({ isError: true, content: [{ type: "text", text: "permission denied" }] });
+  expect(structured.outputs).toEqual([{ callId, output: "permission denied", isError: true }]);
+  expect(structured.history[1]?.text).toContain("Tool error");
+  const explicit = toRequest("permission denied", { is_error: true });
+  expect(explicit.outputs[0]?.isError).toBe(true);
+  const ordinary = toRequest("Error: displayed by a legitimate file");
+  expect(ordinary.outputs[0]?.isError).toBeUndefined();
+});
+
 test("integration keys are independently generated, rotated and recoverably disabled outside Git", () => {
   const keyDir = mkdtempSync(join(tmpdir(), "cgw-9router-key-"));
   try {
@@ -289,6 +304,63 @@ test("authenticated provider Responses route emits standard SSE and nonstream JS
     expect(frames).toContain("event: response.completed");
     const json = await (await send(false)).json() as { output: Array<{ type: string; content?: Array<{ text: string }> }> };
     expect(json.output.find(item => item.type === "message")?.content?.[0]?.text).toBe("Hello from 9Router");
+  } finally { provider.close(); }
+});
+
+test("9Router HTTP Responses streams a real function call, then resumes from function_call_output", async () => {
+  const config = defaultConfig("full");
+  config.solAvailable = false;
+  config.browserInteractionMode = "automatic";
+  const apiKey = "test-only_" + "q".repeat(40);
+  const manager = new NineRouterSessionManager(broker, providerConfig(config), {
+    async run(turn) {
+      const token = (await turn.prepare()).turnToken!;
+      const claim = await callTurnBroker<{ bindingId: string; activityId: string }>(broker.socketPath,
+        { method: "claim", token });
+      await callTurnBroker(broker.socketPath, { method: "activity_complete", token, activityId: claim.activityId });
+      const invocation = callTurnBroker<{ content: Array<{ text: string }> }>(broker.socketPath, {
+        method: "invoke", bindingId: claim.bindingId, wireName: "Read", freeform: false,
+        arguments: { path: "app.ts" },
+      }, null);
+      const progress = turn.externalProgress!;
+      while (progress.snapshot().lastToolBatchRevision === 0) {
+        await progress.waitForChange(progress.snapshot().revision);
+      }
+      await progress.acknowledgeToolBatch(progress.snapshot().lastToolBatchRevision);
+      const result = await invocation;
+      return `File content: ${result.content[0]?.text}`;
+    },
+  });
+  const provider = new NineRouterProvider(config, broker, apiKey, manager);
+  const path = "/integrations/9router/v1/responses";
+  const body = (input: unknown) => new Request(`http://127.0.0.1${path}`, {
+    method: "POST", headers: { authorization: `Bearer ${apiKey}`, "content-type": "application/json" },
+    body: JSON.stringify({ model: "chatgpt-web/gpt-5.6-luna", stream: true, tools: [advertised], input }),
+  });
+  try {
+    const first = await provider.handle(body("Read app.ts"), path);
+    expect(first.status).toBe(200);
+    const frames = await first.text();
+    expect(frames).toContain("event: response.output_item.added");
+    expect(frames).toContain("event: response.function_call_arguments.delta");
+    expect(frames).toContain("event: response.output_item.done");
+    const toolEvents = [...frames.matchAll(/^data: (\{.+\})$/gm)]
+      .map(match => JSON.parse(match[1]!) as Record<string, unknown>);
+    const done = toolEvents.find(event => event.type === "response.output_item.done" &&
+      (event.item as Record<string, unknown> | undefined)?.type === "function_call");
+    const item = done?.item as { call_id: string; name: string; arguments: string } | undefined;
+    expect(item?.name).toBe("Read");
+    expect(JSON.parse(item!.arguments)).toEqual({ path: "app.ts" });
+    expect(provider.activeCount).toBe(1);
+    const last = await provider.handle(body([
+      { role: "user", content: "Read app.ts" },
+      { type: "function_call", call_id: item!.call_id, name: "Read", arguments: item!.arguments },
+      { type: "function_call_output", call_id: item!.call_id, output: "export const live = true" },
+    ]), path);
+    const finalFrames = await last.text();
+    expect(finalFrames).toContain("File content: export const live = true");
+    expect(finalFrames).toContain("event: response.completed");
+    expect(provider.activeCount).toBe(0);
   } finally { provider.close(); }
 });
 
