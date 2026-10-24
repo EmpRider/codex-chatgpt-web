@@ -172,12 +172,12 @@
       "epic": "R9-E03",
       "title": "Normalize system, developer, user and assistant history",
       "file": "items/R9-010-normalize-system-developer-user-and-assistant-history.md",
-      "status": "in_progress",
+      "status": "done",
       "dependsOn": [
         "R9-008",
         "R9-002"
       ],
-      "evidence": [],
+      "evidence": ["src/integrations/nine-router/request.ts role-preserving normalizer and inline image attachments; src/integrations/nine-router/session-manager.ts bounded browser image preparation; tests/nine-router-provider.test.ts fixtures/image-history tests (20 pass)"],
       "blockedReason": null,
       "updatedAt": "2026-10-24T11:42:13.000Z"
     },
@@ -186,141 +186,141 @@
       "epic": "R9-E03",
       "title": "Normalize advertised tools and validate input schemas",
       "file": "items/R9-011-normalize-advertised-tools-and-validate-input-schemas.md",
-      "status": "todo",
+      "status": "done",
       "dependsOn": [
         "R9-008",
         "R9-010"
       ],
-      "evidence": [],
+      "evidence": ["src/integrations/nine-router/tool-policy.ts Ajv schema verification/allowlisted function declaration; src/adapters/chatgpt-web/mcp-server.ts external argument validation; tests/nine-router-provider.test.ts schema/reserved-name/duplicate tests"],
       "blockedReason": null,
-      "updatedAt": null
+      "updatedAt": "2026-10-24T12:45:00.000Z"
     },
     {
       "id": "R9-012",
       "epic": "R9-E03",
       "title": "Map tool_choice and special tool kinds safely",
       "file": "items/R9-012-map-tool-choice-and-special-tool-kinds-safely.md",
-      "status": "todo",
+      "status": "in_progress",
       "dependsOn": [
         "R9-011"
       ],
       "evidence": [],
       "blockedReason": null,
-      "updatedAt": null
+      "updatedAt": "2026-10-24T12:45:00.000Z"
     },
     {
       "id": "R9-013",
       "epic": "R9-E03",
       "title": "Separate external tool capability from trusted Codex sandbox state",
       "file": "items/R9-013-separate-external-tool-capability-from-trusted-codex-sandbox-state.md",
-      "status": "todo",
+      "status": "done",
       "dependsOn": [
         "R9-003",
         "R9-011"
       ],
-      "evidence": [],
+      "evidence": ["src/adapters/chatgpt-web/turn-broker.ts distinct external-agent owner; src/adapters/chatgpt-web/mcp-server.ts reject native-only shortcut calls and validate external schema; tests/nine-router-provider.test.ts fake sandbox and native shortcut refusal"],
       "blockedReason": null,
-      "updatedAt": null
+      "updatedAt": "2026-10-24T12:45:00.000Z"
     },
     {
       "id": "R9-014",
       "epic": "R9-E03",
       "title": "Define deterministic external turn and browser-session ownership",
       "file": "items/R9-014-define-deterministic-external-turn-and-browser-session-ownership.md",
-      "status": "todo",
+      "status": "done",
       "dependsOn": [
         "R9-010",
         "R9-013"
       ],
-      "evidence": [],
+      "evidence": ["src/integrations/nine-router/session-manager.ts broker-scoped opaque call owner and original-history binding; tests/nine-router-provider.test.ts simultaneous coding-agent turns, attempted cross-session handoff, forged/missing tool result and deterministic cleanup"],
       "blockedReason": null,
-      "updatedAt": null
+      "updatedAt": "2026-10-24T12:45:00.000Z"
     },
     {
       "id": "R9-015",
       "epic": "R9-E04",
       "title": "Define pluggable agent turn owner for the browser adapter",
       "file": "items/R9-015-define-pluggable-agent-turn-owner-for-the-browser-adapter.md",
-      "status": "todo",
+      "status": "done",
       "dependsOn": [
         "R9-013",
         "R9-014"
       ],
-      "evidence": [],
+      "evidence": ["src/integrations/nine-router/session-manager.ts separate external BrowserTurn factory and original browser worker; src/server.ts optional isolated dispatch; tests/nine-router-provider.test.ts no-tool and broker tests; native lifecycle suite passes"],
       "blockedReason": null,
-      "updatedAt": null
+      "updatedAt": "2026-10-24T12:45:00.000Z"
     },
     {
       "id": "R9-016",
       "epic": "R9-E04",
       "title": "Extend TurnBroker with external-agent scoped capabilities",
       "file": "items/R9-016-extend-turnbroker-with-external-agent-scoped-capabilities.md",
-      "status": "todo",
+      "status": "done",
       "dependsOn": [
         "R9-015"
       ],
-      "evidence": [],
+      "evidence": ["src/adapters/chatgpt-web/turn-broker.ts external-agent environment discriminator with no cwd/roots; src/integrations/nine-router/session-manager.ts broker registration and call revocation; tests/nine-router-provider.test.ts real TurnBroker tool roundtrips and isolation"],
       "blockedReason": null,
-      "updatedAt": null
+      "updatedAt": "2026-10-24T12:45:00.000Z"
     },
     {
       "id": "R9-017",
       "epic": "R9-E04",
       "title": "Expose agent-neutral inventory and calls through existing MCP tunnel",
       "file": "items/R9-017-expose-agent-neutral-inventory-and-calls-through-existing-mcp-tunnel.md",
-      "status": "todo",
+      "status": "done",
       "dependsOn": [
         "R9-011",
         "R9-016"
       ],
-      "evidence": [],
+      "evidence": ["tests/nine-router-mcp.test.ts: real native-contract MCP stdio process, external-only inventory, refusal of direct Codex convenience tools, Ajv argument rejection and broker-queued tool result roundtrip (1 pass, 14 assertions); src/adapters/chatgpt-web/mcp-server.ts"],
       "blockedReason": null,
-      "updatedAt": null
+      "updatedAt": "2026-10-24T12:45:00.000Z"
     },
     {
       "id": "R9-018",
       "epic": "R9-E04",
       "title": "Compile truthful generic-agent prompts, plugins and skills context",
       "file": "items/R9-018-compile-truthful-generic-agent-prompts-plugins-and-skills-context.md",
-      "status": "todo",
+      "status": "done",
       "dependsOn": [
         "R9-010",
         "R9-015",
         "R9-017"
       ],
-      "evidence": [],
+      "evidence": ["src/integrations/nine-router/session-manager.ts agent-neutral ChatGPT browser prompt and exact tunnel connector identity; tests/nine-router-provider.test.ts Claude Code/OpenCode role/skill/tool-catalog fixture and unchanged native prompt suite"],
       "blockedReason": null,
-      "updatedAt": null
+      "updatedAt": "2026-10-24T12:50:00.000Z"
     },
     {
       "id": "R9-019",
       "epic": "R9-E04",
       "title": "Preserve browser and tunnel lifecycle through external tool rounds",
       "file": "items/R9-019-preserve-browser-and-tunnel-lifecycle-through-external-tool-rounds.md",
-      "status": "todo",
+      "status": "done",
       "dependsOn": [
         "R9-016",
         "R9-017",
         "R9-018"
       ],
-      "evidence": [],
+      "evidence": ["src/integrations/nine-router/session-manager.ts one browser owner over sequential rounds, native progress fences and five-tab concurrency shared limit; abandoned tool-result timer cleanup; tests/nine-router-provider.test.ts sequential two-tool round, disconnect, 35ms expiry and cancellation"],
       "blockedReason": null,
-      "updatedAt": null
+      "updatedAt": "2026-10-24T13:00:00.000Z"
     },
     {
       "id": "R9-020",
       "epic": "R9-E05",
       "title": "Queue ChatGPT MCP invocations as agent-owned requests",
       "file": "items/R9-020-queue-chatgpt-mcp-invocations-as-agent-owned-requests.md",
-      "status": "todo",
+      "status": "done",
       "dependsOn": [
         "R9-016",
         "R9-017",
         "R9-019"
       ],
-      "evidence": [],
+      "evidence": ["tests/nine-router-mcp.test.ts genuine stdio codex_tool_call queued by TurnBroker with no provider-local execution; tests/nine-router-provider.test.ts parallel and sequential pending broker call IDs, unknown call refusal, and actual agent result settlement"],
       "blockedReason": null,
-      "updatedAt": null
+      "updatedAt": "2026-10-24T13:00:00.000Z"
     },
     {
       "id": "R9-021",

@@ -8,6 +8,7 @@ import type { BrokerTurnEnvironment } from "./turn-broker";
 import { CODEX_COMPACTION_CONTROL_WIRE_NAME } from "./native-compaction-control";
 import { callTurnBroker, TurnBrokerTimeoutError, type BrokerRetirementDiagnostics, type BrokerToolResult } from "./turn-broker";
 import { observeMcpToolCalls } from "./mcp-observation";
+import { assertNineRouterToolArguments } from "../../integrations/nine-router/tool-policy";
 
 interface ClaimedTurn {
   bindingId: string;
@@ -143,6 +144,12 @@ function safeVisibleTools(environment: BrokerTurnEnvironment, contract: ChatGptM
     && (tool.namespace !== undefined || tool.name !== "exec")
     && (!tool.namespace || !bridgeNamespaces.has(tool.namespace))
   ));
+}
+
+export function requireNativeToolOwner(environment: BrokerTurnEnvironment): void {
+  if ("kind" in environment && environment.kind === "external-agent") {
+    throw new Error("External coding agents must use codex_tool_inventory and codex_tool_call; native Codex shortcuts are unavailable");
+  }
 }
 
 function isAgentWaitTool(tool: CodexTool): boolean {
@@ -658,6 +665,7 @@ export async function runChatGptMcpServer(options: {
       async claimed => {
         const { cmd, workdir, yield_time_ms, max_output_tokens, tty, sandbox_permissions, justification, prefix_rule } = input;
         const bound = claimed.environment;
+        requireNativeToolOwner(bound);
         const permissions = {
           ...(sandbox_permissions !== undefined ? { sandbox_permissions } : {}),
           ...(justification !== undefined ? { justification } : {}),
@@ -721,6 +729,7 @@ export async function runChatGptMcpServer(options: {
       async claimed => {
         const { session_id, chars, yield_time_ms, max_output_tokens } = input;
         const bound = claimed.environment;
+        requireNativeToolOwner(bound);
         const tool = exactTool(bound, "write_stdin");
         const payload = { arguments: {
           session_id,
@@ -750,6 +759,7 @@ export async function runChatGptMcpServer(options: {
       async claimed => {
         const { patch } = input;
         const bound = claimed.environment;
+        requireNativeToolOwner(bound);
         const tool = exactTool(bound, "apply_patch");
         if (!tool) return invokeNestedNative(claimed.bindingId, bound, "apply_patch", true, { input: patch }, extra.signal);
         return tool.freeform
@@ -778,6 +788,7 @@ export async function runChatGptMcpServer(options: {
       async claimed => {
         const { path, detail } = input;
         const bound = claimed.environment;
+        requireNativeToolOwner(bound);
         const tool = exactTool(bound, "view_image");
         const payload = { arguments: { path, ...(detail ? { detail } : {}) } };
         return tool
@@ -963,6 +974,9 @@ export async function runChatGptMcpServer(options: {
         if (input !== undefined) throw new Error(`Function Codex tool ${wire_name} does not accept freeform input`);
         const invocationArguments = args ?? {};
         assertBrowserToolArguments(tool, invocationArguments);
+        if ("kind" in bound && bound.kind === "external-agent") {
+          assertNineRouterToolArguments(tool, invocationArguments);
+        }
         return invoke(claimed.bindingId, bound, tool, { arguments: invocationArguments }, extra.signal);
       });
     },

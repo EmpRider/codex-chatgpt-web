@@ -3,11 +3,13 @@ import { ChatGptBrowserWorker, type BrowserTurn } from "../../adapters/chatgpt-w
 import { ChatGptExternalTurnProgress } from "../../adapters/chatgpt-web/turn-progress";
 import { TurnBroker, type BrokerToolRequest, type BrokerTurnEnvironment } from "../../adapters/chatgpt-web/turn-broker";
 import type { CodexProviderConfig } from "../../types";
+import { CHATGPT_CONNECTOR_NAME } from "../../config";
+import { MAX_CHATGPT_BROWSER_TABS } from "../../adapters/chatgpt-web/concurrency";
 import type { NineRouterRequest } from "./request";
 import { NineRouterRequestError } from "./request";
 
 const SESSION_TTL_MS = 120_000;
-const MAX_ACTIVE_SESSIONS = 16;
+const MAX_ACTIVE_SESSIONS = MAX_CHATGPT_BROWSER_TABS;
 
 export interface NineRouterStage {
   text: string;
@@ -20,6 +22,8 @@ interface NineRouterSession {
   model: string;
   originalHistory: NineRouterRequest["history"];
   tools: Set<string>;
+  toolChoice: NineRouterRequest["toolChoice"];
+  choiceFulfilled: boolean;
   outstanding: Map<string, BrokerToolRequest>;
   pendingText: string[];
   settled?: { text: string; error?: Error };
@@ -27,6 +31,7 @@ interface NineRouterSession {
   progress: ChatGptExternalTurnProgress;
   abort: AbortController;
   expiresAt: number;
+  expiryTimer?: ReturnType<typeof setTimeout>;
   consuming: boolean;
   waiters: Set<() => void>;
 }
@@ -42,6 +47,7 @@ export class NineRouterSessionManager {
     private readonly broker: TurnBroker,
     private readonly provider: CodexProviderConfig,
     private readonly browser: NineRouterBrowserRunner = ChatGptBrowserWorker.forProvider(provider),
+    private readonly toolResultTtlMs = SESSION_TTL_MS,
   ) {}
 
   private wake(session: NineRouterSession): void {
@@ -51,6 +57,7 @@ export class NineRouterSessionManager {
 
   private close(session: NineRouterSession, reason?: Error): void {
     if (!this.sessions.delete(session)) return;
+    clearTimeout(session.expiryTimer);
     for (const callId of session.outstanding.keys()) this.pendingCalls.delete(callId);
     session.abort.abort(reason ?? new Error("9Router agent session retired"));
     void Promise.resolve(this.broker.revoke(session.token, reason)).catch((error: unknown) => {
@@ -65,9 +72,28 @@ export class NineRouterSessionManager {
   activeCount(): number { return this.sessions.size; }
   hasPendingCall(callId: string): boolean { this.evictExpired(); return this.pendingCalls.has(callId); }
 
+  private awaitAgentResults(session: NineRouterSession): void {
+    clearTimeout(session.expiryTimer);
+    session.expiresAt = Date.now() + this.toolResultTtlMs;
+    session.expiryTimer = setTimeout(() => {
+      if (session.outstanding.size > 0) this.close(session, new Error("9Router agent tool results expired"));
+    }, this.toolResultTtlMs);
+    session.expiryTimer.unref?.();
+  }
+
+  private resumeBrowser(session: NineRouterSession): void {
+    clearTimeout(session.expiryTimer);
+    session.expiryTimer = undefined;
+    // ChatGPT browser progress itself has separate native deadlines. Do not expire a live
+    // model generation just because another agent started a second 9Router request.
+    session.expiresAt = Number.POSITIVE_INFINITY;
+  }
+
   private evictExpired(): void {
     for (const session of this.sessions) {
-      if (session.expiresAt < Date.now()) this.close(session, new Error("9Router tool session expired"));
+      if (session.outstanding.size > 0 && session.expiresAt < Date.now()) {
+        this.close(session, new Error("9Router agent tool results expired"));
+      }
     }
   }
 
@@ -76,28 +102,35 @@ export class NineRouterSessionManager {
     this.evictExpired();
     if (this.sessions.size >= MAX_ACTIVE_SESSIONS) throw new NineRouterRequestError("Too many active 9Router tool sessions", 429);
     const traceId = `router_${randomUUID().replaceAll("-", "")}`;
-    const environment: BrokerTurnEnvironment = { kind: "external-agent", tools: request.tools };
+    const chosenTool = typeof request.toolChoice === "object" ? request.toolChoice.name : undefined;
+    const tools = request.toolChoice === "none" ? []
+      : chosenTool ? request.tools.filter(tool => tool.name === chosenTool)
+      : request.tools;
+    const environment: BrokerTurnEnvironment = { kind: "external-agent", tools };
     // A bounded capability is sufficient; no local paths, native thread IDs or Codex sandbox claims.
-    const token = await this.broker.register(environment, SESSION_TTL_MS, traceId);
+    const token = await this.broker.register(environment, this.toolResultTtlMs, traceId);
     const session: NineRouterSession = {
-      token, model: request.model, originalHistory: structuredClone(request.history), tools: new Set(request.tools.map(tool => tool.name)),
+      token, model: request.model, originalHistory: structuredClone(request.history),
+      tools: new Set(tools.map(tool => tool.name)), toolChoice: request.toolChoice, choiceFulfilled: false,
       outstanding: new Map(), pendingText: [], progress: new ChatGptExternalTurnProgress(),
       browser: undefined as unknown as Promise<string>, abort: new AbortController(),
-      expiresAt: Date.now() + SESSION_TTL_MS, consuming: false, waiters: new Set(),
+      expiresAt: Number.POSITIVE_INFINITY, consuming: false, waiters: new Set(),
     };
     this.sessions.add(session);
 
     const transcript = request.history.map(message => `[${message.role}]\n${message.text}`).join("\n\n");
     const system = request.instructions ? `Agent instructions (from caller):\n${request.instructions}\n\n` : "";
-    const toolText = request.tools.length ? [
-      "The coding agent supplied these callable tools (tool access is mediated by the Codex Native connector):",
-      ...request.tools.map(tool => `- ${tool.name}: ${tool.description}`),
+    const toolText = tools.length ? [
+      `The coding agent supplied these callable tools. The ChatGPT-side connector named ${CHATGPT_CONNECTOR_NAME} is the tunnel transport; it does not mean the coding agent is Codex:`,
+      ...tools.map(tool => `- ${tool.name}: ${tool.description}`),
+      ...(request.toolChoice === "required" ? ["The caller requires at least one advertised function call in this turn."] : []),
+      ...(typeof request.toolChoice === "object" ? [`The caller explicitly requires a call to ${request.toolChoice.name} in this turn.`] : []),
       "Discover the full schemas with codex_tool_inventory, then invoke exact advertised names with codex_tool_call.",
       "The coding agent performs its own approvals and execution. Never pretend a tool succeeded before its result returns.",
     ].join("\n") : "No coding-agent tools are available for this request.";
     const prompt = [
       "<external_agent_request>",
-      `This is a coding agent request delivered through 9Router.${request.tools.length ? " Use the currently configured Codex Native MCP connector for agent tools." : " Answer directly; no agent tools were supplied."}`,
+      `This is a coding agent request delivered through 9Router; the caller may be Claude Code, Codex, OpenCode or another compatible agent.${tools.length ? ` Use the already-configured ChatGPT connector named ${CHATGPT_CONNECTOR_NAME} for agent tools.` : " Answer directly; no agent tools were supplied."}`,
       `turn_token: ${token}`,
       "Pass this exact turn_token to every connector call. Never disclose it in the answer.",
       system,
@@ -110,17 +143,18 @@ export class NineRouterSessionManager {
       this.close(session);
       throw new NineRouterRequestError("Agent context exceeds the safe ChatGPT Web composer budget", 413);
     }
+    const images = request.history.flatMap(message => message.images ?? []);
 
     const turn: BrowserTurn = {
       traceId, modelId: model.backendModel, reasoning: model.adapterEffort, modelFamily: model.modelFamily,
       capabilities: {
-        localToolsEnabled: request.tools.length > 0,
+        localToolsEnabled: tools.length > 0,
         solAvailable: this.provider.chatgptWeb?.solAvailable === true,
         extraHighAvailable: this.provider.chatgptWeb?.extraHighAvailable === true,
         proAvailable: this.provider.chatgptWeb?.proAvailable === true,
       },
-      nativeConnector: request.tools.length > 0,
-      prepare: async () => ({ text: prompt, images: [], turnToken: token, release: () => {} }),
+      nativeConnector: tools.length > 0,
+      prepare: async () => ({ text: prompt, images, turnToken: token, release: () => {} }),
       abortSignal: session.abort.signal,
       onTextDelta: text => { session.pendingText.push(text); this.wake(session); },
       externalProgress: session.progress,
@@ -157,7 +191,8 @@ export class NineRouterSessionManager {
     // original ordered conversation prefix as a second binding, without assuming private 9Router headers.
     if (request.history.length < session.originalHistory.length
       || session.originalHistory.some((message, i) => request.history[i]?.role !== message.role
-        || request.history[i]?.text !== message.text)) {
+        || request.history[i]?.text !== message.text
+        || JSON.stringify(request.history[i]?.images ?? []) !== JSON.stringify(message.images ?? []))) {
       throw new NineRouterRequestError("Tool results do not belong to the original conversation history", 409);
     }
     if (session.consuming) throw new NineRouterRequestError("Concurrent continuation of a tool session is not supported", 409);
@@ -179,6 +214,7 @@ export class NineRouterSessionManager {
       this.pendingCalls.delete(call.callId);
     }
     session.outstanding.clear();
+    this.resumeBrowser(session);
     const onAbort = () => this.close(session, new Error("9Router continuation observer disconnected"));
     observerSignal?.addEventListener("abort", onAbort, { once: true });
     try { return await this.nextStage(session); }
@@ -206,14 +242,22 @@ export class NineRouterSessionManager {
       if (outcome.type === "calls" && outcome.calls.length > 0) {
         for (const call of outcome.calls) {
           if (!session.tools.has(call.wireName)) throw new NineRouterRequestError("Model requested a tool not advertised by the caller", 409);
+          if (typeof session.toolChoice === "object" && call.wireName !== session.toolChoice.name) {
+            throw new NineRouterRequestError("Model requested a different function than the caller's explicit tool_choice", 409);
+          }
           if (this.pendingCalls.has(call.callId)) throw new Error("Duplicate live 9Router tool call ID");
           this.pendingCalls.set(call.callId, session);
           session.outstanding.set(call.callId, call);
         }
+        session.choiceFulfilled = true;
+        this.awaitAgentResults(session);
         const text = session.pendingText.join(""); session.pendingText = [];
         return { text, calls: outcome.calls, finished: false };
       }
       if (session.settled?.error) throw session.settled.error;
+      if (!session.choiceFulfilled && (session.toolChoice === "required" || typeof session.toolChoice === "object")) {
+        throw new NineRouterRequestError("ChatGPT Web finished without the tool call required by the coding agent", 422);
+      }
       const text = session.pendingText.join("") || session.settled?.text || "";
       this.close(session);
       return { text, calls: [], finished: true };

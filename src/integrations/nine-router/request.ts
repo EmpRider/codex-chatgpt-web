@@ -1,15 +1,17 @@
 import type { CodexTool } from "../../types";
+import type { ChatGptWebPromptImage } from "../../adapters/chatgpt-web/prompt";
+import { normalizeNineRouterTool } from "./tool-policy";
+import { NineRouterRequestError } from "./errors";
 
-export class NineRouterRequestError extends Error {
-  constructor(message: string, readonly status = 400) { super(message); }
-}
+export { NineRouterRequestError } from "./errors";
 
 export interface NineRouterToolOutput { callId: string; output: string; }
 export interface NineRouterRequest {
   model: string;
   instructions: string;
-  history: Array<{ role: "user" | "assistant" | "system" | "developer" | "tool"; text: string }>;
+  history: Array<{ role: "user" | "assistant" | "system" | "developer" | "tool"; text: string; images?: ChatGptWebPromptImage[] }>;
   tools: CodexTool[];
+  toolChoice: "auto" | "none" | "required" | { name: string };
   outputs: NineRouterToolOutput[];
   /** A new user turn follows earlier, already-completed tool history. */
   newUserAfterToolHistory: boolean;
@@ -19,18 +21,31 @@ export interface NineRouterRequest {
 const object = (value: unknown): Record<string, unknown> | undefined =>
   value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
 
-function extractText(value: unknown): string {
+function extractText(value: unknown, images?: ChatGptWebPromptImage[], refPrefix = "img"): string {
   if (typeof value === "string") return value;
-  if (Array.isArray(value)) return value.map(part => {
+  if (Array.isArray(value)) return value.map((part, index) => {
     if (typeof part === "string") return part;
     const entry = object(part);
     if (!entry) return "";
+    if ((entry.type === "input_image" || entry.type === "image_url") && images) {
+      const raw = entry.image_url;
+      const url = typeof raw === "string" ? raw : object(raw)?.url;
+      if (typeof url !== "string" || !/^data:image\/(?:png|jpe?g|gif|webp);base64,[A-Za-z0-9+/=]+$/i.test(url)) {
+        throw new NineRouterRequestError("Images must be inline base64 PNG/JPEG/GIF/WebP; remote image links cannot be transported to ChatGPT Web", 422);
+      }
+      if (url.length > 27_000_000) throw new NineRouterRequestError("One image exceeds ChatGPT Web's 20 MB limit", 413);
+      const ref = `${refPrefix}_${index}`;
+      images.push({ ref, imageUrl: url, ...(typeof entry.detail === "string" ? { detail: entry.detail } : {}) });
+      return `[Attached image: ${ref}]`;
+    }
     if (entry.type === "input_image" || entry.type === "image_url" || entry.type === "input_audio" || entry.type === "input_file") {
       throw new NineRouterRequestError(`Unsupported multimodal content block: ${entry.type}`, 422);
     }
-    if (typeof entry.text === "string") return entry.text;
-    if (typeof entry.output === "string") return entry.output;
-    return "";
+    if (entry.type === "input_text" || entry.type === "output_text" || entry.type === "text" || entry.type === "summary_text") {
+      if (typeof entry.text !== "string") throw new NineRouterRequestError(`Malformed ${entry.type} block`);
+      return entry.text;
+    }
+    throw new NineRouterRequestError(`Unsupported content block: ${String(entry.type ?? "missing")}`, 422);
   }).filter(Boolean).join("\n");
   if (value === null || value === undefined) return "";
   return JSON.stringify(value);
@@ -49,21 +64,30 @@ export function parseNineRouterRequest(value: unknown): NineRouterRequest {
   if (body.tools !== undefined && (!Array.isArray(body.tools) || body.tools.length > 256)) {
     throw new NineRouterRequestError("tools must be an array of up to 256 functions");
   }
-  const tools: CodexTool[] = (body.tools as unknown[] | undefined ?? []).map((raw, index) => {
-    const entry = object(raw);
-    if (!entry || entry.type !== "function" || typeof entry.name !== "string"
-      || !/^[A-Za-z0-9_.$-]{1,128}$/.test(entry.name)
-      || typeof entry.description !== "string" || entry.description.length > 12_000) {
-      throw new NineRouterRequestError(`Unsupported function tool at index ${index}`);
-    }
-    const parameters = entry.parameters ?? { type: "object", properties: {} };
-    if (!object(parameters)) throw new NineRouterRequestError(`Invalid parameters for ${entry.name}`);
-    return { name: entry.name, description: entry.description, parameters: parameters as Record<string, unknown> };
-  });
+  const tools: CodexTool[] = (body.tools as unknown[] | undefined ?? []).map(normalizeNineRouterTool);
   const names = new Set<string>();
   for (const tool of tools) {
     if (names.has(tool.name)) throw new NineRouterRequestError(`Duplicate tool: ${tool.name}`);
     names.add(tool.name);
+  }
+  let toolChoice: NineRouterRequest["toolChoice"] = "auto";
+  const choice = body.tool_choice;
+  if (choice !== undefined && choice !== null) {
+    if (choice === "auto" || choice === "none" || choice === "required") toolChoice = choice;
+    else {
+      const selected = object(choice);
+      const named = typeof selected?.name === "string" ? selected.name : object(selected?.function)?.name;
+      if (selected?.type !== "function" || typeof named !== "string") {
+        throw new NineRouterRequestError("Unsupported 9Router tool_choice; expected auto, none, required or a named function", 422);
+      }
+      toolChoice = { name: named };
+    }
+  }
+  if ((toolChoice === "required" || typeof toolChoice === "object") && tools.length === 0) {
+    throw new NineRouterRequestError("Requested tool_choice requires declared functions", 422);
+  }
+  if (typeof toolChoice === "object" && !names.has(toolChoice.name)) {
+    throw new NineRouterRequestError(`Required function ${toolChoice.name} is not advertised`, 422);
   }
   const history: NineRouterRequest["history"] = [];
   const outputs: NineRouterToolOutput[] = [];
@@ -74,7 +98,7 @@ export function parseNineRouterRequest(value: unknown): NineRouterRequest {
     const entry = object(raw);
     if (!entry) throw new NineRouterRequestError(`Invalid input item at index ${index}`);
     if (entry.type === "function_call_output") {
-      if (typeof entry.call_id !== "string" || !/^call_[A-Za-z0-9_-]{20,128}$/.test(entry.call_id)) {
+      if (typeof entry.call_id !== "string" || !/^call_[A-Za-z0-9_-]{1,59}$/.test(entry.call_id)) {
         throw new NineRouterRequestError("Invalid tool result call_id");
       }
       outputs.push({ callId: entry.call_id, output: extractText(entry.output) });
@@ -96,12 +120,19 @@ export function parseNineRouterRequest(value: unknown): NineRouterRequest {
       continue;
     }
     if (entry.role === "user" || entry.role === "assistant" || entry.role === "system" || entry.role === "developer") {
-      history.push({ role: entry.role, text: extractText(entry.content) });
+      const images: ChatGptWebPromptImage[] = [];
+      const content = extractText(entry.content, images, `r9_${index}`);
+      history.push({ role: entry.role, text: content, ...(images.length ? { images } : {}) });
       if (entry.role === "user") lastUserIndex = index;
       continue;
     }
     // Fail closed: silently dropping multimodal or proprietary control items changes agent semantics.
     throw new NineRouterRequestError(`Unsupported Responses input item at index ${index}`);
+  }
+  const images = history.flatMap(message => message.images ?? []);
+  if (images.length > 10) throw new NineRouterRequestError("At most 10 inline images are supported by ChatGPT Web", 413);
+  if (images.reduce((total, image) => total + image.imageUrl.length, 0) > 68_000_000) {
+    throw new NineRouterRequestError("Total inline images exceed ChatGPT Web's 50 MB attachment budget", 413);
   }
   if (history.length === 0 && outputs.length === 0) throw new NineRouterRequestError("A user input or tool result is required");
   return {
@@ -109,6 +140,7 @@ export function parseNineRouterRequest(value: unknown): NineRouterRequest {
     instructions: body.instructions ?? "",
     history,
     tools,
+    toolChoice,
     outputs,
     newUserAfterToolHistory: lastToolResultIndex >= 0 && lastUserIndex > lastToolResultIndex,
     stream: body.stream === true,
