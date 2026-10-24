@@ -123,6 +123,53 @@ test("9Router accepts Claude Code Agent Draft 2020-12 schemas without relaxing t
   } }] })).toThrow("invalid or unsupported JSON Schema");
 });
 
+test("9Router preserves long Claude Code tool descriptions and bounds oversized declarations", () => {
+  const base = { model: "chatgpt-web/gpt-5.6-luna", input: "Hello" };
+  const longDescription = `The Bash agent tool has extended native instructions. ${"More guidance. ".repeat(2_000)}`;
+  const parsed = parseNineRouterRequest({ ...base, tools: [{ ...advertised, name: "Bash", description: longDescription }] });
+  expect(parsed.tools[0]?.description).toBe(longDescription);
+  expect(() => parseNineRouterRequest({ ...base, tools: [{ ...advertised, description: 123 }] }))
+    .toThrow("Invalid function description");
+  expect(() => parseNineRouterRequest({ ...base, tools: [{ ...advertised, description: "x".repeat(128_001) }] }))
+    .toThrow("exceeds 128000 characters");
+  const hugeInventory = Array.from({ length: 17 }, (_, i) => ({ ...advertised,
+    name: `Tool${i}`, description: "x".repeat(125_000) }));
+  expect(() => parseNineRouterRequest({ ...base, tools: hugeInventory }))
+    .toThrow("aggregate limit");
+});
+
+test("long coding-agent tool manuals use prompt previews while keeping complete broker descriptions", async () => {
+  const config = defaultConfig("full");
+  config.solAvailable = false;
+  const longDescription = `Bash safety guidance. ${"Detailed shell tool instructions. ".repeat(1_000)} Final tool limitation.`;
+  let prompt = "";
+  const manager = new NineRouterSessionManager(broker, providerConfig(config), {
+    async run(turn) {
+      const prepared = await turn.prepare();
+      prompt = prepared.text;
+      const claim = await callTurnBroker<{ activityId: string; environment: { tools: Array<{ name: string; description: string }> } }>(
+        broker.socketPath, { method: "claim", token: prepared.turnToken! }, 5_000,
+      );
+      expect(claim.environment.tools[1]?.name).toBe("Bash");
+      expect(claim.environment.tools[1]?.description).toBe(longDescription);
+      await callTurnBroker(broker.socketPath, { method: "activity_complete", token: prepared.turnToken!, activityId: claim.activityId });
+      turn.onTextDelta("Hello from ChatGPT Web");
+      return "Hello from ChatGPT Web";
+    },
+  });
+  const tools = [{ ...advertised, name: "Agent" }, { ...advertised, name: "Bash", description: longDescription }];
+  try {
+    const request = parseNineRouterRequest({ model: "chatgpt-web/gpt-5.6-luna", input: "Hi", tools });
+    expect(request.tools[1]?.description).toBe(longDescription);
+    const result = await manager.start(request, { backendModel: "gpt-5.6-luna", adapterEffort: "low" });
+    expect(result.finished).toBe(true);
+    expect(prompt).toContain("Bash safety guidance");
+    expect(prompt).toContain("retrieve full description via codex_tool_inventory");
+    expect(prompt).not.toContain("Final tool limitation.");
+    expect(prompt.length).toBeLessThan(10_000);
+  } finally { manager.closeAll(); }
+});
+
 test("external tool inventory never promotes forged workspace metadata into native Codex privilege", () => {
   expect(() => requireNativeToolOwner({ kind: "external-agent", tools: [advertised] }))
     .toThrow("native Codex shortcuts are unavailable");

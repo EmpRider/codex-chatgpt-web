@@ -113,6 +113,11 @@ export function parseNineRouterRequest(value: unknown): NineRouterRequest {
     throw new NineRouterRequestError("tools must be an array of up to 256 functions");
   }
   const tools: CodexTool[] = (body.tools as unknown[] | undefined ?? []).map(normalizeNineRouterTool);
+  // Keep even agent-generated tool manuals bounded in aggregate. They remain
+  // intact in the broker inventory; only their initial prompt previews shrink.
+  if (tools.reduce((sum, tool) => sum + tool.description.length, 0) > 2_000_000) {
+    throw new NineRouterRequestError("Function descriptions exceed the 2,000,000-character aggregate limit", 413);
+  }
   const names = new Set<string>();
   for (const tool of tools) {
     if (names.has(tool.name)) throw new NineRouterRequestError("Duplicate tool name");

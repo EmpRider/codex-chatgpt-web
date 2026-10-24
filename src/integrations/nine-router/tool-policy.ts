@@ -13,6 +13,11 @@ const draft2020Validator = new Ajv2020({ strict: false, allErrors: false, valida
 addFormats(draft7Validator);
 addFormats(draft2020Validator);
 
+// Coding agents may advertise lengthy native tool manuals (notably Claude Code's
+// Bash tool). Preserve the entire description for on-demand MCP inventory;
+// session-manager sends only a bounded preview to the ChatGPT composer.
+const MAX_TOOL_DESCRIPTION_CHARS = 128_000;
+
 function validatorFor(parameters: Record<string, unknown>) {
   return parameters.$schema === "https://json-schema.org/draft/2020-12/schema"
     ? draft2020Validator
@@ -37,8 +42,11 @@ export function normalizeNineRouterTool(value: unknown, index: number): CodexToo
     throw new NineRouterRequestError(`Invalid or reserved function name at index ${index}`);
   }
   const description = entry.description ?? "";
-  if (typeof description !== "string" || description.length > 12_000) {
+  if (typeof description !== "string") {
     throw new NineRouterRequestError(`Invalid function description at index ${index}`);
+  }
+  if (description.length > MAX_TOOL_DESCRIPTION_CHARS) {
+    throw new NineRouterRequestError(`Function description at index ${index} exceeds ${MAX_TOOL_DESCRIPTION_CHARS} characters`, 413);
   }
   const parameters = entry.parameters ?? { type: "object", properties: {} };
   if (!parameters || typeof parameters !== "object" || Array.isArray(parameters)

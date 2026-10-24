@@ -14,6 +14,14 @@ import { logNineRouter } from "./diagnostics";
 // a tool is returned to the coding agent, not while ChatGPT is still thinking.
 const SESSION_TTL_MS = CHATGPT_WEB_MCP_INVOCATION_TIMEOUT_MS - 10_000;
 const MAX_ACTIVE_SESSIONS = MAX_CHATGPT_BROWSER_TABS;
+const TOOL_DESCRIPTION_PREVIEW_CHARS = 400;
+
+function toolDescriptionPreview(description: string): string {
+  const compact = description.replace(/\s+/g, " ").trim();
+  return compact.length > TOOL_DESCRIPTION_PREVIEW_CHARS
+    ? `${compact.slice(0, TOOL_DESCRIPTION_PREVIEW_CHARS).trimEnd()}… [retrieve full description via codex_tool_inventory]`
+    : compact;
+}
 
 export interface NineRouterStage {
   text: string;
@@ -138,10 +146,10 @@ export class NineRouterSessionManager {
     const system = request.instructions ? `Agent instructions (from caller):\n${request.instructions}\n\n` : "";
     const toolText = tools.length ? [
       `The coding agent supplied these callable tools. The ChatGPT-side connector named ${CHATGPT_CONNECTOR_NAME} is the tunnel transport; it does not mean the coding agent is Codex:`,
-      ...tools.map(tool => `- ${tool.name}: ${tool.description}`),
+      ...tools.map(tool => `- ${tool.name}: ${toolDescriptionPreview(tool.description)}`),
       ...(request.toolChoice === "required" ? ["The caller requires at least one advertised function call in this turn."] : []),
       ...(typeof request.toolChoice === "object" ? [`The caller explicitly requires a call to ${request.toolChoice.name} in this turn.`] : []),
-      "Discover the full schemas with codex_tool_inventory, then invoke exact advertised names with codex_tool_call.",
+      "Descriptions above are previews. Discover full tool descriptions and schemas with codex_tool_inventory before invocation, then invoke exact advertised names with codex_tool_call.",
       "The coding agent performs its own approvals and execution. Never pretend a tool succeeded before its result returns.",
     ].join("\n") : "No coding-agent tools are available for this request.";
     const prompt = [

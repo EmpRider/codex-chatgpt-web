@@ -776,6 +776,20 @@
       "evidence": [],
       "blockedReason": null,
       "updatedAt": "2026-10-24T15:25:15.349Z"
+    },
+    {
+      "id": "R9-046",
+      "epic": "R9-E06",
+      "title": "Preserve long Claude Code tool descriptions through 9Router",
+      "file": "items/R9-046-preserve-long-claude-tool-descriptions.md",
+      "status": "in_progress",
+      "dependsOn": [
+        "R9-027",
+        "R9-033"
+      ],
+      "evidence": [],
+      "blockedReason": null,
+      "updatedAt": "2026-10-24T15:44:17.390Z"
     }
   ]
 }
