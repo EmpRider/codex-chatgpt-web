@@ -803,6 +803,32 @@
       ],
       "blockedReason": null,
       "updatedAt": "2026-10-24T16:35:00.000Z"
+    },
+    {
+      "id": "R9-048",
+      "epic": "R9-E07",
+      "title": "Diagnose deterministic long-history Composer mutation without exposing prompts",
+      "file": "items/R9-048-diagnose-composer-long-history-mutation.md",
+      "status": "in_progress",
+      "dependsOn": ["R9-027", "R9-033"],
+      "evidence": [
+        "src/adapters/chatgpt-web/browser-worker.ts privacy-safe mismatch category metrics; tests/browser-worker-contract.test.ts; offline TypeScript check passed; live Windows diagnosis pending"
+      ],
+      "blockedReason": null,
+      "updatedAt": "2026-10-24T16:54:00.000Z"
+    },
+    {
+      "id": "R9-049",
+      "epic": "R9-E04",
+      "title": "Reuse the native ChatGPT prompt compiler for external coding agents",
+      "file": "items/R9-049-share-native-chatgpt-prompt-compiler.md",
+      "status": "in_progress",
+      "dependsOn": ["R9-010", "R9-027", "R9-033"],
+      "evidence": [
+        "src/adapters/chatgpt-web/prompt.ts shared compiler and fenced JSON renderer; src/integrations/nine-router/session-manager.ts compiler integration; tests/nine-router-provider.test.ts shared compiler and history parity; offline TypeScript check and Node runtime smoke for both native and external variants passed; authenticated Windows browser and MCP tool cycle pending"
+      ],
+      "blockedReason": null,
+      "updatedAt": "2026-10-24T17:12:00.000Z"
     }
   ]
 }

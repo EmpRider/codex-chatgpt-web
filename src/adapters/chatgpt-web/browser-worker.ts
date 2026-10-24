@@ -2487,6 +2487,41 @@ export class ChatGptBrowserWorker {
     return index;
   }
 
+  /**
+   * Explain a Composer integrity failure without recording any caller text or
+   * Unicode code point (which could be part of a secret). Lexical can substitute
+   * NBSP for an ASCII space while preserving the total UTF-16 length; other
+   * rewrites are equally possible, so never silently weaken the comparison.
+   */
+  private promptMismatchEvidence(expected: string, observed: string): string {
+    const kind = (unit: string | undefined): string => {
+      if (unit === undefined) return "missing";
+      if (unit === " ") return "space";
+      if (unit === "\u00a0") return "nbsp";
+      if (unit === "\n") return "newline";
+      if (unit === "\r") return "carriage_return";
+      if (unit === "\t") return "tab";
+      if (unit === "\u200b") return "zero_width_space";
+      if (unit === "\u2028" || unit === "\u2029") return "line_separator";
+      if (/^[A-Za-z0-9]$/.test(unit)) return "alphanumeric";
+      if (unit.charCodeAt(0) >= 0x21 && unit.charCodeAt(0) <= 0x7e) return "ascii_punctuation";
+      return "other_unicode";
+    };
+    const firstMismatch = this.promptEquivalentPrefixLength(expected, observed);
+    let mismatchCount = 0;
+    let spaceToNbspCount = 0;
+    const length = Math.max(expected.length, observed.length);
+    for (let index = 0; index < length; index += 1) {
+      if (this.promptCodeUnitEquivalent(expected, observed, index)) continue;
+      mismatchCount++;
+      if (expected[index] === " " && observed[index] === "\u00a0") spaceToNbspCount++;
+    }
+    const atLineBoundary = expected[firstMismatch - 1] === "\n" || expected[firstMismatch + 1] === "\n";
+    return `mismatchCount=${mismatchCount}, spaceToNbspCount=${spaceToNbspCount},`
+      + ` expectedKind=${kind(expected[firstMismatch])}, observedKind=${kind(observed[firstMismatch])},`
+      + ` atLineBoundary=${atLineBoundary}`;
+  }
+
   run(turn: BrowserTurn): Promise<string> {
     if (this.activeRuns.has(turn.traceId)) {
       return Promise.reject(new Error(`Duplicate ChatGPT web browser turn: ${turn.traceId}`));
@@ -3588,7 +3623,7 @@ export class ChatGptBrowserWorker {
     throwIfPromptAttachmentAborted(abortSignal);
     const commonPrefix = this.promptEquivalentPrefixLength(prompt, observed);
     throw new ChatGptPromptAttachmentIntegrityError(
-      `ChatGPT composer did not preserve the complete prompt (expectedChars=${prompt.length}, actualChars=${observed.length}, commonPrefixChars=${commonPrefix})`,
+      `ChatGPT composer did not preserve the complete prompt (expectedChars=${prompt.length}, actualChars=${observed.length}, commonPrefixChars=${commonPrefix}, ${this.promptMismatchEvidence(prompt, observed)})`,
     );
   }
 

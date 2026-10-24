@@ -6,6 +6,7 @@ import type { CodexProviderConfig } from "../../types";
 import { CHATGPT_CONNECTOR_NAME } from "../../config";
 import { MAX_CHATGPT_BROWSER_TABS } from "../../adapters/chatgpt-web/concurrency";
 import { CHATGPT_WEB_MCP_INVOCATION_TIMEOUT_MS } from "../../adapters/chatgpt-web/mcp-server";
+import { compileChatGptWebPrompt } from "../../adapters/chatgpt-web/prompt";
 import type { NineRouterRequest } from "./request";
 import { NineRouterRequestError } from "./request";
 import { logNineRouter } from "./diagnostics";
@@ -134,40 +135,28 @@ export class NineRouterSessionManager {
     this.sessions.add(session);
     logNineRouter("browser_started", { requestId, traceId, token, toolCount: tools.length });
 
-    // Keep caller instructions byte-for-byte. They can be security-critical and must never
-    // be shortened just to fit the browser. Only omit *exact* copies already included as
-    // top-level instructions; history in the session remains intact for tool continuations.
-    const transcript = request.history
-      .filter(message => !(request.instructions && (message.role === "system" || message.role === "developer")
-        && message.text === request.instructions))
-      .map(message => `[${message.role}]\n${message.text}`).join("\n\n");
-    const system = request.instructions ? `Caller instructions:\n${request.instructions}` : "";
-    const toolText = tools.length ? [
-      `The connector ${CHATGPT_CONNECTOR_NAME} bridges the coding agent's tools (the caller need not be Codex).`,
-      `Advertised function names: ${tools.map(tool => tool.name).join(", ")}.`,
-      ...(request.toolChoice === "required" ? ["The caller requires at least one advertised function call in this turn."] : []),
-      ...(typeof request.toolChoice === "object" ? [`The caller explicitly requires a call to ${request.toolChoice.name} in this turn.`] : []),
-      "Read complete tool descriptions and JSON Schemas using codex_tool_inventory before calling codex_tool_call; use only advertised names and actual results. Agent-side approvals and execution are the caller's responsibility.",
-    ].join("\n") : "No coding-agent tools are available for this request.";
-    const prompt = [
-      "<external_agent_request>",
-      `Coding-agent request via 9Router.${tools.length ? ` Use ${CHATGPT_CONNECTOR_NAME} for tools.` : " Answer directly."}`,
-      `turn_token: ${token}`,
-      "Pass turn_token to every connector call; never disclose it.",
-      system,
-      toolText,
-      "History (chronological; last user request is active):",
-      transcript,
-      "</external_agent_request>",
-    ].join("\n\n");
+    // The native Codex backend and external-agent backend share this one JSON
+    // prompt compiler. This adapter supplies only its neutral context and the
+    // broker's external tool names; no native Codex authority is synthesized.
+    const images = request.history.flatMap(message => message.images ?? []);
+    const prompt = compileChatGptWebPrompt({
+      agentKind: "external-agent",
+      instructions: request.instructions,
+      history: request.history.map(message => ({ role: message.role, text: message.text })),
+      toolNames: tools.map(tool => tool.name),
+      toolChoice: request.toolChoice,
+      parallelToolCalls: request.parallelToolCalls,
+      turnToken: token,
+      connectorName: CHATGPT_CONNECTOR_NAME,
+      images,
+    }).text;
     logNineRouter("prompt_prepared", { requestId, traceId, token, instructionChars: request.instructions.length,
-      historyChars: transcript.length, toolListChars: toolText.length, promptChars: prompt.length });
+      historyChars: request.history.reduce((total, message) => total + message.text.length, 0),
+      toolListChars: tools.reduce((total, tool) => total + tool.name.length, 0), promptChars: prompt.length });
     if (prompt.length > 180_000) {
       this.close(session);
       throw new NineRouterRequestError("Agent context exceeds the safe ChatGPT Web composer budget", 413);
     }
-    const images = request.history.flatMap(message => message.images ?? []);
-
     const turn: BrowserTurn = {
       traceId, modelId: model.backendModel, reasoning: model.adapterEffort, modelFamily: model.modelFamily,
       capabilities: {

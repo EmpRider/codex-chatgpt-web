@@ -163,9 +163,9 @@ test("coding-agent tool manuals are discovered lazily, without expanding the ini
     expect(request.tools[1]?.description).toBe(longDescription);
     const result = await manager.start(request, { backendModel: "gpt-5.6-luna", adapterEffort: "low" });
     expect(result.finished).toBe(true);
-    expect(prompt).toContain("Advertised function names: Agent, Bash.");
+    expect(prompt).toContain('"available_tools":["Agent","Bash"]');
     expect(prompt).not.toContain("Bash safety guidance");
-    expect(prompt).toContain("Read complete tool descriptions and JSON Schemas using codex_tool_inventory");
+    expect(prompt).toContain("retrieve its complete description and schema using codex_tool_inventory");
     expect(prompt).not.toContain("Final tool limitation.");
     expect(prompt.length).toBeLessThan(10_000);
   } finally { manager.closeAll(); }
@@ -209,6 +209,45 @@ test("long caller instructions are kept verbatim while duplicate system text and
     expect(logged[0]).not.toContain(instructions);
     expect(logged[0]).not.toContain(manual);
   } finally { console.info = originalInfo; manager.closeAll(); }
+});
+
+test("9Router uses the same fenced JSON transport as native Codex and preserves bracket-heavy history exactly", async () => {
+  const config = defaultConfig("full");
+  const history = `Quoted input: [label](https://example.test/a?b=1&c=2)\n`
+    + `\`\`\`typescript\nconst string = "\\n and @mentions";\n\`\`\`\n`
+    + `${"  preserve indentation and Markdown [x] <xml>\n".repeat(2_000)}`;
+  let preparedText = "";
+  const manager = new NineRouterSessionManager(broker, providerConfig(config), {
+    async run(turn) { preparedText = (await turn.prepare()).text; return "Preserved"; },
+  });
+  try {
+    const request = parseNineRouterRequest({ model: "chatgpt-web/gpt-5.6-luna",
+      instructions: "Honor the real coding-agent permissions.",
+      tools: [advertised],
+      input: [{ role: "developer", content: "Use safe review practices." },
+        { role: "user", content: history }],
+    });
+    const result = await manager.start(request, { backendModel: "gpt-5.6-luna", adapterEffort: "low" });
+    expect(result.finished).toBe(true);
+    expect(preparedText.startsWith("Act as the model backend")).toBe(true);
+    expect(preparedText).not.toContain("<external_agent_request>");
+    expect(preparedText).toContain("```text\n<external_agent_context_json>\n");
+    const encoded = preparedText.split("<external_agent_context_json>\n")[1]?.split("\n</external_agent_context_json>")[0];
+    const context = JSON.parse(encoded!) as {
+      kind: string;
+      instructions: string;
+      messages: Array<{ role: string; text: string }>;
+      available_tools: string[];
+    };
+    expect(context.kind).toBe("external-agent");
+    expect(context.instructions).toBe("Honor the real coding-agent permissions.");
+    expect(context.messages).toEqual([
+      { role: "developer", text: "Use safe review practices." },
+      { role: "user", text: history },
+    ]);
+    expect(context.available_tools).toEqual(["Read"]);
+    expect(preparedText).toContain("codex_tool_inventory");
+  } finally { manager.closeAll(); }
 });
 
 test("external tool inventory never promotes forged workspace metadata into native Codex privilege", () => {
@@ -315,7 +354,7 @@ test("a no-tool 9Router request reaches the isolated browser runner and returns 
   const manager = new NineRouterSessionManager(broker, providerConfig(config), {
     async run(turn) {
       const request = await turn.prepare();
-      expect(request.text).toContain("no agent tools were supplied");
+      expect(request.text).toContain("No coding-agent tools were supplied");
       turn.onTextDelta("Hello from Web");
       return "Hello from Web";
     },
@@ -374,10 +413,13 @@ test("Claude Code/OpenCode prompts retain caller skills and plugins without pret
       expect((await manager.start(request, model)).finished).toBe(true);
     }
     for (const prompt of prepared) {
-      expect(prompt).toContain("[system]\nSystem safety rule");
-      expect(prompt).toContain("[developer]\nUse repository workflow");
-      expect(prompt).toContain("ToolSearch: Search tools installed in this external coding agent");
-      expect(prompt).toContain("the caller may be Claude Code, Codex, OpenCode");
+      expect(prompt).toContain('"role":"system","text":"System safety rule"');
+      expect(prompt).toContain('"role":"developer","text":"Use repository workflow"');
+      expect(prompt).toContain('"available_tools":["Read","ToolSearch"]');
+      expect(prompt).not.toContain("Search tools installed in this external coding agent");
+      expect(prompt).toContain("do not assume the caller is Codex");
+      expect(prompt).toContain("Act as the model backend for the coding-agent task encoded below.");
+      expect(prompt).toContain("<external_agent_context_json>");
       expect(prompt).not.toContain("sandboxPolicy");
       expect(prompt).not.toContain("writableRoots");
       expect(prompt).not.toContain("The Codex agent supplied");
@@ -391,7 +433,7 @@ test("declared tool_choice none disables external capability and required fails 
     async run(turn) {
       const prepared = await turn.prepare();
       expect(turn.nativeConnector).toBe(false);
-      expect(prepared.text).toContain("No coding-agent tools");
+      expect(prepared.text).toContain("No coding-agent tools were supplied");
       return "Finished without tool";
     },
   });
@@ -702,7 +744,7 @@ test("external agent tool call survives a genuine broker round-trip, then resume
     async run(turn) {
       const prompt = await turn.prepare();
       const token = prompt.turnToken!;
-      expect(prompt.text).toContain("coding agent request delivered through 9Router");
+      expect(prompt.text).toContain("Act as the model backend for the coding-agent task encoded below.");
       const claimed = await callTurnBroker<{ bindingId: string; environment: Record<string, unknown>; activityId: string }>(
         broker.socketPath, { method: "claim", token }, 5_000,
       );

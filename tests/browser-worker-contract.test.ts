@@ -1297,6 +1297,28 @@ test("prompt verification accepts Lexical NBSP preservation without weakening ot
   ).resolves.toBeUndefined();
 });
 
+test("composer mismatch diagnostics classify rewrites without exposing any prompt characters", () => {
+  const worker = Object.create(ChatGptBrowserWorker.prototype) as {
+    promptMismatchEvidence(expected: string, observed: string): string;
+  };
+  const secret = "SENSITIVE_AGENT_HISTORY_123456789";
+  const expected = `${secret}\n original`;
+  const observed = `${secret}\n\u00a0original`;
+  const evidence = worker.promptMismatchEvidence(expected, observed);
+  expect(evidence).toContain("mismatchCount=1");
+  expect(evidence).toContain("spaceToNbspCount=1");
+  expect(evidence).toContain("expectedKind=space");
+  expect(evidence).toContain("observedKind=nbsp");
+  expect(evidence).toContain("atLineBoundary=true");
+  expect(evidence).not.toContain(secret);
+  expect(evidence).not.toContain("original");
+
+  const different = worker.promptMismatchEvidence("private=abc", "private=abd");
+  expect(different).toContain("expectedKind=alphanumeric");
+  expect(different).toContain("spaceToNbspCount=0");
+  expect(different).not.toContain("private");
+});
+
 test("large Markdown-rich context uses one plain-text editing command before exact verification", async () => {
   const prompt = [
     "Act as the model backend for the Codex task encoded below.",
