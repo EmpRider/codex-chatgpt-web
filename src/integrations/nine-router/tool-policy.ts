@@ -1,10 +1,23 @@
 import Ajv from "ajv";
+import Ajv2020 from "ajv/dist/2020.js";
 import addFormats from "ajv-formats";
 import type { CodexTool } from "../../types";
 import { NineRouterRequestError } from "./errors";
 
-const validator = new Ajv({ strict: false, allErrors: false, validateSchema: true });
-addFormats(validator);
+// Agent tools can advertise different JSON Schema dialects. In particular,
+// Claude Code's Agent tool uses Draft 2020-12, which the default Ajv (Draft 7)
+// instance cannot compile. Keep the validators separate: Ajv does not support
+// Draft 7 and Draft 2020-12 schemas in the same instance.
+const draft7Validator = new Ajv({ strict: false, allErrors: false, validateSchema: true });
+const draft2020Validator = new Ajv2020({ strict: false, allErrors: false, validateSchema: true });
+addFormats(draft7Validator);
+addFormats(draft2020Validator);
+
+function validatorFor(parameters: Record<string, unknown>) {
+  return parameters.$schema === "https://json-schema.org/draft/2020-12/schema"
+    ? draft2020Validator
+    : draft7Validator;
+}
 
 const RESERVED_BRIDGE_NAMES = new Set([
   "codex_tool_inventory", "codex_tool_call", "codex_turn_complete", "codex_exec",
@@ -35,7 +48,7 @@ export function normalizeNineRouterTool(value: unknown, index: number): CodexToo
   if (JSON.stringify(parameters).length > 64_000) {
     throw new NineRouterRequestError(`Function schema at index ${index} exceeds 64 KB`, 413);
   }
-  try { validator.compile(parameters); }
+  try { validatorFor(parameters as Record<string, unknown>).compile(parameters); }
   catch { throw new NineRouterRequestError(`Function at index ${index} has an invalid or unsupported JSON Schema`, 422); }
   return { name: entry.name, description, parameters: parameters as Record<string, unknown>,
     ...(entry.strict === true ? { strict: true } : {}) };
@@ -44,7 +57,7 @@ export function normalizeNineRouterTool(value: unknown, index: number): CodexToo
 /** External MCP calls cannot bypass the originating agent's declared JSON Schema. */
 export function assertNineRouterToolArguments(tool: CodexTool, args: Record<string, unknown>): void {
   let check;
-  try { check = validator.compile(tool.parameters); }
+  try { check = validatorFor(tool.parameters).compile(tool.parameters); }
   catch { throw new Error(`External tool ${tool.name} has an invalid JSON Schema`); }
   if (!check(args)) throw new Error(`Arguments for external agent tool ${tool.name} violate its advertised JSON Schema`);
 }

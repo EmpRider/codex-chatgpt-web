@@ -90,6 +90,39 @@ test("9Router validates external function schemas and rejects privileged bridge 
   expect(() => assertNineRouterToolArguments(tool, {})).toThrow("violate its advertised JSON Schema");
 });
 
+test("9Router accepts Claude Code Agent Draft 2020-12 schemas without relaxing tool argument validation", () => {
+  const agentSchema = {
+    $schema: "https://json-schema.org/draft/2020-12/schema",
+    type: "object",
+    properties: {
+      prompt: { type: "string" },
+      labels: { type: "array", prefixItems: [{ type: "string" }, { type: "integer" }], items: false },
+    },
+    required: ["prompt"],
+    unevaluatedProperties: false,
+  };
+  const base = { model: "chatgpt-web/gpt-5.6-luna", input: "Read a file" };
+  const tools = [
+    { ...advertised, name: "Agent", parameters: agentSchema },
+    advertised, // Existing Draft 7 tools still use the original validator.
+  ];
+  const parsed = parseNineRouterRequest({ ...base, tools });
+  expect(parsed.tools[0]?.parameters).toEqual(agentSchema);
+  expect(() => assertNineRouterToolArguments(parsed.tools[0]!, { prompt: "Inspect the project", labels: ["read", 1] })).not.toThrow();
+  expect(() => assertNineRouterToolArguments(parsed.tools[0]!, { prompt: "Inspect", labels: [1, "read"] }))
+    .toThrow("violate its advertised JSON Schema");
+  expect(() => assertNineRouterToolArguments(parsed.tools[0]!, { prompt: "Inspect", unexpected: true }))
+    .toThrow("violate its advertised JSON Schema");
+  expect(() => assertNineRouterToolArguments(parsed.tools[1]!, { path: 123 }))
+    .toThrow("violate its advertised JSON Schema");
+  expect(() => parseNineRouterRequest({ ...base, tools: [{ ...tools[0], parameters: {
+    ...agentSchema, properties: { prompt: { type: "not-a-schema-type" } },
+  } }] })).toThrow("invalid or unsupported JSON Schema");
+  expect(() => parseNineRouterRequest({ ...base, tools: [{ ...tools[0], parameters: {
+    ...agentSchema, $schema: "https://example.invalid/unsupported-schema",
+  } }] })).toThrow("invalid or unsupported JSON Schema");
+});
+
 test("external tool inventory never promotes forged workspace metadata into native Codex privilege", () => {
   expect(() => requireNativeToolOwner({ kind: "external-agent", tools: [advertised] }))
     .toThrow("native Codex shortcuts are unavailable");

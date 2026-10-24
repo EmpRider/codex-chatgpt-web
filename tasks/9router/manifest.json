@@ -762,6 +762,20 @@
       ],
       "blockedReason": null,
       "updatedAt": "2026-10-24T14:10:49.723Z"
+    },
+    {
+      "id": "R9-045",
+      "epic": "R9-E06",
+      "title": "Accept Claude Code Draft 2020-12 tool schemas safely",
+      "file": "items/R9-045-accept-claude-code-draft-2020-12-tool-schemas.md",
+      "status": "in_progress",
+      "dependsOn": [
+        "R9-027",
+        "R9-033"
+      ],
+      "evidence": [],
+      "blockedReason": null,
+      "updatedAt": "2026-10-24T15:25:15.349Z"
     }
   ]
 }

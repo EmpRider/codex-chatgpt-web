@@ -2,7 +2,7 @@
 
 **Project:** Add ChatGPT Web as a provider to an **unmodified 9Router** installation, with tools executed by the originating coding agent, while keeping direct Codex functionality unchanged.
 
-**Live state (2026-10-24):** 8 epics, **44 tasks**. Run `node tasks/9router/taskctl.mjs summary` for verified totals; implementation and offline tests are underway. Live account-bound verification is pending.
+**Live state (2026-10-24):** 8 epics, **45 tasks**. Run `node tasks/9router/taskctl.mjs summary` for verified totals; implementation and offline tests are underway. Live account-bound verification is pending.
 
 - [Implementation plan](PLAN.md)
 - [Reference/source map](REFERENCES.md)
@@ -80,7 +80,7 @@ Do not change decolua/9router, the upstream miuuyy repository, or agent installa
 | [R9-E03](epics/R9-E03-neutral-context.md) | 5 | Normalize external-agent requests and trust |
 | [R9-E04](epics/R9-E04-mcp-adapter.md) | 5 | Reuse the OpenAI Tunnel, browser and MCP capability broker |
 | [R9-E05](epics/R9-E05-tool-loop.md) | 7 | Round-trip tool calls and browser continuation |
-| [R9-E06](epics/R9-E06-agent-protocols.md) | 5 | 9Router protocol and coding-agent interoperability |
+| [R9-E06](epics/R9-E06-agent-protocols.md) | 6 | 9Router protocol and coding-agent interoperability |
 | [R9-E07](epics/R9-E07-security-reliability.md) | 5 | Security, lifecycle, diagnostics and upstream-safety |
 | [R9-E08](epics/R9-E08-verification-release.md) | 8 | Offline verification, documentation and release readiness |
 
@@ -90,4 +90,4 @@ Do not change decolua/9router, the upstream miuuyy repository, or agent installa
 - **Offline testing:** Safe fixtures, syntax/type checks and unmodified local 9Router translation tests can be automated.
 - **Live testing:** Real ChatGPT login and tunnel runtime credentials are not required for offline tests; they are necessary for final live acceptance.
 
-The initial manifest had 43 tasks as todo; R9-044 was subsequently added for source-launcher support. Current states are in `manifest.json`; manual acceptance and production release remain incomplete until demonstrated.
+The initial manifest had 43 tasks as todo; R9-044 was added for source-launcher support, and R9-045 tracks a live Claude Code Draft 2020-12 schema compatibility defect. Current states are in `manifest.json`; manual acceptance and production release remain incomplete until demonstrated.
