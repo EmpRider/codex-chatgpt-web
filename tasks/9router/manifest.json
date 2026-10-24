@@ -1,0 +1,666 @@
+{
+  "schemaVersion": 1,
+  "project": "ChatGPT Web provider for unmodified 9Router",
+  "createdAt": "2026-10-24",
+  "trackingPolicy": "manifest.json is authoritative; Markdown files are task specs",
+  "epics": [
+    {
+      "id": "R9-E01",
+      "title": "Reference-first baseline and interface contract",
+      "file": "epics/R9-E01-reference-contract.md"
+    },
+    {
+      "id": "R9-E02",
+      "title": "Additive 9Router Responses provider surface",
+      "file": "epics/R9-E02-provider-interface.md"
+    },
+    {
+      "id": "R9-E03",
+      "title": "Normalize external-agent requests and trust",
+      "file": "epics/R9-E03-neutral-context.md"
+    },
+    {
+      "id": "R9-E04",
+      "title": "Reuse the OpenAI Tunnel, browser and MCP capability broker",
+      "file": "epics/R9-E04-mcp-adapter.md"
+    },
+    {
+      "id": "R9-E05",
+      "title": "Round-trip tool calls and browser continuation",
+      "file": "epics/R9-E05-tool-loop.md"
+    },
+    {
+      "id": "R9-E06",
+      "title": "9Router protocol and coding-agent interoperability",
+      "file": "epics/R9-E06-agent-protocols.md"
+    },
+    {
+      "id": "R9-E07",
+      "title": "Security, lifecycle, diagnostics and upstream-safety",
+      "file": "epics/R9-E07-security-reliability.md"
+    },
+    {
+      "id": "R9-E08",
+      "title": "Offline verification, documentation and release readiness",
+      "file": "epics/R9-E08-verification-release.md"
+    }
+  ],
+  "tasks": [
+    {
+      "id": "R9-001",
+      "epic": "R9-E01",
+      "title": "Record pinned source baselines and upstream divergence",
+      "file": "items/R9-001-record-pinned-source-baselines-and-upstream-divergence.md",
+      "status": "todo",
+      "dependsOn": [],
+      "evidence": [],
+      "blockedReason": null,
+      "updatedAt": null
+    },
+    {
+      "id": "R9-002",
+      "epic": "R9-E01",
+      "title": "Capture 9Router wire contracts and protocol fixtures",
+      "file": "items/R9-002-capture-9router-wire-contracts-and-protocol-fixtures.md",
+      "status": "todo",
+      "dependsOn": [
+        "R9-001"
+      ],
+      "evidence": [],
+      "blockedReason": null,
+      "updatedAt": null
+    },
+    {
+      "id": "R9-003",
+      "epic": "R9-E01",
+      "title": "Approve agent-neutral execution and trust-boundary design",
+      "file": "items/R9-003-approve-agent-neutral-execution-and-trust-boundary-design.md",
+      "status": "todo",
+      "dependsOn": [
+        "R9-001",
+        "R9-002"
+      ],
+      "evidence": [],
+      "blockedReason": null,
+      "updatedAt": null
+    },
+    {
+      "id": "R9-004",
+      "epic": "R9-E01",
+      "title": "Define MVP acceptance gates and unsupported behaviors",
+      "file": "items/R9-004-define-mvp-acceptance-gates-and-unsupported-behaviors.md",
+      "status": "todo",
+      "dependsOn": [
+        "R9-002",
+        "R9-003"
+      ],
+      "evidence": [],
+      "blockedReason": null,
+      "updatedAt": null
+    },
+    {
+      "id": "R9-005",
+      "epic": "R9-E02",
+      "title": "Introduce a namespaced, feature-gated integration route",
+      "file": "items/R9-005-introduce-a-namespaced-feature-gated-integration-route.md",
+      "status": "todo",
+      "dependsOn": [
+        "R9-003"
+      ],
+      "evidence": [],
+      "blockedReason": null,
+      "updatedAt": null
+    },
+    {
+      "id": "R9-006",
+      "epic": "R9-E02",
+      "title": "Create an independent provider integration secret",
+      "file": "items/R9-006-create-an-independent-provider-integration-secret.md",
+      "status": "todo",
+      "dependsOn": [
+        "R9-005"
+      ],
+      "evidence": [],
+      "blockedReason": null,
+      "updatedAt": null
+    },
+    {
+      "id": "R9-007",
+      "epic": "R9-E02",
+      "title": "Implement OpenAI-style model discovery",
+      "file": "items/R9-007-implement-openai-style-model-discovery.md",
+      "status": "todo",
+      "dependsOn": [
+        "R9-005",
+        "R9-006"
+      ],
+      "evidence": [],
+      "blockedReason": null,
+      "updatedAt": null
+    },
+    {
+      "id": "R9-008",
+      "epic": "R9-E02",
+      "title": "Accept, validate and stream external Responses requests",
+      "file": "items/R9-008-accept-validate-and-stream-external-responses-requests.md",
+      "status": "todo",
+      "dependsOn": [
+        "R9-005",
+        "R9-006"
+      ],
+      "evidence": [],
+      "blockedReason": null,
+      "updatedAt": null
+    },
+    {
+      "id": "R9-009",
+      "epic": "R9-E02",
+      "title": "Resolve provider aliases and endpoint URL compatibility",
+      "file": "items/R9-009-resolve-provider-aliases-and-endpoint-url-compatibility.md",
+      "status": "todo",
+      "dependsOn": [
+        "R9-002",
+        "R9-007",
+        "R9-008"
+      ],
+      "evidence": [],
+      "blockedReason": null,
+      "updatedAt": null
+    },
+    {
+      "id": "R9-010",
+      "epic": "R9-E03",
+      "title": "Normalize system, developer, user and assistant history",
+      "file": "items/R9-010-normalize-system-developer-user-and-assistant-history.md",
+      "status": "todo",
+      "dependsOn": [
+        "R9-008",
+        "R9-002"
+      ],
+      "evidence": [],
+      "blockedReason": null,
+      "updatedAt": null
+    },
+    {
+      "id": "R9-011",
+      "epic": "R9-E03",
+      "title": "Normalize advertised tools and validate input schemas",
+      "file": "items/R9-011-normalize-advertised-tools-and-validate-input-schemas.md",
+      "status": "todo",
+      "dependsOn": [
+        "R9-008",
+        "R9-010"
+      ],
+      "evidence": [],
+      "blockedReason": null,
+      "updatedAt": null
+    },
+    {
+      "id": "R9-012",
+      "epic": "R9-E03",
+      "title": "Map tool_choice and special tool kinds safely",
+      "file": "items/R9-012-map-tool-choice-and-special-tool-kinds-safely.md",
+      "status": "todo",
+      "dependsOn": [
+        "R9-011"
+      ],
+      "evidence": [],
+      "blockedReason": null,
+      "updatedAt": null
+    },
+    {
+      "id": "R9-013",
+      "epic": "R9-E03",
+      "title": "Separate external tool capability from trusted Codex sandbox state",
+      "file": "items/R9-013-separate-external-tool-capability-from-trusted-codex-sandbox-state.md",
+      "status": "todo",
+      "dependsOn": [
+        "R9-003",
+        "R9-011"
+      ],
+      "evidence": [],
+      "blockedReason": null,
+      "updatedAt": null
+    },
+    {
+      "id": "R9-014",
+      "epic": "R9-E03",
+      "title": "Define deterministic external turn and browser-session ownership",
+      "file": "items/R9-014-define-deterministic-external-turn-and-browser-session-ownership.md",
+      "status": "todo",
+      "dependsOn": [
+        "R9-010",
+        "R9-013"
+      ],
+      "evidence": [],
+      "blockedReason": null,
+      "updatedAt": null
+    },
+    {
+      "id": "R9-015",
+      "epic": "R9-E04",
+      "title": "Define pluggable agent turn owner for the browser adapter",
+      "file": "items/R9-015-define-pluggable-agent-turn-owner-for-the-browser-adapter.md",
+      "status": "todo",
+      "dependsOn": [
+        "R9-013",
+        "R9-014"
+      ],
+      "evidence": [],
+      "blockedReason": null,
+      "updatedAt": null
+    },
+    {
+      "id": "R9-016",
+      "epic": "R9-E04",
+      "title": "Extend TurnBroker with external-agent scoped capabilities",
+      "file": "items/R9-016-extend-turnbroker-with-external-agent-scoped-capabilities.md",
+      "status": "todo",
+      "dependsOn": [
+        "R9-015"
+      ],
+      "evidence": [],
+      "blockedReason": null,
+      "updatedAt": null
+    },
+    {
+      "id": "R9-017",
+      "epic": "R9-E04",
+      "title": "Expose agent-neutral inventory and calls through existing MCP tunnel",
+      "file": "items/R9-017-expose-agent-neutral-inventory-and-calls-through-existing-mcp-tunnel.md",
+      "status": "todo",
+      "dependsOn": [
+        "R9-011",
+        "R9-016"
+      ],
+      "evidence": [],
+      "blockedReason": null,
+      "updatedAt": null
+    },
+    {
+      "id": "R9-018",
+      "epic": "R9-E04",
+      "title": "Compile truthful generic-agent prompts, plugins and skills context",
+      "file": "items/R9-018-compile-truthful-generic-agent-prompts-plugins-and-skills-context.md",
+      "status": "todo",
+      "dependsOn": [
+        "R9-010",
+        "R9-015",
+        "R9-017"
+      ],
+      "evidence": [],
+      "blockedReason": null,
+      "updatedAt": null
+    },
+    {
+      "id": "R9-019",
+      "epic": "R9-E04",
+      "title": "Preserve browser and tunnel lifecycle through external tool rounds",
+      "file": "items/R9-019-preserve-browser-and-tunnel-lifecycle-through-external-tool-rounds.md",
+      "status": "todo",
+      "dependsOn": [
+        "R9-016",
+        "R9-017",
+        "R9-018"
+      ],
+      "evidence": [],
+      "blockedReason": null,
+      "updatedAt": null
+    },
+    {
+      "id": "R9-020",
+      "epic": "R9-E05",
+      "title": "Queue ChatGPT MCP invocations as agent-owned requests",
+      "file": "items/R9-020-queue-chatgpt-mcp-invocations-as-agent-owned-requests.md",
+      "status": "todo",
+      "dependsOn": [
+        "R9-016",
+        "R9-017",
+        "R9-019"
+      ],
+      "evidence": [],
+      "blockedReason": null,
+      "updatedAt": null
+    },
+    {
+      "id": "R9-021",
+      "epic": "R9-E05",
+      "title": "Serialize standard Responses tool-call events and call IDs",
+      "file": "items/R9-021-serialize-standard-responses-tool-call-events-and-call-ids.md",
+      "status": "todo",
+      "dependsOn": [
+        "R9-012",
+        "R9-020"
+      ],
+      "evidence": [],
+      "blockedReason": null,
+      "updatedAt": null
+    },
+    {
+      "id": "R9-022",
+      "epic": "R9-E05",
+      "title": "Consume returned function_call_output and resume pending MCP calls",
+      "file": "items/R9-022-consume-returned-function-call-output-and-resume-pending-mcp-calls.md",
+      "status": "todo",
+      "dependsOn": [
+        "R9-014",
+        "R9-020",
+        "R9-021"
+      ],
+      "evidence": [],
+      "blockedReason": null,
+      "updatedAt": null
+    },
+    {
+      "id": "R9-023",
+      "epic": "R9-E05",
+      "title": "Support multiple sequential tool rounds without repeat sends",
+      "file": "items/R9-023-support-multiple-sequential-tool-rounds-without-repeat-sends.md",
+      "status": "todo",
+      "dependsOn": [
+        "R9-019",
+        "R9-022"
+      ],
+      "evidence": [],
+      "blockedReason": null,
+      "updatedAt": null
+    },
+    {
+      "id": "R9-024",
+      "epic": "R9-E05",
+      "title": "Handle parallel tool batches deterministically",
+      "file": "items/R9-024-handle-parallel-tool-batches-deterministically.md",
+      "status": "todo",
+      "dependsOn": [
+        "R9-022",
+        "R9-023"
+      ],
+      "evidence": [],
+      "blockedReason": null,
+      "updatedAt": null
+    },
+    {
+      "id": "R9-025",
+      "epic": "R9-E05",
+      "title": "Preserve tool errors, output formats and image evidence",
+      "file": "items/R9-025-preserve-tool-errors-output-formats-and-image-evidence.md",
+      "status": "todo",
+      "dependsOn": [
+        "R9-022"
+      ],
+      "evidence": [],
+      "blockedReason": null,
+      "updatedAt": null
+    },
+    {
+      "id": "R9-026",
+      "epic": "R9-E05",
+      "title": "Define continuation and compaction state after failures or restart",
+      "file": "items/R9-026-define-continuation-and-compaction-state-after-failures-or-restart.md",
+      "status": "todo",
+      "dependsOn": [
+        "R9-014",
+        "R9-023"
+      ],
+      "evidence": [],
+      "blockedReason": null,
+      "updatedAt": null
+    },
+    {
+      "id": "R9-027",
+      "epic": "R9-E06",
+      "title": "Verify Claude Code tool_use and tool_result conversion",
+      "file": "items/R9-027-verify-claude-code-tool-use-and-tool-result-conversion.md",
+      "status": "todo",
+      "dependsOn": [
+        "R9-021",
+        "R9-022"
+      ],
+      "evidence": [],
+      "blockedReason": null,
+      "updatedAt": null
+    },
+    {
+      "id": "R9-028",
+      "epic": "R9-E06",
+      "title": "Preserve direct Codex and Codex-via-9Router behavior",
+      "file": "items/R9-028-preserve-direct-codex-and-codex-via-9router-behavior.md",
+      "status": "todo",
+      "dependsOn": [
+        "R9-005",
+        "R9-012",
+        "R9-021"
+      ],
+      "evidence": [],
+      "blockedReason": null,
+      "updatedAt": null
+    },
+    {
+      "id": "R9-029",
+      "epic": "R9-E06",
+      "title": "Verify OpenCode and standard OpenAI agent clients",
+      "file": "items/R9-029-verify-opencode-and-standard-openai-agent-clients.md",
+      "status": "todo",
+      "dependsOn": [
+        "R9-021",
+        "R9-022"
+      ],
+      "evidence": [],
+      "blockedReason": null,
+      "updatedAt": null
+    },
+    {
+      "id": "R9-030",
+      "epic": "R9-E06",
+      "title": "Preserve skills, plugins, deferred tools and prompt context",
+      "file": "items/R9-030-preserve-skills-plugins-deferred-tools-and-prompt-context.md",
+      "status": "todo",
+      "dependsOn": [
+        "R9-011",
+        "R9-018",
+        "R9-027"
+      ],
+      "evidence": [],
+      "blockedReason": null,
+      "updatedAt": null
+    },
+    {
+      "id": "R9-031",
+      "epic": "R9-E06",
+      "title": "Validate model alias routing, discovery and streaming fidelity",
+      "file": "items/R9-031-validate-model-alias-routing-discovery-and-streaming-fidelity.md",
+      "status": "todo",
+      "dependsOn": [
+        "R9-009",
+        "R9-027",
+        "R9-029"
+      ],
+      "evidence": [],
+      "blockedReason": null,
+      "updatedAt": null
+    },
+    {
+      "id": "R9-032",
+      "epic": "R9-E07",
+      "title": "Harden auth, origins, CORS and credential boundaries",
+      "file": "items/R9-032-harden-auth-origins-cors-and-credential-boundaries.md",
+      "status": "todo",
+      "dependsOn": [
+        "R9-006",
+        "R9-013"
+      ],
+      "evidence": [],
+      "blockedReason": null,
+      "updatedAt": null
+    },
+    {
+      "id": "R9-033",
+      "epic": "R9-E07",
+      "title": "Bound MCP calls, HTTP streams, cancellations and timeouts",
+      "file": "items/R9-033-bound-mcp-calls-http-streams-cancellations-and-timeouts.md",
+      "status": "todo",
+      "dependsOn": [
+        "R9-019",
+        "R9-022"
+      ],
+      "evidence": [],
+      "blockedReason": null,
+      "updatedAt": null
+    },
+    {
+      "id": "R9-034",
+      "epic": "R9-E07",
+      "title": "Enforce session concurrency and account/browser isolation",
+      "file": "items/R9-034-enforce-session-concurrency-and-account-browser-isolation.md",
+      "status": "todo",
+      "dependsOn": [
+        "R9-014",
+        "R9-019",
+        "R9-024"
+      ],
+      "evidence": [],
+      "blockedReason": null,
+      "updatedAt": null
+    },
+    {
+      "id": "R9-035",
+      "epic": "R9-E07",
+      "title": "Add privacy-safe diagnostics and correlation IDs",
+      "file": "items/R9-035-add-privacy-safe-diagnostics-and-correlation-ids.md",
+      "status": "todo",
+      "dependsOn": [
+        "R9-021",
+        "R9-022",
+        "R9-033"
+      ],
+      "evidence": [],
+      "blockedReason": null,
+      "updatedAt": null
+    },
+    {
+      "id": "R9-036",
+      "epic": "R9-E07",
+      "title": "Implement feature rollback and upstream regression guard",
+      "file": "items/R9-036-implement-feature-rollback-and-upstream-regression-guard.md",
+      "status": "todo",
+      "dependsOn": [
+        "R9-005",
+        "R9-019",
+        "R9-035"
+      ],
+      "evidence": [],
+      "blockedReason": null,
+      "updatedAt": null
+    },
+    {
+      "id": "R9-037",
+      "epic": "R9-E08",
+      "title": "Add provider endpoint and normalization unit tests",
+      "file": "items/R9-037-add-provider-endpoint-and-normalization-unit-tests.md",
+      "status": "todo",
+      "dependsOn": [
+        "R9-008",
+        "R9-011",
+        "R9-012"
+      ],
+      "evidence": [],
+      "blockedReason": null,
+      "updatedAt": null
+    },
+    {
+      "id": "R9-038",
+      "epic": "R9-E08",
+      "title": "Build a synthetic browser/MCP/TurnBroker integration harness",
+      "file": "items/R9-038-build-a-synthetic-browser-mcp-turnbroker-integration-harness.md",
+      "status": "todo",
+      "dependsOn": [
+        "R9-017",
+        "R9-023",
+        "R9-024",
+        "R9-025"
+      ],
+      "evidence": [],
+      "blockedReason": null,
+      "updatedAt": null
+    },
+    {
+      "id": "R9-039",
+      "epic": "R9-E08",
+      "title": "Test against an unchanged local 9Router installation",
+      "file": "items/R9-039-test-against-an-unchanged-local-9router-installation.md",
+      "status": "todo",
+      "dependsOn": [
+        "R9-027",
+        "R9-029",
+        "R9-031",
+        "R9-038"
+      ],
+      "evidence": [],
+      "blockedReason": null,
+      "updatedAt": null
+    },
+    {
+      "id": "R9-040",
+      "epic": "R9-E08",
+      "title": "Run direct native Codex and multi-client regression suites",
+      "file": "items/R9-040-run-direct-native-codex-and-multi-client-regression-suites.md",
+      "status": "todo",
+      "dependsOn": [
+        "R9-028",
+        "R9-039",
+        "R9-036"
+      ],
+      "evidence": [],
+      "blockedReason": null,
+      "updatedAt": null
+    },
+    {
+      "id": "R9-041",
+      "epic": "R9-E08",
+      "title": "Execute adversarial protocol and security test matrix",
+      "file": "items/R9-041-execute-adversarial-protocol-and-security-test-matrix.md",
+      "status": "todo",
+      "dependsOn": [
+        "R9-032",
+        "R9-033",
+        "R9-034",
+        "R9-035"
+      ],
+      "evidence": [],
+      "blockedReason": null,
+      "updatedAt": null
+    },
+    {
+      "id": "R9-042",
+      "epic": "R9-E08",
+      "title": "Document 9Router installation and agent setup on Windows",
+      "file": "items/R9-042-document-9router-installation-and-agent-setup-on-windows.md",
+      "status": "todo",
+      "dependsOn": [
+        "R9-009",
+        "R9-030",
+        "R9-039"
+      ],
+      "evidence": [],
+      "blockedReason": null,
+      "updatedAt": null
+    },
+    {
+      "id": "R9-043",
+      "epic": "R9-E08",
+      "title": "Complete live MCP tool tests, upstream-sync rehearsal and release gate",
+      "file": "items/R9-043-complete-live-mcp-tool-tests-upstream-sync-rehearsal-and-release-gate.md",
+      "status": "todo",
+      "dependsOn": [
+        "R9-038",
+        "R9-039",
+        "R9-040",
+        "R9-041",
+        "R9-042"
+      ],
+      "evidence": [],
+      "blockedReason": null,
+      "updatedAt": null
+    }
+  ]
+}
