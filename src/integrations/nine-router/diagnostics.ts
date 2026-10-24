@@ -18,6 +18,7 @@ interface SafeNineRouterFields {
   historyChars?: number;
   toolListChars?: number;
   promptChars?: number;
+  contextParts?: number;
   category?: "auth" | "input" | "model" | "browser" | "broker" | "agent" | "timeout" | "cancelled";
 }
 
@@ -39,6 +40,7 @@ export function logNineRouter(stage: NineRouterDiagnosticStage, fields: SafeNine
     ...(fields.historyChars !== undefined ? { history_chars: fields.historyChars } : {}),
     ...(fields.toolListChars !== undefined ? { tool_list_chars: fields.toolListChars } : {}),
     ...(fields.promptChars !== undefined ? { prompt_chars: fields.promptChars } : {}),
+    ...(fields.contextParts !== undefined ? { context_parts: fields.contextParts } : {}),
     ...(fields.category ? { category: fields.category } : {}),
   };
   console.info(`[9router] ${JSON.stringify(evidence)}`);

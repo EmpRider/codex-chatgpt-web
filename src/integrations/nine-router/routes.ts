@@ -11,6 +11,8 @@ import { NineRouterRequestError, parseNineRouterRequest } from "./request";
 import { NineRouterSessionManager, type NineRouterStage } from "./session-manager";
 import { loadNineRouterKey, NINE_ROUTER_KEY_ENV } from "./key-manager";
 import { logNineRouter, newNineRouterRequestId } from "./diagnostics";
+import { estimateNineRouterUsage } from "./usage";
+import type { NineRouterRequest } from "./request";
 
 export const NINE_ROUTER_BASE_PATH = "/integrations/9router/v1";
 export { NINE_ROUTER_KEY_ENV };
@@ -34,7 +36,7 @@ function bearerAuthorized(req: Request, key: string): boolean {
   return expected.length === actual.length && timingSafeEqual(expected, actual);
 }
 
-function stageEvents(stage: NineRouterStage): AdapterEvent[] {
+function stageEvents(stage: NineRouterStage, request: NineRouterRequest): AdapterEvent[] {
   const events: AdapterEvent[] = [];
   if (stage.text) events.push({ type: "text_delta", text: stage.text });
   for (const call of stage.calls) {
@@ -43,7 +45,7 @@ function stageEvents(stage: NineRouterStage): AdapterEvent[] {
     events.push({ type: "tool_call_delta", arguments: JSON.stringify(call.arguments ?? {}) });
     events.push({ type: "tool_call_end" });
   }
-  events.push({ type: "done", endTurn: stage.finished });
+  events.push({ type: "done", endTurn: stage.finished, usage: estimateNineRouterUsage(request, stage) });
   return events;
 }
 
@@ -114,10 +116,10 @@ export class NineRouterProvider {
       const stagePromise = matchesPendingTool
         ? this.manager.continue(request, req.signal, requestId)
         : this.manager.start(request, route, req.signal, requestId);
-      if (!request.stream) return Response.json(buildResponseJSON(stageEvents(await stagePromise), request.model));
+      if (!request.stream) return Response.json(buildResponseJSON(stageEvents(await stagePromise, request), request.model));
       const queue = new AsyncEventQueue<AdapterEvent>();
       void stagePromise.then(stage => {
-        for (const event of stageEvents(stage)) queue.push(event);
+        for (const event of stageEvents(stage, request)) queue.push(event);
       }, error => {
         logNineRouter("request_failed", { requestId, status: error instanceof NineRouterRequestError ? error.status : 502,
           category: error instanceof NineRouterRequestError ? "agent" : "browser",

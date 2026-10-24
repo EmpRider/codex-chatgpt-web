@@ -1,12 +1,26 @@
 import { randomUUID } from "node:crypto";
-import { ChatGptBrowserWorker, type BrowserTurn } from "../../adapters/chatgpt-web/browser-worker";
+import {
+  ChatGptBrowserWorker, assertChatGptWebMultipartInputWithinLimits,
+  resolveChatGptWebMultipartStagingMode, type BrowserTurn,
+} from "../../adapters/chatgpt-web/browser-worker";
 import { ChatGptExternalTurnProgress } from "../../adapters/chatgpt-web/turn-progress";
 import { TurnBroker, type BrokerToolRequest, type BrokerTurnEnvironment } from "../../adapters/chatgpt-web/turn-broker";
 import type { CodexProviderConfig } from "../../types";
 import { CHATGPT_CONNECTOR_NAME } from "../../config";
 import { MAX_CHATGPT_BROWSER_TABS } from "../../adapters/chatgpt-web/concurrency";
 import { CHATGPT_WEB_MCP_INVOCATION_TIMEOUT_MS } from "../../adapters/chatgpt-web/mcp-server";
-import { compileChatGptWebPrompt } from "../../adapters/chatgpt-web/prompt";
+import {
+  compileChatGptWebPrompt, compileExternalAgentBiggerContextPrompt,
+  type CompiledChatGptWebPrompt, type ExternalAgentChatGptPromptInput,
+} from "../../adapters/chatgpt-web/prompt";
+import { compiledChatGptWebMaxMessageChars, compiledChatGptWebMessages,
+  estimateChatGptWebImageTokens, estimateCompiledChatGptWebInputTokens,
+  estimateCompiledChatGptWebMessageTokens } from "../../adapters/chatgpt-web/input-tokens";
+import { resolveChatGptWebModelMode } from "../../adapters/chatgpt-web/model";
+import { ChatGptWebAdapterError } from "../../adapters/chatgpt-web/adapter-error";
+import { CHATGPT_WEB_MODEL_ID, CHATGPT_WEB_LUNA_MODEL_ID } from "../../adapters/chatgpt-web/model";
+import { resolveChatGptWebContextLimits, supportsChatGptWebBiggerContext } from "../../chatgpt-web-models";
+import { estimateTokens } from "../../lib/token-estimate";
 import type { NineRouterRequest } from "./request";
 import { NineRouterRequestError } from "./request";
 import { logNineRouter } from "./diagnostics";
@@ -15,6 +29,39 @@ import { logNineRouter } from "./diagnostics";
 // a tool is returned to the coding agent, not while ChatGPT is still thinking.
 const SESSION_TTL_MS = CHATGPT_WEB_MCP_INVOCATION_TIMEOUT_MS - 10_000;
 const MAX_ACTIVE_SESSIONS = MAX_CHATGPT_BROWSER_TABS;
+// Browser's rich-text composer has mutated large external-agent JSON near 112K
+// characters. Multipart transport is safer for long turns when opted in.
+const EXTERNAL_AGENT_MULTIPART_THRESHOLD_CHARS = 100_000;
+const EXTERNAL_AGENT_INLINE_MAX_CHARS = 180_000;
+
+/** All checks run before opening a browser, avoiding a partially uploaded task. */
+function verifyNineRouterMultipart(
+  compiled: CompiledChatGptWebPrompt,
+  model: { backendModel: string; adapterEffort: string; modelFamily?: "5.6" | "6" },
+  capabilities: BrowserTurn["capabilities"],
+): void {
+  if (!compiled.multipart) throw new Error("Expected a multipart coding-agent prompt");
+  const browserModel = model.backendModel;
+  const selectedMode = resolveChatGptWebModelMode(browserModel, model.adapterEffort, capabilities);
+  const messages = compiledChatGptWebMessages(compiled);
+  const stages = messages.slice(0, -1);
+  const maxStageMessageTokens = Math.max(...stages.map(text => estimateTokens(text, browserModel)));
+  const maxStageChars = Math.max(...stages.map(text => text.length));
+  const stagingMode = resolveChatGptWebMultipartStagingMode(
+    browserModel, capabilities, maxStageMessageTokens, maxStageChars,
+  );
+  const finalMessage = messages.at(-1)!;
+  assertChatGptWebMultipartInputWithinLimits(
+    estimateCompiledChatGptWebInputTokens(compiled, browserModel),
+    estimateCompiledChatGptWebMessageTokens(compiled, browserModel),
+    browserModel, selectedMode.effort, capabilities,
+    compiledChatGptWebMaxMessageChars(compiled), compiled.multipart.parts.length,
+    { stagingEffort: stagingMode.effort, maxStageMessageTokens, maxStageChars,
+      finalMessageTokens: estimateTokens(finalMessage, browserModel), finalMessageChars: finalMessage.length,
+      finalImageTokens: estimateChatGptWebImageTokens(compiled) },
+    model.modelFamily,
+  );
+}
 
 export interface NineRouterStage {
   text: string;
@@ -135,11 +182,10 @@ export class NineRouterSessionManager {
     this.sessions.add(session);
     logNineRouter("browser_started", { requestId, traceId, token, toolCount: tools.length });
 
-    // The native Codex backend and external-agent backend share this one JSON
-    // prompt compiler. This adapter supplies only its neutral context and the
-    // broker's external tool names; no native Codex authority is synthesized.
+    // External context must retain caller roles, advertised tools, and tool
+    // results even when staged. Never synthesize native Codex authority.
     const images = request.history.flatMap(message => message.images ?? []);
-    const prompt = compileChatGptWebPrompt({
+    const input: ExternalAgentChatGptPromptInput = {
       agentKind: "external-agent",
       instructions: request.instructions,
       history: request.history.map(message => ({ role: message.role, text: message.text })),
@@ -149,24 +195,66 @@ export class NineRouterSessionManager {
       turnToken: token,
       connectorName: CHATGPT_CONNECTOR_NAME,
       images,
-    }).text;
+    };
+    const capabilities: BrowserTurn["capabilities"] = {
+      localToolsEnabled: tools.length > 0,
+      solAvailable: this.provider.chatgptWeb?.solAvailable === true,
+      extraHighAvailable: this.provider.chatgptWeb?.extraHighAvailable === true,
+      proAvailable: this.provider.chatgptWeb?.proAvailable === true,
+      experimentalBiggerContext: this.provider.chatgptWeb?.experimentalBiggerContext === true,
+    };
+    let compiled: CompiledChatGptWebPrompt;
+    try {
+      compiled = compileChatGptWebPrompt(input);
+      if (capabilities.experimentalBiggerContext) {
+        const mode = resolveChatGptWebModelMode(model.backendModel, model.adapterEffort, capabilities);
+        const regularLimit = resolveChatGptWebContextLimits(
+          model.backendModel as typeof CHATGPT_WEB_MODEL_ID | typeof CHATGPT_WEB_LUNA_MODEL_ID, mode.effort,
+          { ...capabilities, experimentalBiggerContext: false }, model.modelFamily).autoCompactTokenLimit;
+        const shouldStage = compiled.text.length > EXTERNAL_AGENT_MULTIPART_THRESHOLD_CHARS
+          || estimateCompiledChatGptWebInputTokens(compiled, model.backendModel) >= regularLimit;
+        const canStage = supportsChatGptWebBiggerContext(model.backendModel, mode.effort, model.modelFamily);
+        if (shouldStage && canStage) {
+          for (const partCount of [2, 6] as const) {
+            try {
+              const candidate = compileExternalAgentBiggerContextPrompt(
+                input, capabilities, model.backendModel as typeof CHATGPT_WEB_MODEL_ID | typeof CHATGPT_WEB_LUNA_MODEL_ID,
+                mode.effort, partCount,
+              );
+              verifyNineRouterMultipart(candidate, model, capabilities);
+              compiled = candidate;
+              break;
+            } catch (error) {
+              if (!(error instanceof ChatGptWebAdapterError) || partCount === 6) throw error;
+            }
+          }
+        }
+      }
+      if (!compiled.multipart && compiled.text.length > EXTERNAL_AGENT_INLINE_MAX_CHARS) {
+        throw new NineRouterRequestError(
+          "Agent context exceeds the safe ChatGPT Web composer budget. Enable Bigger Context in the launcher and use a supported model, or run /compact in the coding agent before retrying.",
+          413,
+        );
+      }
+    } catch (error) {
+      this.close(session, error instanceof Error ? error : undefined);
+      if (error instanceof ChatGptWebAdapterError) {
+        const compactAdvice = error.message.includes("/compact")
+          ? "" : " Run /compact in the coding agent before retrying.";
+        throw new NineRouterRequestError(`${error.message}${compactAdvice}`, 413);
+      }
+      throw error;
+    }
     logNineRouter("prompt_prepared", { requestId, traceId, token, instructionChars: request.instructions.length,
       historyChars: request.history.reduce((total, message) => total + message.text.length, 0),
-      toolListChars: tools.reduce((total, tool) => total + tool.name.length, 0), promptChars: prompt.length });
-    if (prompt.length > 180_000) {
-      this.close(session);
-      throw new NineRouterRequestError("Agent context exceeds the safe ChatGPT Web composer budget", 413);
-    }
+      toolListChars: tools.reduce((total, tool) => total + tool.name.length, 0),
+      promptChars: compiledChatGptWebMaxMessageChars(compiled),
+      contextParts: compiled.multipart?.parts.length ?? 1 });
     const turn: BrowserTurn = {
       traceId, modelId: model.backendModel, reasoning: model.adapterEffort, modelFamily: model.modelFamily,
-      capabilities: {
-        localToolsEnabled: tools.length > 0,
-        solAvailable: this.provider.chatgptWeb?.solAvailable === true,
-        extraHighAvailable: this.provider.chatgptWeb?.extraHighAvailable === true,
-        proAvailable: this.provider.chatgptWeb?.proAvailable === true,
-      },
+      capabilities,
       nativeConnector: tools.length > 0,
-      prepare: async () => ({ text: prompt, images, turnToken: token, release: () => {} }),
+      prepare: async () => ({ ...compiled, release: () => {} }),
       abortSignal: session.abort.signal,
       onTextDelta: text => { session.pendingText.push(text); this.wake(session); },
       externalProgress: session.progress,

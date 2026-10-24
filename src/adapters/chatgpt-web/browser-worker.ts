@@ -5361,6 +5361,7 @@ export class ChatGptBrowserWorker {
           multipartTransactionId,
           index + 1,
           prepared.multipart!.parts.length,
+          prepared.multipart!.agentKind,
         ))
         : undefined;
       const multipartFinalPrompt = prepared.multipart && multipartTransactionId

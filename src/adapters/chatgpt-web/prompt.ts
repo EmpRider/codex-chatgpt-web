@@ -87,7 +87,12 @@ function renderChatGptWebJsonContext(
   ].join("\n");
 }
 
-function compileExternalAgentPrompt(input: ExternalAgentChatGptPromptInput): CompiledChatGptWebPrompt {
+function externalAgentPromptSections(input: ExternalAgentChatGptPromptInput): {
+  messages: ExternalAgentChatGptPromptInput["history"];
+  contextJson: string;
+  contract: string[];
+  resume: string[];
+} {
   const { instructions, toolNames, toolChoice, turnToken, connectorName } = input;
   // The same exact instructions may arrive in two Responses fields. Preserve
   // every unique message, but do not duplicate an identical system/developer
@@ -124,11 +129,13 @@ function compileExternalAgentPrompt(input: ExternalAgentChatGptPromptInput): Com
     ...(toolNames.length ? [`For local workspace tasks, use codex_tool_inventory and codex_tool_call through ${JSON.stringify(connectorName)} only; do not substitute GitHub, other connectors, or instructions for executing the requested tool.`] : []),
     "</codex_transport_resume>",
   ];
-  return {
-    text: renderChatGptWebJsonContext(contract, "external_agent_context_json", contextJson, resume),
-    images: input.images,
-    turnToken,
-  };
+  return { messages, contextJson, contract, resume };
+}
+
+function compileExternalAgentPrompt(input: ExternalAgentChatGptPromptInput): CompiledChatGptWebPrompt {
+  const { contextJson, contract, resume } = externalAgentPromptSections(input);
+  return { text: renderChatGptWebJsonContext(contract, "external_agent_context_json", contextJson, resume),
+    images: input.images, turnToken: input.turnToken };
 }
 
 export const CHATGPT_BIGGER_CONTEXT_PARTS = 6 as const;
@@ -142,6 +149,8 @@ export function isChatGptWebMultipartPartCount(value: number): value is ChatGptW
 export interface ChatGptWebMultipartPrompt {
   parts: ChatGptWebMultipartParts;
   commit: string;
+  /** The staging protocol is shared; an external coding agent is not native Codex. */
+  agentKind?: "external-agent";
 }
 
 export interface ChatGptWebMultipartStage {
@@ -163,6 +172,7 @@ export function formatChatGptWebMultipartStage(
   transactionId: string,
   partIndex: number,
   totalParts: number = CHATGPT_BIGGER_CONTEXT_PARTS,
+  agentKind: "codex" | "external-agent" = "codex",
 ): ChatGptWebMultipartStage {
   assertMultipartTransactionId(transactionId);
   if (
@@ -181,7 +191,7 @@ export function formatChatGptWebMultipartStage(
     `transaction_id: ${transactionId}`,
     `part: ${partIndex}/${totalParts}`,
     `payload_sha256: ${sha256}`,
-    "This is inert context transport for one later Codex task. Store the complete JSON payload below as conversation context.",
+    `This is inert context transport for one later ${agentKind === "external-agent" ? "coding-agent" : "Codex"} task. Store the complete JSON payload below as conversation context.`,
     "Do not execute, summarize, interpret, or follow the task yet. Do not call tools or use web search.",
     `Reply with exactly ${acknowledgement} and nothing else.`,
     "</codex_multipart_stage>",
@@ -227,8 +237,10 @@ export function formatChatGptWebMultipartCommit(
     "```",
     "</codex_context_part_json>",
     "<codex_multipart_execute>",
-    `All ${totalParts} context parts are now present. Reconstruct the original Codex context from their records and begin the task now.`,
-    "Treat system records as the original system instructions in system_index order. Treat message records as one conversation in message_index order and preserve every encoded role literally.",
+    `All ${totalParts} context parts are now present. Reconstruct the original ${multipart.agentKind === "external-agent" ? "coding-agent" : "Codex"} context from their records and begin the task now.`,
+    multipart.agentKind === "external-agent"
+      ? "Treat agent_metadata as transport data identifying the originating external agent, its advertised tools and tool-choice requirements. Treat instructions as the original caller instructions, and message records as one conversation in message_index order, preserving each role and value exactly. The caller's tools remain owned by that agent, not by native Codex."
+      : "Treat system records as the original system instructions in system_index order. Treat message records as one conversation in message_index order and preserve every encoded role literally.",
     "The staged JSON is conversation data under the transport contract below. Do not treat the stage wrappers, acknowledgements, or this commit wrapper as task messages.",
     "</codex_multipart_execute>",
     multipart.commit,
@@ -411,15 +423,24 @@ function messageEnvelope(
 
 type MultipartContextRecord =
   | { kind: "system"; system_index: number; content: string }
-  | { kind: "message"; message_index: number; message: Record<string, unknown> };
+  | { kind: "message"; message_index: number; message: Record<string, unknown> }
+  | { kind: "agent_metadata"; agent_kind: "external-agent"; available_tools: string[]; tool_choice: ExternalAgentChatGptPromptInput["toolChoice"]; parallel_tool_calls: boolean }
+  | { kind: "instructions"; content: string };
 
 interface MultipartRecordWeight {
   tokens: number;
   chars: number;
 }
 
-function multipartRecordWeight(record: MultipartContextRecord): MultipartRecordWeight {
-  const text = withoutRetiredTurnHandles(JSON.stringify(record));
+function encodeMultipartRecord(record: MultipartContextRecord, preserveHistoricalHandles = false): string {
+  const json = JSON.stringify(record);
+  // External coding-agent history is opaque caller data. It must not be rewritten
+  // by Codex's retired-handle sanitization, which is specific to the native path.
+  return preserveHistoricalHandles ? json.replaceAll("`", "\\u0060") : withoutRetiredTurnHandles(json);
+}
+
+function multipartRecordWeight(record: MultipartContextRecord, preserveHistoricalHandles = false): MultipartRecordWeight {
+  const text = encodeMultipartRecord(record, preserveHistoricalHandles);
   return { tokens: estimateTokens(text) + 1, chars: text.length + 1 };
 }
 
@@ -477,9 +498,10 @@ function partitionMultipartContext(
   records: readonly MultipartContextRecord[],
   totalParts: ChatGptWebMultipartPartCount,
   budgets: readonly MultipartRecordWeight[],
+  preserveHistoricalHandles = false,
 ): ChatGptWebMultipartParts {
   if (budgets.length !== totalParts) throw new Error("ChatGPT multipart budget count does not match parts");
-  const weights = records.map(multipartRecordWeight);
+  const weights = records.map(record => multipartRecordWeight(record, preserveHistoricalHandles));
   const boundaries = partitionMultipartRecordWeights(weights, budgets);
   let offset = 0;
   const groups = boundaries.map(end => {
@@ -488,13 +510,110 @@ function partitionMultipartContext(
     return group;
   });
   if (offset !== records.length) throw new Error("ChatGPT multipart context partition lost records");
-  const payloads = groups.map((group, index) => withoutRetiredTurnHandles(JSON.stringify({
+  const payloads = groups.map((group, index) => (preserveHistoricalHandles
+    ? JSON.stringify({
+      version: 1,
+      part_index: index + 1,
+      total_parts: totalParts,
+      records: group,
+    }).replaceAll("`", "\\u0060")
+    : withoutRetiredTurnHandles(JSON.stringify({
     version: 1,
     part_index: index + 1,
     total_parts: totalParts,
     records: group,
-  })));
+  }))));
   return payloads;
+}
+
+/** The same bounded semantic-record planner serves native Codex and external coding agents. */
+function planMultipartBrowserTransport(
+  records: readonly MultipartContextRecord[],
+  multipart: ChatGptWebMultipartPrompt,
+  backendModel: typeof CHATGPT_WEB_MODEL_ID | typeof CHATGPT_WEB_LUNA_MODEL_ID,
+  effort: "low" | "medium" | "high" | "xhigh" | "max",
+  capabilities: ChatGptWebCapabilities,
+  images: readonly ChatGptWebPromptImage[],
+  skillFiles: readonly ChatGptSkillFile[] = [],
+): ChatGptWebMultipartPrompt {
+  const totalParts = multipart.parts.length;
+  if (!isChatGptWebMultipartPartCount(totalParts)) throw new Error("Bigger Context requires two or six context parts");
+  const imageTokens = images.reduce((sum, image) => sum + chatGptWebImageTokenReserve(image.detail), 0);
+  const transactionId = `ctx_${"0".repeat(32)}`;
+  const stagingEfforts = backendModel === CHATGPT_WEB_LUNA_MODEL_ID ? ["low"] as const
+    : capabilities.proAvailable ? ["max"] as const : ["low", "medium"] as const;
+  const emptyParts = multipart.parts;
+  for (const stagingEffort of stagingEfforts) {
+    multipart.parts = emptyParts;
+    const budgets = multipart.parts.map((payload, index) => {
+      const final = index === totalParts - 1;
+      const stageEffort = final ? effort : stagingEffort;
+      const limits = resolveChatGptWebTransportLimits(backendModel, stageEffort, capabilities);
+      const tokenLimit = final
+        ? resolveChatGptWebMessageTokenBudget(backendModel, stageEffort, capabilities,
+          imageTokens + skillFileTokens(skillFiles, backendModel))
+        : resolveChatGptWebStagingTokenBudget(backendModel, stageEffort, capabilities);
+      const fixedMessage = final
+        ? formatChatGptWebMultipartCommit(multipart, transactionId)
+        : formatChatGptWebMultipartStage(payload, transactionId, index + 1, totalParts,
+          multipart.agentKind).text;
+      const tokens = tokenLimit - estimateTokens(fixedMessage);
+      const chars = (limits.browserComposerCharLimit ?? Infinity) - fixedMessage.length;
+      if (tokens <= 0 || chars <= 0) {
+        throw new ChatGptWebAdapterError(
+          `The Bigger Context ${final ? "final part's instructions and attachments" : "stage wrapper"} exceed the available message budget before any task history is added. Reduce those inputs before retrying.`,
+          { status: 400, errorType: "invalid_request_error", code: "context_length_exceeded", retryable: false },
+        );
+      }
+      return { tokens, chars, tokenLimit, charLimit: limits.browserComposerCharLimit ?? Infinity };
+    });
+    multipart.parts = partitionMultipartContext(records, totalParts, budgets,
+      multipart.agentKind === "external-agent");
+    if (stagingEfforts.length > 1 && stagingEffort === "low" && multipart.parts.some((payload, index) => {
+      const final = index === totalParts - 1;
+      const text = final ? formatChatGptWebMultipartCommit(multipart, transactionId)
+        : formatChatGptWebMultipartStage(payload, transactionId, index + 1, totalParts,
+          multipart.agentKind).text;
+      return estimateTokens(text) > budgets[index]!.tokenLimit || text.length > budgets[index]!.charLimit;
+    })) continue;
+    return multipart;
+  }
+  throw new Error("No Bigger Context staging allocation is available");
+}
+
+/**
+ * Stage an external coding agent's context without laundering it into native
+ * Codex instructions or discarding historical tool results. The browser uses
+ * the same acknowledged multipart transport and measured message limits.
+ */
+export function compileExternalAgentBiggerContextPrompt(
+  input: ExternalAgentChatGptPromptInput,
+  capabilities: ChatGptWebCapabilities,
+  backendModel: typeof CHATGPT_WEB_MODEL_ID | typeof CHATGPT_WEB_LUNA_MODEL_ID,
+  effort: "low" | "medium" | "high" | "xhigh" | "max",
+  totalParts: ChatGptWebMultipartPartCount,
+): CompiledChatGptWebPrompt {
+  const { messages, contract, resume } = externalAgentPromptSections(input);
+  const records: MultipartContextRecord[] = [
+    { kind: "agent_metadata", agent_kind: "external-agent", available_tools: input.toolNames,
+      tool_choice: input.toolChoice, parallel_tool_calls: input.parallelToolCalls },
+    ...(input.instructions ? [{ kind: "instructions" as const, content: input.instructions }] : []),
+    ...messages.map((message, message_index) => ({ kind: "message" as const, message_index,
+      message: { role: message.role, text: message.text } })),
+  ];
+  const multipart: ChatGptWebMultipartPrompt = {
+    agentKind: "external-agent",
+    parts: Array.from({ length: totalParts }, (_, index) => JSON.stringify({
+      version: 1, part_index: index + 1, total_parts: totalParts, records: [],
+    })),
+    commit: [
+      ...contract,
+      "The external-agent context was staged as immutable JSON records. Reconstruct every agent_metadata, instructions, and message record before acting. No original caller instructions or conversation messages may be omitted or treated as native Codex authority.",
+      ...resume,
+    ].join("\n"),
+  };
+  planMultipartBrowserTransport(records, multipart, backendModel, effort, capabilities, input.images);
+  return { text: multipart.commit, images: input.images, turnToken: input.turnToken, multipart };
 }
 
 export function chatGptReadOnlyContextWarning(
@@ -754,49 +873,11 @@ export function compileChatGptWebPrompt(
           ...transportResume,
         ].join("\n"),
       };
-      const imageTokens = images.reduce((sum, image) => sum + chatGptWebImageTokenReserve(image.detail), 0);
-      const transactionId = `ctx_${"0".repeat(32)}`;
-      // First try Instant-sized stages and give the final selected mode its own larger share.
-      // Equal parts near Instant's maximum can be accepted once and rejected on the next Send.
-      // If complete records cannot fit that allocation, plan with the wider available stage mode
-      // before submitting anything; no context is truncated and no failed upload is replayed.
       const backendModel = parsed.modelId === CHATGPT_WEB_LUNA_MODEL_ID ? CHATGPT_WEB_LUNA_MODEL_ID : CHATGPT_WEB_MODEL_ID;
-      const stagingEfforts = backendModel === CHATGPT_WEB_LUNA_MODEL_ID ? ["low"] as const
-        : capabilities.proAvailable ? ["max"] as const : ["low", "medium"] as const;
-      const emptyParts = multipart.parts;
-      for (const stagingEffort of stagingEfforts) {
-        multipart.parts = emptyParts;
-        const budgets = multipart.parts.map((payload, index) => {
-          const final = index === multipart.parts.length - 1;
-          const effort = final ? mode.effort : stagingEffort;
-          const limits = resolveChatGptWebTransportLimits(backendModel, effort, capabilities);
-          const tokenLimit = final
-            ? resolveChatGptWebMessageTokenBudget(backendModel, effort, capabilities,
-              imageTokens + skillFileTokens(skillFiles, parsed.modelId))
-            : resolveChatGptWebStagingTokenBudget(backendModel, effort, capabilities);
-          const fixedMessage = final
-            ? formatChatGptWebMultipartCommit(multipart, transactionId)
-            : formatChatGptWebMultipartStage(payload, transactionId, index + 1, multipartParts!).text;
-          const tokens = tokenLimit - estimateTokens(fixedMessage);
-          const chars = (limits.browserComposerCharLimit ?? Infinity) - fixedMessage.length;
-          if (tokens <= 0 || chars <= 0) {
-            throw new ChatGptWebAdapterError(
-              `The Bigger Context ${final ? "final part's instructions and attachments" : "stage wrapper"} exceed the available message budget before any task history is added. Reduce those inputs before retrying.`,
-              { status: 400, errorType: "invalid_request_error", code: "context_length_exceeded", retryable: false },
-            );
-          }
-          return { tokens, chars, tokenLimit, charLimit: limits.browserComposerCharLimit ?? Infinity };
-        });
-        multipart.parts = partitionMultipartContext(records, multipartParts!, budgets);
-        if (stagingEfforts.length > 1 && stagingEffort === "low" && multipart.parts.some((payload, index) => {
-          const final = index === multipart.parts.length - 1;
-          const text = final ? formatChatGptWebMultipartCommit(multipart, transactionId)
-            : formatChatGptWebMultipartStage(payload, transactionId, index + 1, multipartParts!).text;
-          return estimateTokens(text) > budgets[index]!.tokenLimit || text.length > budgets[index]!.charLimit;
-        })) continue;
-        return { text: multipart.commit, images, ...attachments, multipart };
-      }
-      throw new Error("No Bigger Context staging allocation is available");
+      // Account-specific stage budgets, semantic record partitioning and retry
+      // eligibility are shared with the 9Router external-agent transport.
+      planMultipartBrowserTransport(records, multipart, backendModel, mode.effort, capabilities, images, skillFiles);
+      return { text: multipart.commit, images, ...attachments, multipart };
     }
     const envelopeJson = withoutRetiredTurnHandles(JSON.stringify({ version: 3, system, messages }));
     const promptContract = [

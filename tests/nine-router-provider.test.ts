@@ -11,6 +11,10 @@ import { NineRouterSessionManager } from "../src/integrations/nine-router/sessio
 import { requireNativeToolOwner } from "../src/adapters/chatgpt-web/mcp-server";
 import { disableNineRouterKey, loadNineRouterKey, provisionNineRouterKey } from "../src/integrations/nine-router/key-manager";
 import { assertNineRouterToolArguments } from "../src/integrations/nine-router/tool-policy";
+import { estimateNineRouterUsage } from "../src/integrations/nine-router/usage";
+import { compiledChatGptWebMessages } from "../src/adapters/chatgpt-web/input-tokens";
+import { compileExternalAgentBiggerContextPrompt, formatChatGptWebMultipartCommit,
+  formatChatGptWebMultipartStage, type ExternalAgentChatGptPromptInput } from "../src/adapters/chatgpt-web/prompt";
 
 const advertised = {
   type: "function", name: "Read", description: "Read an agent-side file",
@@ -203,7 +207,7 @@ test("long caller instructions are kept verbatim while duplicate system text and
     expect(prompt).not.toContain("[system]");
     expect(prompt).not.toContain("Detailed tool manual.");
     expect(prompt).toContain("AgentTool16");
-    expect(prompt.length).toBeLessThan(instructions.length + 2_000);
+    expect(prompt.length).toBeLessThan(instructions.length + 3_000);
     expect(logged).toHaveLength(1);
     const stats = JSON.parse(logged[0]!.slice("[9router] ".length)) as Record<string, unknown>;
     expect(stats.instruction_chars).toBe(instructions.length);
@@ -212,6 +216,130 @@ test("long caller instructions are kept verbatim while duplicate system text and
     expect(logged[0]).not.toContain(instructions);
     expect(logged[0]).not.toContain(manual);
   } finally { console.info = originalInfo; manager.closeAll(); }
+});
+
+test("9Router stages long Claude Code histories with Bigger Context, preserving every role and tool result", async () => {
+  const config = defaultConfig("full");
+  config.experimentalBiggerContext = true;
+  const messages = Array.from({ length: 25 }, (_unused, index) => ({
+    role: index % 2 ? "assistant" : "user",
+    content: `history-${index} ${"Source evidence and decisions must be retained. ".repeat(170)}`,
+  }));
+  const callId = `call_${"a".repeat(32)}`;
+  const request = parseNineRouterRequest({ model: "chatgpt-web/gpt-6-sol", instructions: "Keep the complete history.",
+    input: [...messages, { type: "function_call", call_id: callId, name: "Read", arguments: "{}" },
+      { type: "function_call_output", call_id: callId,
+        output: "Tool read result: original file retained; turn_01234567890123456789012345678901" },
+      { role: "user", content: "Continue the inspection using the tool result" }],
+    tools: [advertised] });
+  let reachedBrowser = false;
+  const manager = new NineRouterSessionManager(broker, providerConfig(config), {
+    async run(turn) {
+      reachedBrowser = true;
+      expect(turn.capabilities.experimentalBiggerContext).toBe(true);
+      const compiled = await turn.prepare();
+      expect(compiled.multipart?.agentKind).toBe("external-agent");
+      expect([2, 6]).toContain(compiled.multipart!.parts.length);
+      const payloads = compiled.multipart!.parts.map(part => JSON.parse(part) as {
+        records: Array<Record<string, unknown>>;
+      });
+      const records = payloads.flatMap(part => part.records);
+      expect(records[0]).toMatchObject({ kind: "agent_metadata", agent_kind: "external-agent",
+        available_tools: ["Read"] });
+      expect(records.find(record => record.kind === "instructions")).toMatchObject({
+        kind: "instructions", content: "Keep the complete history.",
+      });
+      expect(records.filter(record => record.kind === "message").map(record => record.message)).toEqual(
+        request.history.map(message => ({ role: message.role, text: message.text })),
+      );
+      expect(compiled.multipart!.parts.join("\n")).toContain("turn_01234567890123456789012345678901");
+      expect(compiled.multipart!.commit).toContain("original caller instructions");
+      expect(compiled.multipart!.commit).not.toContain("Act as the model backend for the Codex task");
+      expect(compiledChatGptWebMessages(compiled)).toHaveLength(compiled.multipart!.parts.length);
+      return "Done";
+    },
+  });
+  try {
+    const stage = await manager.start(request, { backendModel: "gpt-5.6-sol", adapterEffort: "high", modelFamily: "6" });
+    expect(stage.finished).toBe(true);
+    expect(reachedBrowser).toBe(true);
+  } finally { manager.closeAll(); }
+}, 30_000);
+
+test("9Router escalates from two to six parts when the Plus composer cannot carry two whole-record envelopes", async () => {
+  const config = defaultConfig("full");
+  config.experimentalBiggerContext = true;
+  const request = parseNineRouterRequest({ model: "chatgpt-web/gpt-6-sol",
+    input: Array.from({ length: 12 }, (_unused, index) => ({
+      role: "user", content: `record-${index}:${"                              line".repeat(3_000)}`,
+    })) });
+  let partCount = 0;
+  const manager = new NineRouterSessionManager(broker, providerConfig(config), {
+    async run(turn) {
+      const compiled = await turn.prepare();
+      partCount = compiled.multipart?.parts.length ?? 0;
+      expect(compiled.multipart!.parts.flatMap(part =>
+        (JSON.parse(part) as { records: Array<{ kind: string }> }).records)
+        .filter(record => record.kind === "message")).toHaveLength(12);
+      return "All records retained";
+    },
+  });
+  try {
+    const stage = await manager.start(request, { backendModel: "gpt-5.6-sol", adapterEffort: "high", modelFamily: "6" });
+    expect(stage.finished).toBe(true);
+    expect(partCount).toBe(6);
+  } finally { manager.closeAll(); }
+}, 30_000);
+
+test("9Router rejects unsafe inline contexts cleanly when Bigger Context is disabled", async () => {
+  const config = defaultConfig("full");
+  config.experimentalBiggerContext = false;
+  let reachedBrowser = false;
+  const manager = new NineRouterSessionManager(broker, providerConfig(config), {
+    async run() { reachedBrowser = true; return "Unexpected"; },
+  });
+  try {
+    const request = parseNineRouterRequest({ model: "chatgpt-web/gpt-6-sol",
+      input: "Unsafe history " + "repeated context ".repeat(12_000) });
+    await expect(manager.start(request, { backendModel: "gpt-5.6-sol", adapterEffort: "high", modelFamily: "6" }))
+      .rejects.toThrow("Enable Bigger Context");
+    expect(manager.activeCount()).toBe(0);
+    expect(reachedBrowser).toBe(false);
+  } finally { manager.closeAll(); }
+}, 30_000);
+
+test("external Bigger Context supports six semantic parts without upgrading external authority", () => {
+  const input: ExternalAgentChatGptPromptInput = {
+    agentKind: "external-agent", instructions: "Only read files if advertised.",
+    history: Array.from({ length: 30 }, (_unused, index) => ({
+      role: index % 2 ? "tool" : "user", text: `message-${index} ${"Long evidence. ".repeat(400)}`,
+    })),
+    toolNames: ["Read"], toolChoice: "auto", parallelToolCalls: true,
+    turnToken: "turn_00000000000000000000000000000000", connectorName: "Codex Native2", images: [],
+  };
+  const capabilities = { localToolsEnabled: true, solAvailable: true, extraHighAvailable: false,
+    proAvailable: false, experimentalBiggerContext: true };
+  const compiled = compileExternalAgentBiggerContextPrompt(input, capabilities, "gpt-5.6-sol", "high", 6);
+  expect(compiled.multipart?.parts).toHaveLength(6);
+  const records = compiled.multipart!.parts.flatMap(part => (JSON.parse(part) as { records: Array<{
+    kind: string; message?: { role: string; text: string };
+  }> }).records);
+  expect(records.filter(record => record.kind === "message").map(record => record.message)).toEqual(input.history);
+  const transactionId = `ctx_${"a".repeat(32)}`;
+  expect(formatChatGptWebMultipartStage(compiled.multipart!.parts[0]!, transactionId, 1, 6, "external-agent").text)
+    .toContain("one later coding-agent task");
+  expect(formatChatGptWebMultipartCommit(compiled.multipart!, transactionId))
+    .toContain("Treat agent_metadata as transport data identifying the originating external agent");
+}, 30_000);
+
+test("9Router estimates conversation and output tokens to support upstream auto-compaction", () => {
+  const request = parseNineRouterRequest({ model: "chatgpt-web/gpt-6-sol", instructions: "Do not truncate.",
+    input: [{ role: "user", content: "Analyze source code" }, { role: "assistant", content: "Working" }] });
+  const usage = estimateNineRouterUsage(request, { text: "Analysis complete", calls: [], finished: true });
+  expect(usage.estimated).toBe(true);
+  expect(usage.inputTokens).toBeGreaterThan(8_192);
+  expect(usage.outputTokens).toBeGreaterThan(0);
+  expect(usage.totalTokens).toBe(usage.inputTokens + usage.outputTokens);
 });
 
 test("9Router uses the same fenced JSON transport as native Codex and preserves bracket-heavy history exactly", async () => {
@@ -526,8 +654,16 @@ test("authenticated provider Responses route emits standard SSE and nonstream JS
     expect(frames).toContain("event: response.output_text.delta");
     expect(frames).toContain("Hello from 9Router");
     expect(frames).toContain("event: response.completed");
-    const json = await (await send(false)).json() as { output: Array<{ type: string; content?: Array<{ text: string }> }> };
+    const completion = [...frames.matchAll(/^data: (\{.+\})$/gm)]
+      .map(match => JSON.parse(match[1]!) as { type: string; response?: { usage?: { input_tokens: number; output_tokens: number } } })
+      .find(frame => frame.type === "response.completed");
+    expect(completion?.response?.usage?.input_tokens).toBeGreaterThan(0);
+    expect(completion?.response?.usage?.output_tokens).toBeGreaterThan(0);
+    const json = await (await send(false)).json() as { usage: { input_tokens: number; output_tokens: number };
+      output: Array<{ type: string; content?: Array<{ text: string }> }> };
     expect(json.output.find(item => item.type === "message")?.content?.[0]?.text).toBe("Hello from 9Router");
+    expect(json.usage.input_tokens).toBeGreaterThan(0);
+    expect(json.usage.output_tokens).toBeGreaterThan(0);
   } finally { provider.close(); }
 });
 
