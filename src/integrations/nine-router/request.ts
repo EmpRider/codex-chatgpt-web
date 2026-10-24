@@ -1,17 +1,19 @@
 import type { CodexTool } from "../../types";
+import type { BrokerToolResult } from "../../adapters/chatgpt-web/turn-broker";
 import type { ChatGptWebPromptImage } from "../../adapters/chatgpt-web/prompt";
 import { normalizeNineRouterTool } from "./tool-policy";
 import { NineRouterRequestError } from "./errors";
 
 export { NineRouterRequestError } from "./errors";
 
-export interface NineRouterToolOutput { callId: string; output: string; isError?: boolean; }
+export interface NineRouterToolOutput { callId: string; output: string; isError?: boolean; result?: BrokerToolResult; }
 export interface NineRouterRequest {
   model: string;
   instructions: string;
   history: Array<{ role: "user" | "assistant" | "system" | "developer" | "tool"; text: string; images?: ChatGptWebPromptImage[] }>;
   tools: CodexTool[];
   toolChoice: "auto" | "none" | "required" | { name: string };
+  parallelToolCalls: boolean;
   outputs: NineRouterToolOutput[];
   /** A new user turn follows earlier, already-completed tool history. */
   newUserAfterToolHistory: boolean;
@@ -45,16 +47,62 @@ function extractText(value: unknown, images?: ChatGptWebPromptImage[], refPrefix
       if (typeof entry.text !== "string") throw new NineRouterRequestError(`Malformed ${entry.type} block`);
       return entry.text;
     }
-    throw new NineRouterRequestError(`Unsupported content block: ${String(entry.type ?? "missing")}`, 422);
+    throw new NineRouterRequestError("Unsupported content block", 422);
   }).filter(Boolean).join("\n");
   if (value === null || value === undefined) return "";
   return JSON.stringify(value);
+}
+
+function extractMcpOutput(value: Record<string, unknown>): { text: string; result: BrokerToolResult } {
+  const rawContent = value.content;
+  if (!Array.isArray(rawContent) || rawContent.length > 256) {
+    throw new NineRouterRequestError("Structured tool output requires up to 256 MCP content blocks", 422);
+  }
+  const content: Array<Record<string, unknown>> = [];
+  const summary: string[] = [];
+  let imageCount = 0;
+  let imageBytes = 0;
+  for (const part of rawContent) {
+    const block = object(part);
+    if (block?.type === "text" && typeof block.text === "string") {
+      content.push({ type: "text", text: block.text });
+      summary.push(block.text);
+    } else if (block?.type === "image" && typeof block.data === "string"
+      && typeof block.mimeType === "string" && /^image\/(?:png|jpeg|gif|webp)$/.test(block.mimeType)
+      && /^[A-Za-z0-9+/]*={0,2}$/.test(block.data) && block.data.length % 4 === 0) {
+      if (++imageCount > 10) throw new NineRouterRequestError("A tool result supports at most 10 MCP images", 413);
+      imageBytes += Buffer.byteLength(block.data, "base64");
+      if (imageBytes > 50_000_000) throw new NineRouterRequestError("Tool result images exceed 50 MB", 413);
+      content.push({ type: "image", data: block.data, mimeType: block.mimeType });
+      summary.push(`[MCP image supplied: ${block.mimeType}]`);
+    } else {
+      throw new NineRouterRequestError("Unsupported MCP result media type; no image URLs or file references are fabricated", 422);
+    }
+  }
+  const structuredContent = object(value.structuredContent);
+  if (structuredContent && JSON.stringify(structuredContent).length > 2_000_000) {
+    throw new NineRouterRequestError("MCP structuredContent exceeds 2 MB", 413);
+  }
+  return { text: summary.join("\n"), result: { content,
+    ...(structuredContent ? { structuredContent } : {}),
+    ...(value.isError === true ? { isError: true } : {}),
+  } };
 }
 
 /** Normalize the standard Responses subset emitted by unmodified 9Router. */
 export function parseNineRouterRequest(value: unknown): NineRouterRequest {
   const body = object(value);
   if (!body) throw new NineRouterRequestError("Responses payload must be a JSON object");
+  // This adapter carries in-memory browser owners between explicit function_call_output
+  // requests; it does not keep OpenAI-side response_id or stored conversation state.
+  // Ignoring a stateful reference would risk replaying an agent-side mutation after restart.
+  if (body.previous_response_id != null || body.conversation != null) {
+    throw new NineRouterRequestError("Stored response/conversation resume is unsupported; send full history or start a new task", 422);
+  }
+  if (body.background === true) throw new NineRouterRequestError("Background Responses turns are unsupported", 422);
+  if (body.parallel_tool_calls !== undefined && typeof body.parallel_tool_calls !== "boolean") {
+    throw new NineRouterRequestError("parallel_tool_calls must be a boolean", 422);
+  }
   if (typeof body.model !== "string" || body.model.length > 200) throw new NineRouterRequestError("A model ID is required");
   if (body.instructions !== undefined && typeof body.instructions !== "string") {
     throw new NineRouterRequestError("instructions must be a string");
@@ -67,7 +115,7 @@ export function parseNineRouterRequest(value: unknown): NineRouterRequest {
   const tools: CodexTool[] = (body.tools as unknown[] | undefined ?? []).map(normalizeNineRouterTool);
   const names = new Set<string>();
   for (const tool of tools) {
-    if (names.has(tool.name)) throw new NineRouterRequestError(`Duplicate tool: ${tool.name}`);
+    if (names.has(tool.name)) throw new NineRouterRequestError("Duplicate tool name");
     names.add(tool.name);
   }
   let toolChoice: NineRouterRequest["toolChoice"] = "auto";
@@ -87,7 +135,7 @@ export function parseNineRouterRequest(value: unknown): NineRouterRequest {
     throw new NineRouterRequestError("Requested tool_choice requires declared functions", 422);
   }
   if (typeof toolChoice === "object" && !names.has(toolChoice.name)) {
-    throw new NineRouterRequestError(`Required function ${toolChoice.name} is not advertised`, 422);
+    throw new NineRouterRequestError("Required function is not advertised", 422);
   }
   const history: NineRouterRequest["history"] = [];
   const outputs: NineRouterToolOutput[] = [];
@@ -102,10 +150,12 @@ export function parseNineRouterRequest(value: unknown): NineRouterRequest {
         throw new NineRouterRequestError("Invalid tool result call_id");
       }
       const envelope = object(entry.output);
-      const toolText = envelope && Array.isArray(envelope.content)
-        ? extractText(envelope.content) : extractText(entry.output);
+      const richResult = envelope && Array.isArray(envelope.content) ? extractMcpOutput(envelope) : undefined;
+      const toolText = richResult?.text ?? extractText(entry.output);
       const isError = entry.is_error === true || entry.isError === true || envelope?.isError === true;
-      outputs.push({ callId: entry.call_id, output: toolText, ...(isError ? { isError: true } : {}) });
+      outputs.push({ callId: entry.call_id, output: toolText, ...(isError ? { isError: true } : {}),
+        ...(richResult ? { result: richResult.result } : {}),
+      });
       history.push({ role: "tool", text: `Tool ${isError ? "error" : "result"} ${entry.call_id}:\n${toolText}` });
       lastToolResultIndex = index;
       continue;
@@ -145,6 +195,7 @@ export function parseNineRouterRequest(value: unknown): NineRouterRequest {
     history,
     tools,
     toolChoice,
+    parallelToolCalls: body.parallel_tool_calls !== false,
     outputs,
     newUserAfterToolHistory: lastToolResultIndex >= 0 && lastUserIndex > lastToolResultIndex,
     stream: body.stream === true,

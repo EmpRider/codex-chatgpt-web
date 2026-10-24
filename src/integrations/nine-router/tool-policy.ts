@@ -17,7 +17,7 @@ export function normalizeNineRouterTool(value: unknown, index: number): CodexToo
   }
   const entry = value as Record<string, unknown>;
   if (entry.type !== "function") {
-    throw new NineRouterRequestError(`Unsupported tool type at index ${index}: ${String(entry.type ?? "missing")}`, 422);
+    throw new NineRouterRequestError(`Unsupported tool type at index ${index}`, 422);
   }
   if (typeof entry.name !== "string" || !/^[A-Za-z0-9_.$-]{1,128}$/.test(entry.name)
     || RESERVED_BRIDGE_NAMES.has(entry.name)) {
@@ -25,18 +25,18 @@ export function normalizeNineRouterTool(value: unknown, index: number): CodexToo
   }
   const description = entry.description ?? "";
   if (typeof description !== "string" || description.length > 12_000) {
-    throw new NineRouterRequestError(`Invalid function description for ${entry.name}`);
+    throw new NineRouterRequestError(`Invalid function description at index ${index}`);
   }
   const parameters = entry.parameters ?? { type: "object", properties: {} };
   if (!parameters || typeof parameters !== "object" || Array.isArray(parameters)
     || (parameters as Record<string, unknown>).type !== "object") {
-    throw new NineRouterRequestError(`Function ${entry.name} requires an object JSON Schema`);
+    throw new NineRouterRequestError(`Function at index ${index} requires an object JSON Schema`);
   }
   if (JSON.stringify(parameters).length > 64_000) {
-    throw new NineRouterRequestError(`Function ${entry.name} schema exceeds 64 KB`, 413);
+    throw new NineRouterRequestError(`Function schema at index ${index} exceeds 64 KB`, 413);
   }
   try { validator.compile(parameters); }
-  catch { throw new NineRouterRequestError(`Function ${entry.name} has an invalid or unsupported JSON Schema`, 422); }
+  catch { throw new NineRouterRequestError(`Function at index ${index} has an invalid or unsupported JSON Schema`, 422); }
   return { name: entry.name, description, parameters: parameters as Record<string, unknown>,
     ...(entry.strict === true ? { strict: true } : {}) };
 }

@@ -3,6 +3,7 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { defaultConfig, providerConfig } from "../src/config";
+import { startServer } from "../src/server";
 import { TurnBroker, callTurnBroker } from "../src/adapters/chatgpt-web/turn-broker";
 import { NineRouterProvider, canonicalNineRouterModel } from "../src/integrations/nine-router/routes";
 import { NineRouterRequestError, parseNineRouterRequest } from "../src/integrations/nine-router/request";
@@ -63,6 +64,13 @@ test("9Router request rejects unknown control items, duplicate tool names and ov
   expect(() => parseNineRouterRequest({ ...minimal, tools: Array(257).fill(advertised) })).toThrow("up to 256");
   expect(parseNineRouterRequest({ model: minimal.model, input: "plain prompt" }).history).toEqual([{ role: "user", text: "plain prompt" }]);
   expect(() => parseNineRouterRequest({ ...minimal, input: [{ role: "user", content: [{ type: "input_image", image_url: "https://example.org/image" }] }] })).toThrow("remote image links");
+  expect(() => parseNineRouterRequest({ ...minimal, previous_response_id: "resp_pre_restart" }))
+    .toThrow("Stored response/conversation resume is unsupported");
+  expect(() => parseNineRouterRequest({ ...minimal, conversation: "conv_wrong_agent" }))
+    .toThrow("Stored response/conversation resume is unsupported");
+  expect(() => parseNineRouterRequest({ ...minimal, background: true })).toThrow("Background Responses turns are unsupported");
+  expect(parseNineRouterRequest({ ...minimal, parallel_tool_calls: false }).parallelToolCalls).toBe(false);
+  expect(() => parseNineRouterRequest({ ...minimal, parallel_tool_calls: "false" })).toThrow("parallel_tool_calls must be a boolean");
 });
 
 test("9Router validates external function schemas and rejects privileged bridge names", () => {
@@ -127,12 +135,40 @@ test("explicit error-bearing agent result envelopes retain MCP isError without g
     input: [{ role: "user", content: "Do work" }, { type: "function_call_output", call_id: callId, output, ...extra }],
   });
   const structured = toRequest({ isError: true, content: [{ type: "text", text: "permission denied" }] });
-  expect(structured.outputs).toEqual([{ callId, output: "permission denied", isError: true }]);
+  expect(structured.outputs).toMatchObject([{ callId, output: "permission denied", isError: true,
+    result: { isError: true, content: [{ type: "text", text: "permission denied" }] },
+  }]);
   expect(structured.history[1]?.text).toContain("Tool error");
   const explicit = toRequest("permission denied", { is_error: true });
   expect(explicit.outputs[0]?.isError).toBe(true);
   const ordinary = toRequest("Error: displayed by a legitimate file");
   expect(ordinary.outputs[0]?.isError).toBeUndefined();
+});
+
+test("structured MCP tool output keeps JSON, inline image bytes and explicit errors without inventing media", () => {
+  const callId = `call_${"j".repeat(32)}`;
+  const base = { model: "chatgpt-web/gpt-5.6-luna", input: [
+    { role: "user", content: "Inspect a screenshot" },
+    { type: "function_call_output", call_id: callId, output: {
+      isError: false, structuredContent: { filename: "screen.png", bytes: 5 },
+      content: [{ type: "text", text: "Preview:" },
+        { type: "image", data: "aGVsbG8=", mimeType: "image/png" }],
+    } },
+  ] };
+  const parsed = parseNineRouterRequest(base);
+  expect(parsed.outputs[0]?.output).toContain("[MCP image supplied: image/png]");
+  expect(parsed.outputs[0]?.result).toEqual({
+    content: [{ type: "text", text: "Preview:" }, { type: "image", data: "aGVsbG8=", mimeType: "image/png" }],
+    structuredContent: { filename: "screen.png", bytes: 5 },
+  });
+  const bad = (part: unknown) => parseNineRouterRequest({ ...base, input: [
+    { role: "user", content: "Inspect a screenshot" },
+    { type: "function_call_output", call_id: callId, output: { content: [part] } },
+  ] });
+  expect(() => bad({ type: "image", image_url: "https://local-device/screenshot.png" }))
+    .toThrow("no image URLs or file references are fabricated");
+  expect(() => bad({ type: "audio", data: "dGVzdA==", mimeType: "audio/wav" }))
+    .toThrow("Unsupported MCP result media type");
 });
 
 test("integration keys are independently generated, rotated and recoverably disabled outside Git", () => {
@@ -280,6 +316,28 @@ test("dedicated 9Router endpoint is disabled by default, authenticated and expos
   provider.close();
 });
 
+test("loopback security rejects browser-origin POSTs to 9Router before any provider is consulted", async () => {
+  // The original Bun listener owns the Origin guard. A separate provider server must not
+  // be introduced because it could miss this cross-site / DNS-rebinding protection.
+  const server = startServer({ ...defaultConfig("browser-only"), port: 0, solAvailable: false });
+  const path = "/integrations/9router/v1/responses";
+  try {
+    for (const origin of ["https://attacker.example", "null", `http://rebound.example:${server.port}`]) {
+      const blocked = await fetch(`http://127.0.0.1:${server.port}${path}`, {
+        method: "POST", headers: { origin, "content-type": "application/json", authorization: "Bearer fake-secret" },
+        body: JSON.stringify({ model: "chatgpt-web/gpt-5.6-luna", input: "run a command" }),
+      });
+      expect(blocked.status).toBe(403);
+      expect(await blocked.text()).toContain("Browser-originated requests are not accepted");
+      expect(blocked.headers.has("access-control-allow-origin")).toBe(false);
+    }
+    const disabled = await fetch(`http://127.0.0.1:${server.port}${path}`, {
+      method: "POST", headers: { "content-type": "application/json" }, body: "{}",
+    });
+    expect(disabled.status).toBe(404);
+  } finally { await server.stop(true); }
+});
+
 test("authenticated provider Responses route emits standard SSE and nonstream JSON", async () => {
   const config = defaultConfig("full");
   config.solAvailable = false;
@@ -378,6 +436,80 @@ test("invalid provider media type and malformed JSON fail before starting a brow
     expect((await send("{", "application/json")).status).toBe(400);
     expect(provider.activeCount).toBe(0);
   } finally { provider.close(); }
+});
+
+test("provider logs and error envelopes never echo injected keys or untrusted tool declarations", async () => {
+  const config = defaultConfig("full");
+  const key = "secret-9router-key-" + "X".repeat(40);
+  const sentinel = "UNSAFE_FIXTURE_SECRET_abcdef123456";
+  const captured: string[] = [];
+  const originalLog = console.info;
+  console.info = (...args: unknown[]) => { captured.push(args.map(String).join(" ")); };
+  const provider = new NineRouterProvider(config, broker, key);
+  const path = "/integrations/9router/v1/responses";
+  const send = (auth: string, body: unknown) => provider.handle(new Request(`http://127.0.0.1${path}`, {
+    method: "POST", headers: { authorization: auth, "content-type": "application/json" },
+    body: JSON.stringify(body),
+  }), path);
+  try {
+    const forbidden = await send(`Bearer ${sentinel}`, { model: "ignored", input: sentinel });
+    expect(forbidden.status).toBe(401);
+    const invalid = await send(`Bearer ${key}`, { model: `chatgpt-web/${sentinel}`,
+      input: sentinel, tools: [{ ...advertised, name: sentinel, type: sentinel }],
+    });
+    expect(invalid.status).toBe(422);
+    expect((await forbidden.text()) + (await invalid.text()) + captured.join("\n"))
+      .not.toContain(sentinel);
+    expect(captured.join("\n")).not.toContain(key);
+    expect(captured.some(line => line.includes('"category":"auth"'))).toBe(true);
+    expect(captured.some(line => line.includes('"category":"input"'))).toBe(true);
+  } finally { console.info = originalLog; provider.close(); }
+});
+
+test("a daemon restart or closed browser never replays an already issued agent write", async () => {
+  const config = defaultConfig("full");
+  let browserStarts = 0;
+  const makeManager = () => new NineRouterSessionManager(broker, providerConfig(config), {
+    async run(turn) {
+      browserStarts++;
+      const token = (await turn.prepare()).turnToken!;
+      const claim = await callTurnBroker<{ bindingId: string; activityId: string }>(broker.socketPath,
+        { method: "claim", token });
+      await callTurnBroker(broker.socketPath,
+        { method: "activity_complete", token, activityId: claim.activityId });
+      const invocation = callTurnBroker(broker.socketPath, {
+        method: "invoke", bindingId: claim.bindingId, wireName: "Read", freeform: false,
+        arguments: { path: "do-not-repeat-write.ts" },
+      }, null);
+      void invocation.catch(() => {});
+      const progress = turn.externalProgress!;
+      while (progress.snapshot().lastToolBatchRevision === 0) {
+        await progress.waitForChange(progress.snapshot().revision);
+      }
+      await progress.acknowledgeToolBatch(progress.snapshot().lastToolBatchRevision);
+      await invocation;
+      return "Completed";
+    },
+  });
+  const firstManager = makeManager();
+  const request = parseNineRouterRequest({ model: "chatgpt-web/gpt-5.6-luna", input: "Edit file", tools: [advertised] });
+  const model = { backendModel: "gpt-5.6-luna", adapterEffort: "low" };
+  try {
+    const first = await firstManager.start(request, model);
+    expect(first.calls).toHaveLength(1);
+    firstManager.closeAll();
+    const restarted = makeManager();
+    try {
+      const replay = parseNineRouterRequest({ model: request.model, input: [
+        { role: "user", content: "Edit file" },
+        { type: "function_call_output", call_id: first.calls[0]!.callId, output: "write completed" },
+      ] });
+      await expect(restarted.continue(replay)).rejects.toThrow("No unambiguous active");
+      await expect(restarted.continue(replay)).rejects.toThrow("No unambiguous active");
+      expect(restarted.activeCount()).toBe(0);
+      expect(browserStarts).toBe(1);
+    } finally { restarted.closeAll(); }
+  } finally { firstManager.closeAll(); }
 });
 
 test("a later user turn treats old 9Router tool outputs as history, without reopening the retired call", async () => {
@@ -538,6 +670,14 @@ test("parallel broker calls require all tool outputs and preserve per-call order
       input: [
         ...baseInput,
         { type: "function_call_output", call_id: first.calls[0]!.callId, output: "first content" },
+        { type: "function_call_output", call_id: first.calls[0]!.callId, output: "duplicate" },
+        { type: "function_call_output", call_id: first.calls[1]!.callId, output: "second content" },
+      ],
+    }))).rejects.toThrow("Duplicate function_call_output");
+    await expect(manager.continue(parseNineRouterRequest({ model: request.model,
+      input: [
+        ...baseInput,
+        { type: "function_call_output", call_id: first.calls[0]!.callId, output: "first content" },
         { type: "function_call_output", call_id: first.calls[1]!.callId, output: "[No response received]" },
       ],
     }))).rejects.toThrow("fabricated execution");
@@ -549,6 +689,10 @@ test("parallel broker calls require all tool outputs and preserve per-call order
       ],
     }));
     expect(second).toEqual({ text: "Read both files", calls: [], finished: true });
+    await expect(manager.start(parseNineRouterRequest({ model: request.model,
+      tools: [advertised], input: "Read two files", parallel_tool_calls: false,
+    }), { backendModel: "gpt-5.6-luna", adapterEffort: "low" })).rejects.toThrow("caller disabled them");
+    expect(manager.activeCount()).toBe(0);
   } finally { manager.closeAll(); }
 });
 
@@ -697,5 +841,68 @@ test("abandoned external tool output automatically expires and revokes its live 
       input: [{ role: "user", content: "Read abandoned.ts" },
         { type: "function_call_output", call_id: first.calls[0]!.callId, output: "late result" }],
     }))).rejects.toThrow("No unambiguous active");
+  } finally { manager.closeAll(); }
+});
+
+test("a sixth external coding agent cannot steal an existing ChatGPT browser slot", async () => {
+  const config = defaultConfig("full");
+  const manager = new NineRouterSessionManager(broker, providerConfig(config), {
+    run(turn) {
+      return new Promise<string>((_, reject) => turn.abortSignal!.addEventListener("abort", () =>
+        reject(new Error("closed by owner")), { once: true }));
+    },
+  });
+  const pending: Array<Promise<unknown>> = [];
+  const model = { backendModel: "gpt-5.6-luna", adapterEffort: "low" };
+  const request = (id: number) => parseNineRouterRequest({ model: "chatgpt-web/gpt-5.6-luna", input: `Agent ${id}` });
+  try {
+    for (let id = 0; id < 5; id++) {
+      pending.push(manager.start(request(id), model).catch(() => {}));
+    }
+    const deadline = Date.now() + 1_000;
+    while (manager.activeCount() !== 5 && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 5));
+    expect(manager.activeCount()).toBe(5);
+    await expect(manager.start(request(6), model)).rejects.toThrow("Too many active 9Router tool sessions");
+    expect(manager.activeCount()).toBe(5);
+  } finally {
+    manager.closeAll();
+    await Promise.allSettled(pending);
+    expect(manager.activeCount()).toBe(0);
+  }
+});
+
+test("a long ChatGPT thinking phase never expires the broker capability before its first tool call", async () => {
+  const config = defaultConfig("full");
+  const manager = new NineRouterSessionManager(broker, providerConfig(config), {
+    async run(turn) {
+      const token = (await turn.prepare()).turnToken!;
+      await new Promise(resolve => setTimeout(resolve, 65));
+      const claim = await callTurnBroker<{ bindingId: string; activityId: string }>(broker.socketPath,
+        { method: "claim", token });
+      expect(claim.bindingId).toBeTruthy();
+      await callTurnBroker(broker.socketPath,
+        { method: "activity_complete", token, activityId: claim.activityId });
+      const operation = callTurnBroker<{ content: Array<{ text: string }> }>(broker.socketPath, {
+        method: "invoke", bindingId: claim.bindingId, wireName: "Read", freeform: false,
+        arguments: { path: "after-thinking.ts" },
+      }, null);
+      const progress = turn.externalProgress!;
+      while (progress.snapshot().lastToolBatchRevision === 0) {
+        await progress.waitForChange(progress.snapshot().revision);
+      }
+      await progress.acknowledgeToolBatch(progress.snapshot().lastToolBatchRevision);
+      const result = await operation;
+      return result.content[0]?.text ?? "";
+    },
+  }, 25);
+  try {
+    const first = await manager.start(parseNineRouterRequest({ model: "chatgpt-web/gpt-5.6-luna",
+      tools: [advertised], input: "Read after thinking" }), { backendModel: "gpt-5.6-luna", adapterEffort: "low" });
+    expect(first.calls).toHaveLength(1);
+    const stage = await manager.continue(parseNineRouterRequest({ model: "chatgpt-web/gpt-5.6-luna",
+      input: [{ role: "user", content: "Read after thinking" },
+        { type: "function_call_output", call_id: first.calls[0]!.callId, output: "still usable" }],
+    }));
+    expect(stage).toEqual({ text: "still usable", calls: [], finished: true });
   } finally { manager.closeAll(); }
 });

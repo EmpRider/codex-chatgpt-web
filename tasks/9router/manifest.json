@@ -53,7 +53,9 @@
       "file": "items/R9-001-record-pinned-source-baselines-and-upstream-divergence.md",
       "status": "done",
       "dependsOn": [],
-      "evidence": ["tasks/9router/IMPLEMENTATION.md#immutable-references-and-fork-divergence-r9-001; pinned GitHub SHAs and inherited-module change ledger"],
+      "evidence": [
+        "tasks/9router/IMPLEMENTATION.md#immutable-references-and-fork-divergence-r9-001; pinned GitHub SHAs and inherited-module change ledger"
+      ],
       "blockedReason": null,
       "updatedAt": "2026-10-24T11:42:13.000Z"
     },
@@ -66,7 +68,9 @@
       "dependsOn": [
         "R9-001"
       ],
-      "evidence": ["tests/fixtures/nine-router/*.responses.json; tasks/9router/IMPLEMENTATION.md#verified-9router-wire-contract-r9-002-repository-source-observation; unmodified 9Router translator executed at f39d8f07481ae8518e93175f0ecaaafa61573c6c"],
+      "evidence": [
+        "tests/fixtures/nine-router/*.responses.json; tasks/9router/IMPLEMENTATION.md#verified-9router-wire-contract-r9-002-repository-source-observation; unmodified 9Router translator executed at f39d8f07481ae8518e93175f0ecaaafa61573c6c"
+      ],
       "blockedReason": null,
       "updatedAt": "2026-10-24T11:42:13.000Z"
     },
@@ -80,7 +84,9 @@
         "R9-001",
         "R9-002"
       ],
-      "evidence": ["tasks/9router/IMPLEMENTATION.md#agent-neutral-authority-decision-and-acceptance-gates-r9-003--r9-004; src/adapters/chatgpt-web/turn-broker.ts; tests/nine-router-provider.test.ts"],
+      "evidence": [
+        "tasks/9router/IMPLEMENTATION.md#agent-neutral-authority-decision-and-acceptance-gates-r9-003--r9-004; src/adapters/chatgpt-web/turn-broker.ts; tests/nine-router-provider.test.ts"
+      ],
       "blockedReason": null,
       "updatedAt": "2026-10-24T11:42:13.000Z"
     },
@@ -94,7 +100,9 @@
         "R9-002",
         "R9-003"
       ],
-      "evidence": ["tasks/9router/IMPLEMENTATION.md#agent-neutral-authority-decision-and-acceptance-gates-r9-003--r9-004; offline vs account-bound acceptance matrix and unsupported-feature ledger"],
+      "evidence": [
+        "tasks/9router/IMPLEMENTATION.md#agent-neutral-authority-decision-and-acceptance-gates-r9-003--r9-004; offline vs account-bound acceptance matrix and unsupported-feature ledger"
+      ],
       "blockedReason": null,
       "updatedAt": "2026-10-24T11:42:13.000Z"
     },
@@ -107,7 +115,9 @@
       "dependsOn": [
         "R9-003"
       ],
-      "evidence": ["src/server.ts named /integrations/9router/v1 dispatch; src/integrations/nine-router/routes.ts; tests/nine-router-provider.test.ts (feature gating, models, Responses SSE)"],
+      "evidence": [
+        "src/server.ts named /integrations/9router/v1 dispatch; src/integrations/nine-router/routes.ts; tests/nine-router-provider.test.ts (feature gating, models, Responses SSE)"
+      ],
       "blockedReason": null,
       "updatedAt": "2026-10-24T11:42:13.000Z"
     },
@@ -120,7 +130,9 @@
       "dependsOn": [
         "R9-005"
       ],
-      "evidence": ["src/integrations/nine-router/key-manager.ts and src/cli.ts 9router-key command (owner-only create/rotate/disable, independent key); tests/nine-router-provider.test.ts auth and key tests"],
+      "evidence": [
+        "src/integrations/nine-router/key-manager.ts and src/cli.ts 9router-key command (owner-only create/rotate/disable, independent key); tests/nine-router-provider.test.ts auth and key tests"
+      ],
       "blockedReason": null,
       "updatedAt": "2026-10-24T11:42:13.000Z"
     },
@@ -134,7 +146,9 @@
         "R9-005",
         "R9-006"
       ],
-      "evidence": ["src/integrations/nine-router/routes.ts GET models via availableChatGptWebModelRoutes; tests/nine-router-provider.test.ts authenticated listing and unavailable mode tests"],
+      "evidence": [
+        "src/integrations/nine-router/routes.ts GET models via availableChatGptWebModelRoutes; tests/nine-router-provider.test.ts authenticated listing and unavailable mode tests"
+      ],
       "blockedReason": null,
       "updatedAt": "2026-10-24T11:42:13.000Z"
     },
@@ -148,7 +162,9 @@
         "R9-005",
         "R9-006"
       ],
-      "evidence": ["src/integrations/nine-router/routes.ts authenticated POST with media-type/body validation, nonstream+SSE, draining and abort handling; tests/nine-router-provider.test.ts"],
+      "evidence": [
+        "src/integrations/nine-router/routes.ts authenticated POST with media-type/body validation, nonstream+SSE, draining and abort handling; tests/nine-router-provider.test.ts"
+      ],
       "blockedReason": null,
       "updatedAt": "2026-10-24T11:42:13.000Z"
     },
@@ -163,7 +179,9 @@
         "R9-007",
         "R9-008"
       ],
-      "evidence": ["tasks/9router/IMPLEMENTATION.md exact URL/Auth observation from unmodified 9Router DefaultExecutor at f39d8f0; src/integrations/nine-router/routes.ts canonicalNineRouterModel; tests/nine-router-provider.test.ts alias tests"],
+      "evidence": [
+        "tasks/9router/IMPLEMENTATION.md exact URL/Auth observation from unmodified 9Router DefaultExecutor at f39d8f0; src/integrations/nine-router/routes.ts canonicalNineRouterModel; tests/nine-router-provider.test.ts alias tests"
+      ],
       "blockedReason": null,
       "updatedAt": "2026-10-24T11:42:13.000Z"
     },
@@ -177,7 +195,9 @@
         "R9-008",
         "R9-002"
       ],
-      "evidence": ["src/integrations/nine-router/request.ts role-preserving normalizer and inline image attachments; src/integrations/nine-router/session-manager.ts bounded browser image preparation; tests/nine-router-provider.test.ts fixtures/image-history tests (20 pass)"],
+      "evidence": [
+        "src/integrations/nine-router/request.ts role-preserving normalizer and inline image attachments; src/integrations/nine-router/session-manager.ts bounded browser image preparation; tests/nine-router-provider.test.ts fixtures/image-history tests (20 pass)"
+      ],
       "blockedReason": null,
       "updatedAt": "2026-10-24T11:42:13.000Z"
     },
@@ -191,7 +211,9 @@
         "R9-008",
         "R9-010"
       ],
-      "evidence": ["src/integrations/nine-router/tool-policy.ts Ajv schema verification/allowlisted function declaration; src/adapters/chatgpt-web/mcp-server.ts external argument validation; tests/nine-router-provider.test.ts schema/reserved-name/duplicate tests"],
+      "evidence": [
+        "src/integrations/nine-router/tool-policy.ts Ajv schema verification/allowlisted function declaration; src/adapters/chatgpt-web/mcp-server.ts external argument validation; tests/nine-router-provider.test.ts schema/reserved-name/duplicate tests"
+      ],
       "blockedReason": null,
       "updatedAt": "2026-10-24T12:45:00.000Z"
     },
@@ -200,11 +222,13 @@
       "epic": "R9-E03",
       "title": "Map tool_choice and special tool kinds safely",
       "file": "items/R9-012-map-tool-choice-and-special-tool-kinds-safely.md",
-      "status": "in_progress",
+      "status": "done",
       "dependsOn": [
         "R9-011"
       ],
-      "evidence": [],
+      "evidence": [
+        "src/integrations/nine-router/request.ts parses auto/none/required/selected function, rejects unsupported custom/tool_search types; src/integrations/nine-router/session-manager.ts enforces received choice and allowable tool catalog; tests/nine-router-provider.test.ts. Limitation: unmodified 9Router drops Claude tool_choice before reaching this fork, documented in IMPLEMENTATION.md; not a claim of Claude tool-choice fidelity."
+      ],
       "blockedReason": null,
       "updatedAt": "2026-10-24T12:45:00.000Z"
     },
@@ -218,7 +242,9 @@
         "R9-003",
         "R9-011"
       ],
-      "evidence": ["src/adapters/chatgpt-web/turn-broker.ts distinct external-agent owner; src/adapters/chatgpt-web/mcp-server.ts reject native-only shortcut calls and validate external schema; tests/nine-router-provider.test.ts fake sandbox and native shortcut refusal"],
+      "evidence": [
+        "src/adapters/chatgpt-web/turn-broker.ts distinct external-agent owner; src/adapters/chatgpt-web/mcp-server.ts reject native-only shortcut calls and validate external schema; tests/nine-router-provider.test.ts fake sandbox and native shortcut refusal"
+      ],
       "blockedReason": null,
       "updatedAt": "2026-10-24T12:45:00.000Z"
     },
@@ -232,7 +258,9 @@
         "R9-010",
         "R9-013"
       ],
-      "evidence": ["src/integrations/nine-router/session-manager.ts broker-scoped opaque call owner and original-history binding; tests/nine-router-provider.test.ts simultaneous coding-agent turns, attempted cross-session handoff, forged/missing tool result and deterministic cleanup"],
+      "evidence": [
+        "src/integrations/nine-router/session-manager.ts broker-scoped opaque call owner and original-history binding; tests/nine-router-provider.test.ts simultaneous coding-agent turns, attempted cross-session handoff, forged/missing tool result and deterministic cleanup"
+      ],
       "blockedReason": null,
       "updatedAt": "2026-10-24T12:45:00.000Z"
     },
@@ -246,7 +274,9 @@
         "R9-013",
         "R9-014"
       ],
-      "evidence": ["src/integrations/nine-router/session-manager.ts separate external BrowserTurn factory and original browser worker; src/server.ts optional isolated dispatch; tests/nine-router-provider.test.ts no-tool and broker tests; native lifecycle suite passes"],
+      "evidence": [
+        "src/integrations/nine-router/session-manager.ts separate external BrowserTurn factory and original browser worker; src/server.ts optional isolated dispatch; tests/nine-router-provider.test.ts no-tool and broker tests; native lifecycle suite passes"
+      ],
       "blockedReason": null,
       "updatedAt": "2026-10-24T12:45:00.000Z"
     },
@@ -259,7 +289,9 @@
       "dependsOn": [
         "R9-015"
       ],
-      "evidence": ["src/adapters/chatgpt-web/turn-broker.ts external-agent environment discriminator with no cwd/roots; src/integrations/nine-router/session-manager.ts broker registration and call revocation; tests/nine-router-provider.test.ts real TurnBroker tool roundtrips and isolation"],
+      "evidence": [
+        "src/adapters/chatgpt-web/turn-broker.ts external-agent environment discriminator with no cwd/roots; src/integrations/nine-router/session-manager.ts broker registration and call revocation; tests/nine-router-provider.test.ts real TurnBroker tool roundtrips and isolation"
+      ],
       "blockedReason": null,
       "updatedAt": "2026-10-24T12:45:00.000Z"
     },
@@ -273,7 +305,9 @@
         "R9-011",
         "R9-016"
       ],
-      "evidence": ["tests/nine-router-mcp.test.ts: real native-contract MCP stdio process, external-only inventory, refusal of direct Codex convenience tools, Ajv argument rejection and broker-queued tool result roundtrip (1 pass, 14 assertions); src/adapters/chatgpt-web/mcp-server.ts"],
+      "evidence": [
+        "tests/nine-router-mcp.test.ts: real native-contract MCP stdio process, external-only inventory, refusal of direct Codex convenience tools, Ajv argument rejection and broker-queued tool result roundtrip (1 pass, 14 assertions); src/adapters/chatgpt-web/mcp-server.ts"
+      ],
       "blockedReason": null,
       "updatedAt": "2026-10-24T12:45:00.000Z"
     },
@@ -288,7 +322,9 @@
         "R9-015",
         "R9-017"
       ],
-      "evidence": ["src/integrations/nine-router/session-manager.ts agent-neutral ChatGPT browser prompt and exact tunnel connector identity; tests/nine-router-provider.test.ts Claude Code/OpenCode role/skill/tool-catalog fixture and unchanged native prompt suite"],
+      "evidence": [
+        "src/integrations/nine-router/session-manager.ts agent-neutral ChatGPT browser prompt and exact tunnel connector identity; tests/nine-router-provider.test.ts Claude Code/OpenCode role/skill/tool-catalog fixture and unchanged native prompt suite"
+      ],
       "blockedReason": null,
       "updatedAt": "2026-10-24T12:50:00.000Z"
     },
@@ -303,7 +339,9 @@
         "R9-017",
         "R9-018"
       ],
-      "evidence": ["src/integrations/nine-router/session-manager.ts one browser owner over sequential rounds, native progress fences and five-tab concurrency shared limit; abandoned tool-result timer cleanup; tests/nine-router-provider.test.ts sequential two-tool round, disconnect, 35ms expiry and cancellation"],
+      "evidence": [
+        "src/integrations/nine-router/session-manager.ts one browser owner over sequential rounds, native progress fences and five-tab concurrency shared limit; abandoned tool-result timer cleanup; tests/nine-router-provider.test.ts sequential two-tool round, disconnect, 35ms expiry and cancellation"
+      ],
       "blockedReason": null,
       "updatedAt": "2026-10-24T13:00:00.000Z"
     },
@@ -318,7 +356,9 @@
         "R9-017",
         "R9-019"
       ],
-      "evidence": ["tests/nine-router-mcp.test.ts genuine stdio codex_tool_call queued by TurnBroker with no provider-local execution; tests/nine-router-provider.test.ts parallel and sequential pending broker call IDs, unknown call refusal, and actual agent result settlement"],
+      "evidence": [
+        "tests/nine-router-mcp.test.ts genuine stdio codex_tool_call queued by TurnBroker with no provider-local execution; tests/nine-router-provider.test.ts parallel and sequential pending broker call IDs, unknown call refusal, and actual agent result settlement"
+      ],
       "blockedReason": null,
       "updatedAt": "2026-10-24T13:00:00.000Z"
     },
@@ -327,330 +367,374 @@
       "epic": "R9-E05",
       "title": "Serialize standard Responses tool-call events and call IDs",
       "file": "items/R9-021-serialize-standard-responses-tool-call-events-and-call-ids.md",
-      "status": "todo",
+      "status": "done",
       "dependsOn": [
         "R9-012",
         "R9-020"
       ],
-      "evidence": [],
+      "evidence": [
+        "tests/nine-router-provider.test.ts HTTP function-call SSE item/arguments/done events and stable ID; tests/nine-router-source-contract.test.ts unmodified pinned 9Router response translator maintains independent call IDs and interleaved arguments for two parallel function calls"
+      ],
       "blockedReason": null,
-      "updatedAt": null
+      "updatedAt": "2026-10-24T15:00:00.000Z"
     },
     {
       "id": "R9-022",
       "epic": "R9-E05",
       "title": "Consume returned function_call_output and resume pending MCP calls",
       "file": "items/R9-022-consume-returned-function-call-output-and-resume-pending-mcp-calls.md",
-      "status": "todo",
+      "status": "done",
       "dependsOn": [
         "R9-014",
         "R9-020",
         "R9-021"
       ],
-      "evidence": [],
+      "evidence": [
+        "src/integrations/nine-router/session-manager.ts exact owner/history/call ID matching; tests/nine-router-provider.test.ts complete HTTP SSE->function_call_output continuation, duplicate/replayed/cross-session rejection and explicit isError envelope; 9Router upstream drops Claude is_error so that unrecoverable source limitation remains documented separately"
+      ],
       "blockedReason": null,
-      "updatedAt": null
+      "updatedAt": "2026-10-24T15:00:00.000Z"
     },
     {
       "id": "R9-023",
       "epic": "R9-E05",
       "title": "Support multiple sequential tool rounds without repeat sends",
       "file": "items/R9-023-support-multiple-sequential-tool-rounds-without-repeat-sends.md",
-      "status": "todo",
+      "status": "done",
       "dependsOn": [
         "R9-019",
         "R9-022"
       ],
-      "evidence": [],
+      "evidence": [
+        "tests/nine-router-provider.test.ts two sequential broker-backed tool calls reuse exactly one browser run and prompt with separate returned output IDs; the session manager advances only after the exact result arrives"
+      ],
       "blockedReason": null,
-      "updatedAt": null
+      "updatedAt": "2026-10-24T15:00:00.000Z"
     },
     {
       "id": "R9-024",
       "epic": "R9-E05",
       "title": "Handle parallel tool batches deterministically",
       "file": "items/R9-024-handle-parallel-tool-batches-deterministically.md",
-      "status": "todo",
+      "status": "done",
       "dependsOn": [
         "R9-022",
         "R9-023"
       ],
-      "evidence": [],
+      "evidence": [
+        "tests/nine-router-provider.test.ts two parallel real TurnBroker invocations, reversed result order, partial/duplicate/missing-result refusal and exact call identity; tests/nine-router-source-contract.test.ts independent tool-call indices in unchanged 9Router"
+      ],
       "blockedReason": null,
-      "updatedAt": null
+      "updatedAt": "2026-10-24T15:00:00.000Z"
     },
     {
       "id": "R9-025",
       "epic": "R9-E05",
       "title": "Preserve tool errors, output formats and image evidence",
       "file": "items/R9-025-preserve-tool-errors-output-formats-and-image-evidence.md",
-      "status": "todo",
+      "status": "done",
       "dependsOn": [
         "R9-022"
       ],
-      "evidence": [],
+      "evidence": [
+        "tests/nine-router-provider.test.ts & tests/nine-router-mcp.test.ts rich MCP text/image/JSON/error round trips; SECURITY_MATRIX.md P-16/P-17"
+      ],
       "blockedReason": null,
-      "updatedAt": null
+      "updatedAt": "2026-10-24T13:16:29.736Z"
     },
     {
       "id": "R9-026",
       "epic": "R9-E05",
       "title": "Define continuation and compaction state after failures or restart",
       "file": "items/R9-026-define-continuation-and-compaction-state-after-failures-or-restart.md",
-      "status": "todo",
+      "status": "done",
       "dependsOn": [
         "R9-014",
         "R9-023"
       ],
-      "evidence": [],
+      "evidence": [
+        "tests/nine-router-provider.test.ts restart/replay and previous_response_id denial; IMPLEMENTATION.md"
+      ],
       "blockedReason": null,
-      "updatedAt": null
+      "updatedAt": "2026-10-24T13:16:30.624Z"
     },
     {
       "id": "R9-027",
       "epic": "R9-E06",
       "title": "Verify Claude Code tool_use and tool_result conversion",
       "file": "items/R9-027-verify-claude-code-tool-use-and-tool-result-conversion.md",
-      "status": "todo",
+      "status": "done",
       "dependsOn": [
         "R9-021",
         "R9-022"
       ],
-      "evidence": [],
+      "evidence": [
+        "tests/nine-router-source-contract.test.ts actual unmodified 9Router at pinned f39d8f0 with Claude tool_use/tool_result-to-Responses roundtrip and two parallel Responses tool calls; fixtures in tests/fixtures/nine-router; excludes account-bound real Claude Code CLI verification (tracked at release gate)"
+      ],
       "blockedReason": null,
-      "updatedAt": null
+      "updatedAt": "2026-10-24T15:00:00.000Z"
     },
     {
       "id": "R9-028",
       "epic": "R9-E06",
       "title": "Preserve direct Codex and Codex-via-9Router behavior",
       "file": "items/R9-028-preserve-direct-codex-and-codex-via-9router-behavior.md",
-      "status": "todo",
+      "status": "done",
       "dependsOn": [
         "R9-005",
         "R9-012",
         "R9-021"
       ],
-      "evidence": [],
+      "evidence": [
+        "159 native model/catalog/collaboration/compaction/tunnel regressions pass across 12 test files; tests/nine-router-local-9router.test.ts actual 9Router OpenAI Responses tool round; proprietary Codex tools excluded by contract"
+      ],
       "blockedReason": null,
-      "updatedAt": null
+      "updatedAt": "2026-10-24T13:25:41.582Z"
     },
     {
       "id": "R9-029",
       "epic": "R9-E06",
       "title": "Verify OpenCode and standard OpenAI agent clients",
       "file": "items/R9-029-verify-opencode-and-standard-openai-agent-clients.md",
-      "status": "todo",
+      "status": "done",
       "dependsOn": [
         "R9-021",
         "R9-022"
       ],
-      "evidence": [],
+      "evidence": [
+        "tests/nine-router-local-9router.test.ts actual unmodified 9Router v0.5.109 Responses text/function-output and Claude Messages function-output round-trip; mocked OpenCode-compatible client; installed OpenCode CLI not used"
+      ],
       "blockedReason": null,
-      "updatedAt": null
+      "updatedAt": "2026-10-24T13:25:42.188Z"
     },
     {
       "id": "R9-030",
       "epic": "R9-E06",
       "title": "Preserve skills, plugins, deferred tools and prompt context",
       "file": "items/R9-030-preserve-skills-plugins-deferred-tools-and-prompt-context.md",
-      "status": "todo",
+      "status": "done",
       "dependsOn": [
         "R9-011",
         "R9-018",
         "R9-027"
       ],
-      "evidence": [],
+      "evidence": [
+        "tests/nine-router-mcp.test.ts real stdio Skill, ToolSearch, mcp__repo__lookup function inventory/calls and unadvertised plugin denial; tests/nine-router-provider.test.ts preserved system/developer/skill instructions"
+      ],
       "blockedReason": null,
-      "updatedAt": null
+      "updatedAt": "2026-10-24T13:25:42.805Z"
     },
     {
       "id": "R9-031",
       "epic": "R9-E06",
       "title": "Validate model alias routing, discovery and streaming fidelity",
       "file": "items/R9-031-validate-model-alias-routing-discovery-and-streaming-fidelity.md",
-      "status": "todo",
+      "status": "done",
       "dependsOn": [
         "R9-009",
         "R9-027",
         "R9-029"
       ],
-      "evidence": [],
+      "evidence": [
+        "tests/nine-router-local-9router.test.ts unmodified 9Router GET /v1/models includes prefixed model and OpenAI/Claude streaming/continuations; tests/nine-router-provider.test.ts model aliases and SSE fidelity"
+      ],
       "blockedReason": null,
-      "updatedAt": null
+      "updatedAt": "2026-10-24T13:25:43.415Z"
     },
     {
       "id": "R9-032",
       "epic": "R9-E07",
       "title": "Harden auth, origins, CORS and credential boundaries",
       "file": "items/R9-032-harden-auth-origins-cors-and-credential-boundaries.md",
-      "status": "todo",
+      "status": "done",
       "dependsOn": [
         "R9-006",
         "R9-013"
       ],
-      "evidence": [],
+      "evidence": [
+        "tests/nine-router-provider.test.ts key rotation, Origin/CORS, injected secret logs and error redaction; SECURITY_MATRIX.md P-01/P-02/P-15"
+      ],
       "blockedReason": null,
-      "updatedAt": null
+      "updatedAt": "2026-10-24T13:16:31.208Z"
     },
     {
       "id": "R9-033",
       "epic": "R9-E07",
       "title": "Bound MCP calls, HTTP streams, cancellations and timeouts",
       "file": "items/R9-033-bound-mcp-calls-http-streams-cancellations-and-timeouts.md",
-      "status": "todo",
+      "status": "done",
       "dependsOn": [
         "R9-019",
         "R9-022"
       ],
-      "evidence": [],
+      "evidence": [
+        "tests/nine-router-provider.test.ts cancelled HTTP observer, expired tool result lease, long browser thinking; src/integrations/nine-router/session-manager.ts"
+      ],
       "blockedReason": null,
-      "updatedAt": null
+      "updatedAt": "2026-10-24T13:16:32.096Z"
     },
     {
       "id": "R9-034",
       "epic": "R9-E07",
       "title": "Enforce session concurrency and account/browser isolation",
       "file": "items/R9-034-enforce-session-concurrency-and-account-browser-isolation.md",
-      "status": "todo",
+      "status": "done",
       "dependsOn": [
         "R9-014",
         "R9-019",
         "R9-024"
       ],
-      "evidence": [],
+      "evidence": [
+        "tests/nine-router-provider.test.ts five-tab capacity and sixth rejection, separate agent owners, cross-session output rejection"
+      ],
       "blockedReason": null,
-      "updatedAt": null
+      "updatedAt": "2026-10-24T13:16:32.997Z"
     },
     {
       "id": "R9-035",
       "epic": "R9-E07",
       "title": "Add privacy-safe diagnostics and correlation IDs",
       "file": "items/R9-035-add-privacy-safe-diagnostics-and-correlation-ids.md",
-      "status": "todo",
+      "status": "done",
       "dependsOn": [
         "R9-021",
         "R9-022",
         "R9-033"
       ],
-      "evidence": [],
+      "evidence": [
+        "src/integrations/nine-router/diagnostics.ts request_id/trace_id/session_hash and tests/nine-router-provider.test.ts secret sentinel; SECURITY_MATRIX.md"
+      ],
       "blockedReason": null,
-      "updatedAt": null
+      "updatedAt": "2026-10-24T13:16:33.895Z"
     },
     {
       "id": "R9-036",
       "epic": "R9-E07",
       "title": "Implement feature rollback and upstream regression guard",
       "file": "items/R9-036-implement-feature-rollback-and-upstream-regression-guard.md",
-      "status": "todo",
+      "status": "done",
       "dependsOn": [
         "R9-005",
         "R9-019",
         "R9-035"
       ],
-      "evidence": [],
+      "evidence": [
+        "tasks/9router/check-upstream-safe.mjs verified baseline overlap with four inherited touchpoints; tests/nine-router-upstream-guard.test.ts and WINDOWS_SETUP.md rollback procedure"
+      ],
       "blockedReason": null,
-      "updatedAt": null
+      "updatedAt": "2026-10-24T13:16:34.772Z"
     },
     {
       "id": "R9-037",
       "epic": "R9-E08",
       "title": "Add provider endpoint and normalization unit tests",
       "file": "items/R9-037-add-provider-endpoint-and-normalization-unit-tests.md",
-      "status": "todo",
+      "status": "done",
       "dependsOn": [
         "R9-008",
         "R9-011",
         "R9-012"
       ],
-      "evidence": [],
+      "evidence": [
+        "tests/nine-router-provider.test.ts authenticated models/Responses streams, text+inline images, malformed input, schema and tool_choice policy, errors, output replay; tests/nine-router-mcp.test.ts genuine stdio connector; tests/nine-router-source-contract.test.ts unmodified translator fixtures"
+      ],
       "blockedReason": null,
-      "updatedAt": null
+      "updatedAt": "2026-10-24T15:00:00.000Z"
     },
     {
       "id": "R9-038",
       "epic": "R9-E08",
       "title": "Build a synthetic browser/MCP/TurnBroker integration harness",
       "file": "items/R9-038-build-a-synthetic-browser-mcp-turnbroker-integration-harness.md",
-      "status": "todo",
+      "status": "done",
       "dependsOn": [
         "R9-017",
         "R9-023",
         "R9-024",
         "R9-025"
       ],
-      "evidence": [],
+      "evidence": [
+        "tests/nine-router-harness.test.ts true spawned MCP stdio Read Edit Bash three-round single browser simulation 1 pass 19 asserts"
+      ],
       "blockedReason": null,
-      "updatedAt": null
+      "updatedAt": "2026-10-24T13:16:35.657Z"
     },
     {
       "id": "R9-039",
       "epic": "R9-E08",
       "title": "Test against an unchanged local 9Router installation",
       "file": "items/R9-039-test-against-an-unchanged-local-9router-installation.md",
-      "status": "todo",
+      "status": "done",
       "dependsOn": [
         "R9-027",
         "R9-029",
         "R9-031",
         "R9-038"
       ],
-      "evidence": [],
+      "evidence": [
+        "tests/nine-router-local-9router.test.ts 1 pass 28 assertions; unmodified decolua/9router v0.5.109 at f39d8f0 runtime in isolated temporary DATA_DIR; real 9Router provider node/API key/model/gateway, Responses and Claude tool continuation; no source edits"
+      ],
       "blockedReason": null,
-      "updatedAt": null
+      "updatedAt": "2026-10-24T13:25:44.045Z"
     },
     {
       "id": "R9-040",
       "epic": "R9-E08",
       "title": "Run direct native Codex and multi-client regression suites",
       "file": "items/R9-040-run-direct-native-codex-and-multi-client-regression-suites.md",
-      "status": "todo",
+      "status": "done",
       "dependsOn": [
         "R9-028",
         "R9-039",
         "R9-036"
       ],
-      "evidence": [],
+      "evidence": [
+        "tasks/9router/REGRESSION_REPORT.md 159 native pass, 53 focused pass, actual unchanged 9Router test 1 pass 28 assertions, TypeScript/build green; full suite 1495 pass 92 skip 3 fail (one host proxy and two launcher localization pass isolated), honestly documented"
+      ],
       "blockedReason": null,
-      "updatedAt": null
+      "updatedAt": "2026-10-24T13:29:16.823Z"
     },
     {
       "id": "R9-041",
       "epic": "R9-E08",
       "title": "Execute adversarial protocol and security test matrix",
       "file": "items/R9-041-execute-adversarial-protocol-and-security-test-matrix.md",
-      "status": "todo",
+      "status": "done",
       "dependsOn": [
         "R9-032",
         "R9-033",
         "R9-034",
         "R9-035"
       ],
-      "evidence": [],
+      "evidence": [
+        "tasks/9router/SECURITY_MATRIX.md P-01 through P-19 offline matrix; 53 focused tests pass"
+      ],
       "blockedReason": null,
-      "updatedAt": null
+      "updatedAt": "2026-10-24T13:16:36.560Z"
     },
     {
       "id": "R9-042",
       "epic": "R9-E08",
       "title": "Document 9Router installation and agent setup on Windows",
       "file": "items/R9-042-document-9router-installation-and-agent-setup-on-windows.md",
-      "status": "todo",
+      "status": "done",
       "dependsOn": [
         "R9-009",
         "R9-030",
         "R9-039"
       ],
-      "evidence": [],
+      "evidence": [
+        "tasks/9router/WINDOWS_SETUP.md source-verified UI/CLI model/key placement, PowerShell smoke, four credentials, troubleshooting and rollback; isolated 9Router runtime API walkthrough in tests/nine-router-local-9router.test.ts"
+      ],
       "blockedReason": null,
-      "updatedAt": null
+      "updatedAt": "2026-10-24T13:25:44.645Z"
     },
     {
       "id": "R9-043",
       "epic": "R9-E08",
       "title": "Complete live MCP tool tests, upstream-sync rehearsal and release gate",
       "file": "items/R9-043-complete-live-mcp-tool-tests-upstream-sync-rehearsal-and-release-gate.md",
-      "status": "todo",
+      "status": "blocked",
       "dependsOn": [
         "R9-038",
         "R9-039",
@@ -659,8 +743,8 @@
         "R9-042"
       ],
       "evidence": [],
-      "blockedReason": null,
-      "updatedAt": null
+      "blockedReason": "Requires user-owned Windows ChatGPT login, configured official OpenAI Tunnel MCP connector, installed real coding agents and tool approvals for live E2E. Cannot truthfully execute those tests with synthetic browser alone; upstream at 0901b9 is currently identical to baseline.",
+      "updatedAt": "2026-10-24T13:29:17.145Z"
     }
   ]
 }

@@ -10,6 +10,7 @@ import type { AdapterEvent } from "../../types";
 import { NineRouterRequestError, parseNineRouterRequest } from "./request";
 import { NineRouterSessionManager, type NineRouterStage } from "./session-manager";
 import { loadNineRouterKey, NINE_ROUTER_KEY_ENV } from "./key-manager";
+import { logNineRouter, newNineRouterRequestId } from "./diagnostics";
 
 export const NINE_ROUTER_BASE_PATH = "/integrations/9router/v1";
 export { NINE_ROUTER_KEY_ENV };
@@ -64,8 +65,13 @@ export class NineRouterProvider {
   close(): void { this.manager.closeAll(); }
 
   async handle(req: Request, path: string, draining = false): Promise<Response> {
+    const requestId = newNineRouterRequestId();
+    const started = Date.now();
     if (!this.enabled) return errorResponse(404, "9Router integration is disabled (requires Automatic Full mode and its API key)");
-    if (!bearerAuthorized(req, this.key!)) return errorResponse(401, "Invalid provider API key");
+    if (!bearerAuthorized(req, this.key!)) {
+      logNineRouter("auth_rejected", { requestId, status: 401, category: "auth" });
+      return errorResponse(401, "Invalid provider API key");
+    }
     const caps = {
       solAvailable: this.config.solAvailable,
       extraHighAvailable: this.config.extraHighAvailable,
@@ -102,17 +108,20 @@ export class NineRouterProvider {
       const canonicalModel = canonicalNineRouterModel(request.model);
       let route: ReturnType<typeof requireChatGptWebModelRoute>;
       try { route = requireChatGptWebModelRoute(canonicalModel, caps); }
-      catch { throw new NineRouterRequestError(`ChatGPT Web model is unknown or unavailable: ${canonicalModel}`, 400); }
+      catch { throw new NineRouterRequestError("ChatGPT Web model is unknown or unavailable", 400); }
       if (route.interactionMode !== "automatic") throw new NineRouterRequestError("Manual browser mode is unsupported", 422);
+      logNineRouter("request_started", { requestId, toolCount: request.tools.length });
       const stagePromise = matchesPendingTool
-        ? this.manager.continue(request, req.signal)
-        : this.manager.start(request, route, req.signal);
+        ? this.manager.continue(request, req.signal, requestId)
+        : this.manager.start(request, route, req.signal, requestId);
       if (!request.stream) return Response.json(buildResponseJSON(stageEvents(await stagePromise), request.model));
       const queue = new AsyncEventQueue<AdapterEvent>();
       void stagePromise.then(stage => {
         for (const event of stageEvents(stage)) queue.push(event);
       }, error => {
-        console.warn(`[9router] stream_failure kind=${error instanceof Error ? error.name : "unknown"}`);
+        logNineRouter("request_failed", { requestId, status: error instanceof NineRouterRequestError ? error.status : 502,
+          category: error instanceof NineRouterRequestError ? "agent" : "browser",
+          durationMs: Date.now() - started });
         queue.push({ type: "error", message: error instanceof NineRouterRequestError
           ? error.message : "ChatGPT Web provider turn failed; see privacy-safe local logs" });
       }).finally(() => queue.close());
@@ -122,7 +131,9 @@ export class NineRouterProvider {
     } catch (error) {
       const status = error instanceof NineRouterRequestError ? error.status : error instanceof SyntaxError ? 400 : 502;
       const message = error instanceof NineRouterRequestError ? error.message : "ChatGPT Web provider turn failed; see privacy-safe local logs";
-      console.warn(`[9router] provider_error status=${status} kind=${error instanceof Error ? error.name : "unknown"}`);
+      logNineRouter(status === 400 || status === 413 || status === 415 || status === 422 ? "parse_rejected" : "request_failed",
+        { requestId, status, category: status === 400 || status === 413 || status === 415 || status === 422
+          ? "input" : status === 409 ? "agent" : "browser", durationMs: Date.now() - started });
       return errorResponse(status, message);
     }
   }

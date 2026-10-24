@@ -2,11 +2,13 @@
 
 **Project:** Add ChatGPT Web as a provider to an **unmodified 9Router** installation, with tools executed by the originating coding agent, while keeping direct Codex functionality unchanged.
 
-**Planning state (2026-10-24):** 8 epics, **43 tasks**, 0 done, 0 in progress, 0 blocked, 43 todo. No 9Router implementation code has been started.
+**Live state (2026-10-24):** 8 epics, **43 tasks**. Run `node tasks/9router/taskctl.mjs summary` for verified totals; implementation and offline tests are underway. Live account-bound verification is pending.
 
 - [Implementation plan](PLAN.md)
 - [Reference/source map](REFERENCES.md)
 - [Protocol contract and examples](PROTOCOL.md)
+- [Implementation and offline-test evidence](IMPLEMENTATION.md)
+- [Windows setup / rollback instructions](WINDOWS_SETUP.md)
 - [Machine-readable task state](manifest.json)
 - [Epic specifications](epics/)
 - [Individual detailed task descriptions](items/)
@@ -17,7 +19,7 @@
 - **items/R9-NNN-*.md** contains the detailed scope, implementation steps, acceptance criteria, validation evidence and reference-first instructions.
 - **epics/R9-E##-*.md** defines the epic objective and exit conditions.
 - **taskctl.mjs** is a dependency-free Node CLI (also runnable with Bun) for displaying and updating task state. The script never performs an integration test or edits application code.
-- Do not duplicate hand-written completion totals across files: use the CLI summary. The totals shown at the top of this document are just the initial planning snapshot.
+- Do not duplicate hand-written completion totals across files: use the CLI summary.
 
 ## Commands (Windows PowerShell, CMD, macOS or Linux)
 
@@ -84,8 +86,8 @@ Do not change decolua/9router, the upstream miuuyy repository, or agent installa
 
 ## Verification boundary
 
-- **Planning files pushed:** This does not mean the provider, tools or protocol integration is implemented.
+- **Planning + implementation:** The provider, MCP bridge and offline tests are added incrementally; status and evidence must be read from `manifest.json` and `IMPLEMENTATION.md`.
 - **Offline testing:** Safe fixtures, syntax/type checks and unmodified local 9Router translation tests can be automated.
 - **Live testing:** Real ChatGPT login and tunnel runtime credentials are not required for offline tests; they are necessary for final live acceptance.
 
-All 43 tasks initially remain todo. In particular, manual acceptance and release remain incomplete until demonstrated.
+The initial manifest had all 43 tasks as todo. Current states are in `manifest.json`; manual acceptance and production release remain incomplete until demonstrated.

@@ -5,10 +5,14 @@ import { TurnBroker, type BrokerToolRequest, type BrokerTurnEnvironment } from "
 import type { CodexProviderConfig } from "../../types";
 import { CHATGPT_CONNECTOR_NAME } from "../../config";
 import { MAX_CHATGPT_BROWSER_TABS } from "../../adapters/chatgpt-web/concurrency";
+import { CHATGPT_WEB_MCP_INVOCATION_TIMEOUT_MS } from "../../adapters/chatgpt-web/mcp-server";
 import type { NineRouterRequest } from "./request";
 import { NineRouterRequestError } from "./request";
+import { logNineRouter } from "./diagnostics";
 
-const SESSION_TTL_MS = 120_000;
+// Leave a margin before the existing MCP call deadline. The clock starts when
+// a tool is returned to the coding agent, not while ChatGPT is still thinking.
+const SESSION_TTL_MS = CHATGPT_WEB_MCP_INVOCATION_TIMEOUT_MS - 10_000;
 const MAX_ACTIVE_SESSIONS = MAX_CHATGPT_BROWSER_TABS;
 
 export interface NineRouterStage {
@@ -18,11 +22,14 @@ export interface NineRouterStage {
 }
 
 interface NineRouterSession {
+  traceId: string;
+  requestId?: string;
   token: string;
   model: string;
   originalHistory: NineRouterRequest["history"];
   tools: Set<string>;
   toolChoice: NineRouterRequest["toolChoice"];
+  parallelToolCalls: boolean;
   choiceFulfilled: boolean;
   outstanding: Map<string, BrokerToolRequest>;
   pendingText: string[];
@@ -57,6 +64,10 @@ export class NineRouterSessionManager {
 
   private close(session: NineRouterSession, reason?: Error): void {
     if (!this.sessions.delete(session)) return;
+    logNineRouter("session_retired", { requestId: session.requestId, traceId: session.traceId,
+      token: session.token, callCount: session.outstanding.size,
+      category: reason?.message === "9Router agent tool results expired" ? "timeout"
+        : reason ? "cancelled" : undefined });
     clearTimeout(session.expiryTimer);
     for (const callId of session.outstanding.keys()) this.pendingCalls.delete(callId);
     session.abort.abort(reason ?? new Error("9Router agent session retired"));
@@ -97,7 +108,7 @@ export class NineRouterSessionManager {
     }
   }
 
-  async start(request: NineRouterRequest, model: { backendModel: string; adapterEffort: string; modelFamily?: "5.6" | "6" }, observerSignal?: AbortSignal): Promise<NineRouterStage> {
+  async start(request: NineRouterRequest, model: { backendModel: string; adapterEffort: string; modelFamily?: "5.6" | "6" }, observerSignal?: AbortSignal, requestId?: string): Promise<NineRouterStage> {
     if (observerSignal?.aborted) throw new NineRouterRequestError("Provider request was cancelled", 499);
     this.evictExpired();
     if (this.sessions.size >= MAX_ACTIVE_SESSIONS) throw new NineRouterRequestError("Too many active 9Router tool sessions", 429);
@@ -108,15 +119,20 @@ export class NineRouterSessionManager {
       : request.tools;
     const environment: BrokerTurnEnvironment = { kind: "external-agent", tools };
     // A bounded capability is sufficient; no local paths, native thread IDs or Codex sandbox claims.
-    const token = await this.broker.register(environment, this.toolResultTtlMs, traceId);
+    // An absolute broker TTL would silently shorten MCP invocations after a long-running
+    // ChatGPT generation. The session itself owns and revokes this capability on settlement.
+    const token = await this.broker.register(environment, undefined, traceId);
     const session: NineRouterSession = {
+      traceId, requestId,
       token, model: request.model, originalHistory: structuredClone(request.history),
-      tools: new Set(tools.map(tool => tool.name)), toolChoice: request.toolChoice, choiceFulfilled: false,
+      tools: new Set(tools.map(tool => tool.name)), toolChoice: request.toolChoice,
+      parallelToolCalls: request.parallelToolCalls, choiceFulfilled: false,
       outstanding: new Map(), pendingText: [], progress: new ChatGptExternalTurnProgress(),
       browser: undefined as unknown as Promise<string>, abort: new AbortController(),
       expiresAt: Number.POSITIVE_INFINITY, consuming: false, waiters: new Set(),
     };
     this.sessions.add(session);
+    logNineRouter("browser_started", { requestId, traceId, token, toolCount: tools.length });
 
     const transcript = request.history.map(message => `[${message.role}]\n${message.text}`).join("\n\n");
     const system = request.instructions ? `Agent instructions (from caller):\n${request.instructions}\n\n` : "";
@@ -176,7 +192,7 @@ export class NineRouterSessionManager {
     finally { observerSignal?.removeEventListener("abort", onAbort); }
   }
 
-  async continue(request: NineRouterRequest, observerSignal?: AbortSignal): Promise<NineRouterStage> {
+  async continue(request: NineRouterRequest, observerSignal?: AbortSignal, requestId?: string): Promise<NineRouterStage> {
     if (observerSignal?.aborted) throw new NineRouterRequestError("Provider continuation was cancelled", 499);
     this.evictExpired();
     const matching = new Set<NineRouterSession>();
@@ -186,6 +202,7 @@ export class NineRouterSessionManager {
     }
     if (matching.size !== 1) throw new NineRouterRequestError("No unambiguous active 9Router tool session matches these call IDs", 409);
     const session = [...matching][0]!;
+    if (requestId) session.requestId = requestId;
     if (request.model !== session.model) throw new NineRouterRequestError("Model changed during a tool continuation", 409);
     // A call ID is only a capability within the authenticated provider account. Require the
     // original ordered conversation prefix as a second binding, without assuming private 9Router headers.
@@ -206,17 +223,26 @@ export class NineRouterSessionManager {
     if ([...session.outstanding.keys()].some(id => outputsById.get(id)?.output === "[No response received]")) {
       throw new NineRouterRequestError("9Router synthesized a missing tool result; refusing to report fabricated execution", 409);
     }
-    for (const call of session.outstanding.values()) {
-      const output = outputsById.get(call.callId)!;
-      // Tool execution stays at the originating coding agent; the MCP bridge gets only its returned data.
-      await this.broker.completeTool(session.token, call.callId, {
-        content: [{ type: "text", text: output.output }],
-        ...(output.isError ? { isError: true } : {}),
-      });
-      session.progress.recordToolResult();
-      this.pendingCalls.delete(call.callId);
+    try {
+      for (const call of session.outstanding.values()) {
+        const output = outputsById.get(call.callId)!;
+        // Tool execution stays at the originating coding agent; the MCP bridge gets only its returned data.
+        await this.broker.completeTool(session.token, call.callId, output.result
+          ? { ...output.result, ...(output.isError ? { isError: true } : {}) }
+          : { content: [{ type: "text", text: output.output }], ...(output.isError ? { isError: true } : {}) });
+        session.progress.recordToolResult();
+        this.pendingCalls.delete(call.callId);
+      }
+    } catch (error) {
+      // A partial batch cannot be replayed safely. Some agent-side operations may have
+      // already happened, so never silently start a second browser or replay those writes.
+      this.close(session, error instanceof Error ? error : new Error("Tool result handoff failed"));
+      throw new NineRouterRequestError("Tool result handoff failed; restart with a new task, do not replay mutations", 409);
     }
+    const deliveredCount = session.outstanding.size;
     session.outstanding.clear();
+    logNineRouter("tool_results_returned", { requestId, traceId: session.traceId,
+      token: session.token, callCount: deliveredCount });
     this.resumeBrowser(session);
     const onAbort = () => this.close(session, new Error("9Router continuation observer disconnected"));
     observerSignal?.addEventListener("abort", onAbort, { once: true });
@@ -243,6 +269,9 @@ export class NineRouterSessionManager {
       const outcome = await Promise.race([nextCalls, finished]);
       waiting.abort();
       if (outcome.type === "calls" && outcome.calls.length > 0) {
+        if (!session.parallelToolCalls && outcome.calls.length > 1) {
+          throw new NineRouterRequestError("ChatGPT requested parallel tools but the caller disabled them", 422);
+        }
         for (const call of outcome.calls) {
           if (!session.tools.has(call.wireName)) throw new NineRouterRequestError("Model requested a tool not advertised by the caller", 409);
           if (typeof session.toolChoice === "object" && call.wireName !== session.toolChoice.name) {
@@ -254,6 +283,8 @@ export class NineRouterSessionManager {
         }
         session.choiceFulfilled = true;
         this.awaitAgentResults(session);
+        logNineRouter("tool_batch_delivered", { requestId: session.requestId, traceId: session.traceId,
+          token: session.token, callCount: outcome.calls.length });
         const text = session.pendingText.join(""); session.pendingText = [];
         return { text, calls: outcome.calls, finished: false };
       }
@@ -262,6 +293,8 @@ export class NineRouterSessionManager {
         throw new NineRouterRequestError("ChatGPT Web finished without the tool call required by the coding agent", 422);
       }
       const text = session.pendingText.join("") || session.settled?.text || "";
+      logNineRouter("browser_finished", { requestId: session.requestId, traceId: session.traceId,
+        token: session.token });
       this.close(session);
       return { text, calls: [], finished: true };
     } finally {

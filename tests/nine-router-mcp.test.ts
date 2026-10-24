@@ -13,7 +13,18 @@ test("external 9Router agent can inventory and execute through the unchanged nat
     name: "Read", description: "Read a source file in the originating coding agent",
     parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"], additionalProperties: false },
   };
-  const token = await broker.register({ kind: "external-agent", tools: [tool] }, 60_000);
+  const declared = [tool,
+    { name: "Skill", description: "Agent advertised skill loader", parameters: {
+      type: "object", properties: { name: { type: "string" } }, required: ["name"], additionalProperties: false,
+    } },
+    { name: "ToolSearch", description: "Agent deferred tool registry", parameters: {
+      type: "object", properties: { query: { type: "string" } }, required: ["query"], additionalProperties: false,
+    } },
+    { name: "mcp__repo__lookup", description: "Agent plugin/MCP tool", parameters: {
+      type: "object", properties: { path: { type: "string" } }, required: ["path"], additionalProperties: false,
+    } },
+  ];
+  const token = await broker.register({ kind: "external-agent", tools: declared }, 60_000);
   const client = new Client({ name: "9router-external-agent-test", version: "1.0.0" });
   const transport = new StdioClientTransport({
     command: process.execPath, args: ["src/cli.ts", "mcp", "--broker-socket", broker.socketPath],
@@ -24,9 +35,10 @@ test("external 9Router agent can inventory and execute through the unchanged nat
     await client.connect(transport);
     const discovered = await call("codex_tool_inventory", { turn_token: token, include_schema: true });
     expect(discovered.isError).toBeFalsy();
-    expect(discovered.structuredContent).toMatchObject({
-      total: 1, tools: [{ wire_name: "Read", name: "Read", parameters: tool.parameters }],
-    });
+    expect(discovered.structuredContent).toMatchObject({ total: 4 });
+    const catalog = discovered.structuredContent as { tools: Array<{ wire_name: string; parameters: unknown }> };
+    expect(catalog.tools.map(item => item.wire_name)).toEqual(declared.map(item => item.name));
+    expect(catalog.tools[0]?.parameters).toEqual(tool.parameters);
     for (const [name, params] of [
       ["codex_exec", { cmd: "must-not-run" }],
       ["codex_apply_patch", { patch: "*** Begin Patch\n*** End Patch" }],
@@ -52,6 +64,39 @@ test("external 9Router agent can inventory and execute through the unchanged nat
     const completed = await invoked;
     expect(completed.isError).toBeFalsy();
     expect(JSON.stringify(completed.content)).toContain("export const ready = true");
+
+    const screenshot = call("codex_tool_call", { turn_token: token,
+      wire_name: "Read", arguments: { path: "screenshot.png" } });
+    const next = await broker.nextToolBatch(token);
+    expect(next).toHaveLength(1);
+    await broker.completeTool(token, next[0]!.callId, {
+      content: [{ type: "image", data: "aGVsbG8=", mimeType: "image/png" }],
+      structuredContent: { mimeType: "image/png" },
+    });
+    const multimodal = await screenshot;
+    expect(multimodal.isError).toBeFalsy();
+    expect(multimodal.content).toEqual([{ type: "image", data: "aGVsbG8=", mimeType: "image/png" }]);
+    expect(multimodal.structuredContent).toEqual({ mimeType: "image/png" });
+
+    // Skills/deferred search/MCP plugins work only when the originating agent explicitly
+    // advertises each one as a normal callable function. This cannot run hidden CLI hooks.
+    const operations = [
+      { name: "Skill", args: { name: "code-anime" }, answer: "Loaded skill instructions" },
+      { name: "ToolSearch", args: { query: "repo tool" }, answer: "Found mcp__repo__lookup" },
+      { name: "mcp__repo__lookup", args: { path: "repo.ts" }, answer: "Agent-owned plugin result" },
+    ];
+    for (const operation of operations) {
+      const pending = call("codex_tool_call", { turn_token: token,
+        wire_name: operation.name, arguments: operation.args });
+      const batch = await broker.nextToolBatch(token);
+      expect(batch).toMatchObject([{ wireName: operation.name, arguments: operation.args }]);
+      await broker.completeTool(token, batch[0]!.callId,
+        { content: [{ type: "text", text: operation.answer }] });
+      expect(JSON.stringify((await pending).content)).toContain(operation.answer);
+    }
+    const forged = await call("codex_tool_call", { turn_token: token,
+      wire_name: "mcp__unadvertised__delete_files", arguments: { path: "repo.ts" } });
+    expect(forged.isError).toBe(true);
   } finally {
     await client.close();
     await broker.close();
