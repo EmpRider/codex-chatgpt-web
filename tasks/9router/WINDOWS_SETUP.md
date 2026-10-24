@@ -4,7 +4,7 @@ This is an **add-on** for `EmpRider/codex-chatgpt-web`. It does not install a pr
 
 ## 1. Prepare the ChatGPT Web fork
 
-1. Install/run this **fork's** launcher, not a public upstream build that lacks the integration. Follow this repository's [README](../../README.md) for the launcher installation/build steps.
+1. Install/run this **fork's** launcher, not a public upstream build that lacks the integration. Follow this repository's [README](../../README.md) for the launcher installation/build steps. **A packaged installer is not necessary for local source testing**: from a checked-out fork, run `bun run app` to start the normal production-profile launcher with Vite as its UI. Close an installed launcher first, because both share the same normal profile. `bun run launcher:dev` is the isolated DEV harness and does **not** expose the 9Router Responses listener.
 2. Sign in to ChatGPT in the launcher's managed browser, then choose **Full harness** and **Automatic** browser mode.
 3. Complete the launcher's **MCP** setup with the *existing official OpenAI tunnel* and its `Codex Native2` custom ChatGPT connector. Verify the tunnel/connector is healthy in the launcher first. The OpenAI tunnel is used between ChatGPT and this local fork; 9Router is **not** its replacement.
 4. On a trusted Windows user account, run in PowerShell:
@@ -24,6 +24,10 @@ This is an **add-on** for `EmpRider/codex-chatgpt-web`. It does not install a pr
    The key file is in the same user profile as the launcher, normally `$env:USERPROFILE\.codex-chatgpt-web\integrations\nine-router-key.json`. If you use `CODEX_CHATGPT_WEB_HOME`, use the path returned by the command instead. **Do not commit, paste into an issue, or print this key in logs.**
 
 5. Restart the launcher/daemon after provisioning. The provider is disabled by default until a valid key exists **and** Full/Automatic mode is enabled.
+
+   When running from source, you can simply stop `bun run app` and start it again; do not
+   open a second copy. `http://127.0.0.1:4178` is only the Vite UI and the DevTools port is
+   only for browser debugging. Neither hosts `/integrations/9router/v1/models`.
 
 ## 2. Test the local fork endpoint without exposing the key
 

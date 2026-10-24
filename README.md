@@ -181,9 +181,16 @@ bun run app
 ```
 
 This source path requires Bun 1.4.0. The command installs locked dependencies and opens the app.
+`bun run app` uses the **normal launcher profile** and supervises its Responses API on
+`127.0.0.1:17841` after setup, including the optional 9Router provider. It runs the renderer
+through Vite (`127.0.0.1:4178`), but Vite is not the API. Quit an already-installed
+Codex Web GPT launcher before starting this source instance: both use the same normal profile
+and should not supervise it simultaneously. `bun run launcher:dev` retains the **isolated DEV
+profile**, which deliberately starts no Responses listener.
 
 ```bash
 bun run app
+bun run launcher:dev
 bun run dev:launcher
 bun run src/cli.ts dev status
 bun run dev:chat compaction-lab "Reply with exactly: DEV READY"

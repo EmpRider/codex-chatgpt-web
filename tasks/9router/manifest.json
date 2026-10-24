@@ -745,6 +745,23 @@
       "evidence": [],
       "blockedReason": "Requires user-owned Windows ChatGPT login, configured official OpenAI Tunnel MCP connector, installed real coding agents and tool approvals for live E2E. Cannot truthfully execute those tests with synthetic browser alone; upstream at 0901b9 is currently identical to baseline.",
       "updatedAt": "2026-10-24T13:29:17.145Z"
+    },
+    {
+      "id": "R9-044",
+      "epic": "R9-E08",
+      "title": "Launch supervised Responses and 9Router endpoint via bun run app from source",
+      "file": "items/R9-044-launch-supervised-responses-via-bun-run-app.md",
+      "status": "done",
+      "dependsOn": [
+        "R9-005",
+        "R9-006",
+        "R9-042"
+      ],
+      "evidence": [
+        "scripts/start-launcher.ts; launcher/scripts/dev.cjs; launcher/tests/source-launch-profile.test.cjs 2 pass; launcher/tests/profile.test.cjs 3 pass; launcher/tests/runtime-host.test.cjs 58 pass; launcher/tests/renderer-wiring.test.cjs 32 pass; launcher/tests/runtime-install.test.cjs 11 pass; Windows live API test remains R9-043"
+      ],
+      "blockedReason": null,
+      "updatedAt": "2026-10-24T14:10:49.723Z"
     }
   ]
 }
