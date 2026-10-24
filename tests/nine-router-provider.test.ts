@@ -165,7 +165,10 @@ test("coding-agent tool manuals are discovered lazily, without expanding the ini
     expect(result.finished).toBe(true);
     expect(prompt).toContain('"available_tools":["Agent","Bash"]');
     expect(prompt).not.toContain("Bash safety guidance");
-    expect(prompt).toContain("retrieve its complete description and schema using codex_tool_inventory");
+    expect(prompt).toContain("retrieve the relevant tool description and schema through codex_tool_inventory");
+    expect(prompt).toContain('Use ONLY "Codex Native2" for the originating agent\'s tools');
+    expect(prompt).toContain("Never claim a local file was read or changed unless the corresponding tool call actually succeeded");
+    expect(prompt).toContain("do not substitute GitHub, other connectors, or instructions for executing the requested tool");
     expect(prompt).not.toContain("Final tool limitation.");
     expect(prompt.length).toBeLessThan(10_000);
   } finally { manager.closeAll(); }

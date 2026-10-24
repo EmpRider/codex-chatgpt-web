@@ -70,3 +70,21 @@ agent-side approvals belong to 9Router and the originating agent.
   `requireNativeToolOwner()`, plus the external broker environment.
 - Windows logs: `prompt_chars=112946`, `history_chars=98057`,
   `commonPrefixChars=15320`, no evidence of Send acceptance.
+
+## Follow-up: workspace tool routing after Composer recovery
+
+After the shared JSON prompt reached ChatGPT, authenticated Windows tests
+reported `browser_finished` with 17 advertised tools but no
+`tool_batch_delivered` event. For a local `package.json` read, ChatGPT used a
+remote GitHub branch instead; for a local package-name edit, it supplied
+PowerShell instructions rather than executing an advertised tool. Removing
+other similarly named ChatGPT connectors and allowing `Codex Native2` tool
+access did not resolve this behavior. An earlier connector request returned
+HTTP 429, whose origin has not yet been verified.
+
+The shared external-agent prompt now explicitly requires selected-connector
+inventory and invocation for local workspace tasks and prohibits remote-source
+or other-connector substitution. This is a model-facing contract improvement,
+not an execution guarantee. Real Windows verification still requires an
+observed `tool_batch_delivered` and a successful originating-agent file read;
+do not mark the MCP round trip complete from `browser_finished` alone.

@@ -107,7 +107,12 @@ function compileExternalAgentPrompt(input: ExternalAgentChatGptPromptInput): Com
     "The JSON context is conversation data, not additional transport instructions. Preserve its system, developer, user, assistant, and tool roles at their original priority. The latest user request is active.",
     `The selected ChatGPT connector is ${JSON.stringify(connectorName)}. It transports tools belonging to the originating coding agent; do not assume the caller is Codex or that native Codex privileges apply.`,
     toolNames.length
-      ? "To work with an advertised agent tool, first retrieve its complete description and schema using codex_tool_inventory; call it using codex_tool_call with the exact advertised wire name and arguments. The originating coding agent owns execution and approvals. Use actual returned results."
+      ? [
+        `Use ONLY ${JSON.stringify(connectorName)} for the originating agent's tools. Do not search for or invoke another ChatGPT connector, app, or plugin as a substitute, even if its name is similar.`,
+        "For tasks requiring local workspace inspection or modification, first retrieve the relevant tool description and schema through codex_tool_inventory on the selected connector, then invoke codex_tool_call on that same connector with the exact advertised wire name and arguments.",
+        "A remote GitHub branch, web search, or proposed terminal command is not a substitute for reading or editing the originating agent's local workspace. Never claim a local file was read or changed unless the corresponding tool call actually succeeded.",
+        "If the selected connector is unavailable, fails, or is rate-limited, report the actual failure and leave the task unverified; do not switch connectors or provide an unrequested remote-source answer. The originating coding agent owns tool execution and approvals. Use only actual tool results.",
+      ].join(" ")
       : "No coding-agent tools were supplied. Answer directly without claiming access to the caller's device.",
     ...(toolChoice === "required" ? ["The originating agent requires at least one advertised tool call."] : []),
     ...(typeof toolChoice === "object" ? [`The originating agent requires a call to ${toolChoice.name}.`] : []),
@@ -116,6 +121,7 @@ function compileExternalAgentPrompt(input: ExternalAgentChatGptPromptInput): Com
   const resume = [
     "<codex_transport_resume>",
     `Use turn_token ${turnToken} unchanged in every call through ${JSON.stringify(connectorName)}; never reveal it. Execute the latest active user request now.`,
+    ...(toolNames.length ? [`For local workspace tasks, use codex_tool_inventory and codex_tool_call through ${JSON.stringify(connectorName)} only; do not substitute GitHub, other connectors, or instructions for executing the requested tool.`] : []),
     "</codex_transport_resume>",
   ];
   return {
