@@ -10,6 +10,7 @@ import { AsyncEventQueue } from "../src/event-queue";
 import type { AdapterEvent } from "../src/types";
 import { NineRouterRequestError, parseNineRouterRequest } from "../src/integrations/nine-router/request";
 import { NineRouterSessionManager, MAX_NINE_ROUTER_PRE_SEND_VIEWPORT_RETRIES,
+  NINE_ROUTER_MAX_PENDING_TEXT_CHARS,
   runNineRouterPreSendViewportRecovery } from "../src/integrations/nine-router/session-manager";
 import { requireNativeToolOwner } from "../src/adapters/chatgpt-web/mcp-server";
 import { disableNineRouterKey, loadNineRouterKey, provisionNineRouterKey } from "../src/integrations/nine-router/key-manager";
@@ -37,6 +38,251 @@ test("9Router forwards owned-stage keepalives without inventing model output, th
   await new Promise(resolve => setTimeout(resolve, 20));
   queue.close();
   expect(await iterator.next()).toEqual({ value: undefined, done: true });
+});
+
+test("9Router disposes streaming heartbeats on disconnect even when its browser never settles", async () => {
+  const queue = new AsyncEventQueue<AdapterEvent>();
+  const never = new Promise<void>(() => {});
+  const stop = keepNineRouterStageAlive(queue, never, 5);
+  const iterator = queue[Symbol.asyncIterator]();
+  expect((await iterator.next()).value).toEqual({ type: "heartbeat" });
+  stop();
+  queue.close();
+  await new Promise(resolve => setTimeout(resolve, 20));
+  expect(await iterator.next()).toEqual({ value: undefined, done: true });
+});
+
+test("concurrent broker registrations reserve browser slots before awaiting I/O", async () => {
+  const config = defaultConfig("full");
+  const registrations: Array<(token: string) => void> = [];
+  let revoked = 0;
+  const heldBroker = {
+    register: () => new Promise<string>(resolve => registrations.push(resolve)),
+    revoke: async () => { revoked++; },
+    nextToolBatch: () => new Promise(() => {}),
+  } as unknown as TurnBroker;
+  const manager = new NineRouterSessionManager(heldBroker, providerConfig(config), {
+    run: turn => new Promise((_resolve, reject) => {
+      turn.abortSignal!.addEventListener("abort", () => reject(new Error("retired")), { once: true });
+    }),
+  });
+  const model = { backendModel: "gpt-5.6-luna", adapterEffort: "low" };
+  const request = parseNineRouterRequest({ model: "chatgpt-web/gpt-5.6-luna", input: "reserve browser" });
+  const starts = Array.from({ length: 5 }, () => manager.start(request, model));
+  try {
+    expect(registrations).toHaveLength(5);
+    await expect(manager.start(request, model)).rejects.toMatchObject({ status: 429 });
+    expect(registrations).toHaveLength(5);
+    registrations.forEach((resolve, index) => resolve(`held_token_${index}`));
+    await new Promise(resolve => setTimeout(resolve, 10));
+    expect(manager.activeCount()).toBe(5);
+  } finally {
+    manager.closeAll();
+    await Promise.allSettled(starts);
+    expect(manager.activeCount()).toBe(0);
+    expect(revoked).toBe(5);
+  }
+});
+
+test("shutdown during a delayed registration revokes its late owner without launching a browser", async () => {
+  const config = defaultConfig("full");
+  let resolveRegistration!: (token: string) => void;
+  let browserRuns = 0;
+  let revoked = 0;
+  const delayedBroker = {
+    register: () => new Promise<string>(resolve => { resolveRegistration = resolve; }),
+    revoke: async () => { revoked++; },
+  } as unknown as TurnBroker;
+  const manager = new NineRouterSessionManager(delayedBroker, providerConfig(config), {
+    async run() { browserRuns++; return "unexpected"; },
+  });
+  const pending = manager.start(parseNineRouterRequest({ model: "chatgpt-web/gpt-5.6-luna", input: "closing" }),
+    { backendModel: "gpt-5.6-luna", adapterEffort: "low" });
+  manager.closeAll();
+  resolveRegistration("late_owner");
+  await expect(pending).rejects.toMatchObject({ status: 503 });
+  expect(revoked).toBe(1);
+  expect(browserRuns).toBe(0);
+  expect(manager.activeCount()).toBe(0);
+});
+
+test("hung broker plus non-cooperative browser ends with a bounded error and retires the owner", async () => {
+  const config = defaultConfig("full");
+  let revoked = 0;
+  const unresponsiveBroker = {
+    register: async () => "hung_browser_owner",
+    revoke: async () => { revoked++; },
+    nextToolBatch: () => new Promise(() => {}),
+  } as unknown as TurnBroker;
+  const manager = new NineRouterSessionManager(unresponsiveBroker, providerConfig(config), {
+    run: () => new Promise(() => {}),
+  }, 80_000, 25);
+  await expect(manager.start(parseNineRouterRequest({ model: "chatgpt-web/gpt-5.6-luna", input: "hang" }),
+    { backendModel: "gpt-5.6-luna", adapterEffort: "low" })).rejects.toMatchObject({ status: 504 });
+  expect(manager.activeCount()).toBe(0);
+  expect(revoked).toBe(1);
+});
+
+test("oversized browser text is rejected instead of growing the external stage buffer without a bound", async () => {
+  const config = defaultConfig("full");
+  let revoked = 0;
+  const heldBroker = {
+    register: async () => "bounded_text_owner",
+    revoke: async () => { revoked++; },
+    nextToolBatch: () => new Promise(() => {}),
+  } as unknown as TurnBroker;
+  const manager = new NineRouterSessionManager(heldBroker, providerConfig(config), {
+    async run(turn) {
+      turn.onTextDelta("a".repeat(NINE_ROUTER_MAX_PENDING_TEXT_CHARS + 1));
+      return "unreachable";
+    },
+  });
+  await expect(manager.start(parseNineRouterRequest({ model: "chatgpt-web/gpt-5.6-luna", input: "huge answer" }),
+    { backendModel: "gpt-5.6-luna", adapterEffort: "low" })).rejects.toMatchObject({ status: 507 });
+  expect(manager.activeCount()).toBe(0);
+  expect(revoked).toBe(1);
+});
+
+test("an oversized final DOM-only answer is bounded even when no incremental text callback fired", async () => {
+  const config = defaultConfig("full");
+  const fakeBroker = {
+    register: async () => "final_only_budget_owner",
+    revoke: async () => {},
+    nextToolBatch: () => new Promise(() => {}),
+  } as unknown as TurnBroker;
+  const manager = new NineRouterSessionManager(fakeBroker, providerConfig(config), {
+    async run() { return "x".repeat(NINE_ROUTER_MAX_PENDING_TEXT_CHARS + 1); },
+  });
+  await expect(manager.start(parseNineRouterRequest({ model: "chatgpt-web/gpt-5.6-luna", input: "huge final" }),
+    { backendModel: "gpt-5.6-luna", adapterEffort: "low" })).rejects.toMatchObject({ status: 507 });
+  expect(manager.activeCount()).toBe(0);
+});
+
+test("unsupported freeform tool requests fail at broker handoff, not after a phantom SSE delivery", async () => {
+  const config = defaultConfig("full");
+  let retired = 0;
+  const brokerWithFreeform = {
+    register: async () => "freeform_owner",
+    revoke: async () => { retired++; },
+    nextToolBatch: async () => [{ callId: "call_unsupported", wireName: "Read",
+      freeform: true, input: "untrusted command" }],
+  } as unknown as TurnBroker;
+  const manager = new NineRouterSessionManager(brokerWithFreeform, providerConfig(config), {
+    async run(turn) {
+      const progress = turn.externalProgress!;
+      while (progress.snapshot().lastToolBatchRevision === 0) {
+        await progress.waitForChange(progress.snapshot().revision);
+      }
+      await progress.acknowledgeToolBatch(progress.snapshot().lastToolBatchRevision);
+      return new Promise<string>((_resolve, reject) => turn.abortSignal!.addEventListener("abort",
+        () => reject(new Error("retired freeform owner")), { once: true }));
+    },
+  });
+  await expect(manager.start(parseNineRouterRequest({ model: "chatgpt-web/gpt-5.6-luna",
+    input: "read file", tools: [advertised] }),
+  { backendModel: "gpt-5.6-luna", adapterEffort: "low" })).rejects.toMatchObject({ status: 422 });
+  expect(manager.activeCount()).toBe(0);
+  expect(retired).toBe(1);
+});
+
+test("cancellation during a hung tool-result handoff never waits for its late broker acknowledgment", async () => {
+  const config = defaultConfig("full");
+  const callId = "call_waiting_handoff";
+  let batchReads = 0;
+  let retired = 0;
+  let handoffStarted!: () => void;
+  const handoff = new Promise<void>(resolve => { handoffStarted = resolve; });
+  const stuckBroker = {
+    register: async () => "handoff_owner",
+    revoke: async () => { retired++; },
+    nextToolBatch: async () => ++batchReads === 1
+      ? [{ callId, wireName: "Read", freeform: false, arguments: { path: "state.txt" } }]
+      : new Promise(() => {}),
+    completeTool: () => { handoffStarted(); return new Promise(() => {}); },
+  } as unknown as TurnBroker;
+  let browserAborted = false;
+  const manager = new NineRouterSessionManager(stuckBroker, providerConfig(config), {
+    async run(turn) {
+      const progress = turn.externalProgress!;
+      while (progress.snapshot().lastToolBatchRevision === 0) {
+        await progress.waitForChange(progress.snapshot().revision);
+      }
+      await progress.acknowledgeToolBatch(progress.snapshot().lastToolBatchRevision);
+      return new Promise<string>((_resolve, reject) => turn.abortSignal!.addEventListener("abort", () => {
+        browserAborted = true;
+        reject(new Error("tool owner retired"));
+      }, { once: true }));
+    },
+  });
+  try {
+    const first = await manager.start(parseNineRouterRequest({ model: "chatgpt-web/gpt-5.6-luna",
+      input: "read state", tools: [advertised] }),
+    { backendModel: "gpt-5.6-luna", adapterEffort: "low" });
+    expect(first.calls.map(call => call.callId)).toEqual([callId]);
+    const controller = new AbortController();
+    const continuation = manager.continue(parseNineRouterRequest({ model: "chatgpt-web/gpt-5.6-luna",
+      input: [{ role: "user", content: "read state" },
+        { type: "function_call_output", call_id: callId, output: "file content" }],
+    }), controller.signal);
+    await handoff;
+    controller.abort();
+    await expect(continuation).rejects.toMatchObject({ status: 409 });
+    expect(browserAborted).toBe(true);
+    expect(retired).toBe(1);
+    expect(manager.activeCount()).toBe(0);
+  } finally { manager.closeAll(); }
+});
+
+test("75 mixed concurrent failure-injection turns reclaim every owner without replaying accepted Sends", async () => {
+  const config = defaultConfig("full");
+  let issued = 0;
+  let revoked = 0;
+  let sends = 0;
+  const attempts = new Map<string, number>();
+  const fakeBroker = {
+    register: async () => `stress_owner_${issued++}`,
+    revoke: async () => { revoked++; },
+    nextToolBatch: () => new Promise(() => {}),
+  } as unknown as TurnBroker;
+  const manager = new NineRouterSessionManager(fakeBroker, providerConfig(config), {
+    async run(turn) {
+      const token = (await turn.prepare()).turnToken!;
+      const id = Number(token.slice("stress_owner_".length));
+      const attempt = (attempts.get(token) ?? 0) + 1;
+      attempts.set(token, attempt);
+      if (id % 5 === 1 && attempt === 1) {
+        throw new ChatGptBrowserViewportUnavailableError("fault-injected 1x1 viewport before Send");
+      }
+      if (id % 5 === 2) {
+        return new Promise((_resolve, reject) => turn.abortSignal!.addEventListener("abort",
+          () => reject(new Error("simulated client disconnect")), { once: true }));
+      }
+      if (id % 5 === 4) return new Promise(() => {}); // Helper ignores abort entirely.
+      await turn.onSendActivated?.();
+      sends++;
+      if (id % 5 === 3) throw new Error("fault-injected provider response crash after Send");
+      turn.onTextDelta(`answer ${id}`);
+      return `answer ${id}`;
+    },
+  }, 80_000, 25);
+  const model = { backendModel: "gpt-5.6-luna", adapterEffort: "low" };
+  for (let batch = 0; batch < 15; batch++) {
+    const attemptsInBatch = Array.from({ length: 5 }, (_, index) => {
+      const controller = new AbortController();
+      if (index === 2) setTimeout(() => controller.abort(), 5);
+      return manager.start(parseNineRouterRequest({ model: "chatgpt-web/gpt-5.6-luna",
+        input: `stress batch ${batch}, agent ${index}` }), model, controller.signal);
+    });
+    const settled = await Promise.allSettled(attemptsInBatch);
+    expect(settled.filter(result => result.status === "fulfilled")).toHaveLength(2);
+    expect(manager.activeCount()).toBe(0);
+  }
+  expect(issued).toBe(75);
+  expect(revoked).toBe(75);
+  expect(sends).toBe(45); // successful, recovered, and post-Send-crashed owners only
+  expect([...attempts.entries()].filter(([token]) => Number(token.slice("stress_owner_".length)) % 5 === 1)
+    .every(([_token, count]) => count === 2)).toBe(true);
+  manager.closeAll();
 });
 
 test("9Router transparently retries only a pre-Send collapsed viewport, preserving the request", async () => {
@@ -814,6 +1060,76 @@ test("authenticated provider Responses route emits standard SSE and nonstream JS
   } finally { provider.close(); }
 });
 
+test("9Router streams browser text before the model finishes, then emits only the unstreamed suffix", async () => {
+  const config = defaultConfig("full");
+  config.solAvailable = false;
+  config.browserInteractionMode = "automatic";
+  let finish!: () => void;
+  const waitForFinish = new Promise<void>(resolve => { finish = resolve; });
+  const manager = new NineRouterSessionManager(broker, providerConfig(config), {
+    async run(turn) {
+      turn.onTextDelta("First ");
+      await waitForFinish;
+      return "First and second";
+    },
+  });
+  const key = "test-only_" + "v".repeat(40);
+  const provider = new NineRouterProvider(config, broker, key, manager);
+  const path = "/integrations/9router/v1/responses";
+  try {
+    const response = await provider.handle(new Request(`http://127.0.0.1${path}`, {
+      method: "POST", headers: { authorization: `Bearer ${key}`, "content-type": "application/json" },
+      body: JSON.stringify({ model: "chatgpt-web/gpt-5.6-luna", input: "answer", stream: true }),
+    }), path);
+    const reader = response.body!.getReader();
+    const decoder = new TextDecoder();
+    let frames = "";
+    await Promise.race([
+      (async () => {
+        while (!frames.includes('"delta":"First "')) {
+          const next = await reader.read();
+          if (next.done) throw new Error("browser response ended before its first text delta");
+          frames += decoder.decode(next.value);
+        }
+      })(),
+      new Promise<never>((_resolve, reject) => setTimeout(() => reject(new Error("partial text did not stream")), 1_000)),
+    ]);
+    expect(frames).not.toContain("response.completed");
+    finish();
+    while (true) {
+      const next = await reader.read();
+      if (next.done) break;
+      frames += decoder.decode(next.value);
+    }
+    const deltas = [...frames.matchAll(/^data: (\{.+\})$/gm)]
+      .map(match => JSON.parse(match[1]!) as { type: string; delta?: string })
+      .filter(event => event.type === "response.output_text.delta");
+    expect(deltas.map(event => event.delta).join("")).toBe("First and second");
+    expect(frames).toContain("response.completed");
+  } finally { finish(); provider.close(); }
+});
+
+test("9Router refuses to silently complete when final browser Markdown contradicts already streamed text", async () => {
+  const config = defaultConfig("full");
+  config.solAvailable = false;
+  config.browserInteractionMode = "automatic";
+  const key = "test-only_" + "w".repeat(40);
+  const manager = new NineRouterSessionManager(broker, providerConfig(config), {
+    async run(turn) { turn.onTextDelta("unverified prefix"); return "different final text"; },
+  });
+  const provider = new NineRouterProvider(config, broker, key, manager);
+  const path = "/integrations/9router/v1/responses";
+  try {
+    const response = await provider.handle(new Request(`http://127.0.0.1${path}`, {
+      method: "POST", headers: { authorization: `Bearer ${key}`, "content-type": "application/json" },
+      body: JSON.stringify({ model: "chatgpt-web/gpt-5.6-luna", input: "answer", stream: true }),
+    }), path);
+    const frames = await response.text();
+    expect(frames).toContain("response.failed");
+    expect(frames).not.toContain("response.completed");
+  } finally { provider.close(); }
+});
+
 test("9Router HTTP Responses streams a real function call, then resumes from function_call_output", async () => {
   const config = defaultConfig("full");
   config.solAvailable = false;
@@ -821,6 +1137,7 @@ test("9Router HTTP Responses streams a real function call, then resumes from fun
   const apiKey = "test-only_" + "q".repeat(40);
   const manager = new NineRouterSessionManager(broker, providerConfig(config), {
     async run(turn) {
+      turn.onTextDelta("Opening file. ");
       const token = (await turn.prepare()).turnToken!;
       const claim = await callTurnBroker<{ bindingId: string; activityId: string }>(broker.socketPath,
         { method: "claim", token });
@@ -835,7 +1152,9 @@ test("9Router HTTP Responses streams a real function call, then resumes from fun
       }
       await progress.acknowledgeToolBatch(progress.snapshot().lastToolBatchRevision);
       const result = await invocation;
-      return `File content: ${result.content[0]?.text}`;
+      const final = `File content: ${result.content[0]?.text}`;
+      turn.onTextDelta(final);
+      return `Opening file. ${final}`;
     },
   });
   const provider = new NineRouterProvider(config, broker, apiKey, manager);
@@ -848,6 +1167,7 @@ test("9Router HTTP Responses streams a real function call, then resumes from fun
     const first = await provider.handle(body("Read app.ts"), path);
     expect(first.status).toBe(200);
     const frames = await first.text();
+    expect(frames).toContain("Opening file.");
     expect(frames).toContain("event: response.output_item.added");
     expect(frames).toContain("event: response.function_call_arguments.delta");
     expect(frames).toContain("event: response.output_item.done");
@@ -867,6 +1187,11 @@ test("9Router HTTP Responses streams a real function call, then resumes from fun
     const finalFrames = await last.text();
     expect(finalFrames).toContain("File content: export const live = true");
     expect(finalFrames).toContain("event: response.completed");
+    const outputText = (frame: string) => [...frame.matchAll(/^data: (\{.+\})$/gm)]
+      .map(match => JSON.parse(match[1]!) as { type: string; delta?: string })
+      .filter(event => event.type === "response.output_text.delta")
+      .map(event => event.delta ?? "").join("");
+    expect(outputText(frames) + outputText(finalFrames)).toBe("Opening file. File content: export const live = true");
     expect(provider.activeCount).toBe(0);
   } finally { provider.close(); }
 });
@@ -885,6 +1210,22 @@ test("invalid provider media type and malformed JSON fail before starting a brow
     expect((await send("{", "application/json")).status).toBe(400);
     expect(provider.activeCount).toBe(0);
   } finally { provider.close(); }
+});
+
+test("9Router HTTP reports an actionable 413 for a request exceeding the encoded-body limit", async () => {
+  const config = defaultConfig("full");
+  config.browserInteractionMode = "automatic";
+  const key = "test-only_" + "b".repeat(40);
+  const provider = new NineRouterProvider(config, broker, key);
+  const path = "/integrations/9router/v1/responses";
+  const response = await provider.handle(new Request(`http://127.0.0.1${path}`, {
+    method: "POST", headers: { authorization: `Bearer ${key}`,
+      "content-type": "application/json", "content-length": String(65 * 1024 * 1024) },
+    body: "{}",
+  }), path);
+  expect(response.status).toBe(413);
+  expect(await response.text()).toContain("Encoded request body exceeds");
+  provider.close();
 });
 
 test("provider logs and error envelopes never echo injected keys or untrusted tool declarations", async () => {

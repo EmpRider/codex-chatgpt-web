@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { createContext, runInContext } from "node:vm";
 import type { Page } from "playwright-core";
 import { CHATGPT_BROWSER_OBSERVATION_PROBE_TIMEOUT_MS, CHATGPT_COMPLETION_SETTLE_MS, CHATGPT_EXTERNAL_PROGRESS_CLOCK_SKEW_MS, CHATGPT_EXTERNAL_PROGRESS_STALL_CEILING_MS, ChatGptCompletionTracker, chatGptExternalProgressSuppressesDomHealth, CHATGPT_RESPONSE_DOM_GRACE_MS, MAX_CHATGPT_INTERNAL_OBSERVATION_FAULTS, CHATGPT_COMPOSER_DOCUMENT_END_KEY, CHATGPT_COMPOSER_SELECT_ALL_KEY, ChatGptBrowserObservationTimeoutError, ChatGptBrowserViewportUnavailableError, ChatGptBrowserWorker, ChatGptSubmissionRejectionObserver, ChatGptPromptAttachmentIntegrityError, ChatGptTurnDomHealthTracker, ChatGptVisibleTraceTracker, MAX_CHATGPT_BROWSER_PAGE_REBINDS, MAX_CHATGPT_BROWSER_TABS, MAX_CHATGPT_CONNECTOR_TRIGGER_ATTEMPTS, assertChatGptWebInputWithinLimits, assertChatGptWebMultipartInputWithinLimits, browserDiagnosticCheckpoint, chatGptNewTurnIdentity, chatGptReboundTurnIdentity, chatGptSubmissionEvidence, connectAfterClosingBrowserConnection, recoverOperationalLauncherViewport, dismissChatGptTemporaryChatOnboarding, isChatGptTraceControl, redactChatGptUiDiagnostic, resolveBrowserConfig, resolveChatGptToolConfirmation, resolveChatGptWebMultipartStagingMode, sanitizeChatGptBrowserDiagnosticState, setChatGptThinkMode, stripChatGptTraceControlSuffix, throwIfChatGptRateLimitDialog, throwIfChatGptSessionFailureAlert, throwIfChatGptTerminalErrorAlert, withChatGptBrowserObservationTimeout, CHATGPT_MULTIPART_RESPONSE_DOM_GRACE_MS, browserStageTimeouts, ChatGptSuspensionClock, remainingStageBudgetMs } from "../src/adapters/chatgpt-web/browser-worker";
+import { assertChatGptBrowserRebindBudget, MAX_CHATGPT_BROWSER_PAGE_REBINDS_PER_TURN } from "../src/adapters/chatgpt-web/browser-worker";
 import { ensureChatGptPersonalizedConnectorAccess, chatGptUnavailableProDetail } from "../src/adapters/chatgpt-web/browser-worker";
 import { chatGptStoppedThinkingError } from "../src/adapters/chatgpt-web/adapter-error";
 import { CHATGPT_STOPPED_THINKING_LABELS } from "../src/adapters/chatgpt-web/ui-labels";
@@ -446,6 +447,29 @@ test("a mutating stage timeout waits for abort cleanup before returning", async 
   expect(error).toMatchObject({ message: "ChatGPT browser stage timed out: prompt_attachment" });
   expect(stageSettled).toBeTrue();
   expect(cleanupComplete).toBeTrue();
+});
+
+test("a browser mutation that ignores abort cannot pin the stage forever or trigger a second attempt", async () => {
+  let sawAbort = false;
+  const runStage = (ChatGptBrowserWorker.prototype as unknown as {
+    runStage<T>(
+      traceId: string, stage: string, timeoutMs: number,
+      action: (signal: AbortSignal) => Promise<T>,
+      clock: { suspendedMs(): number },
+      awaitAbortedActionSettlement: boolean,
+      abortSettlementGraceMs: number,
+    ): Promise<T>;
+  }).runStage;
+  const started = Date.now();
+  await expect(runStage.call(
+    {}, "trace_unstoppable_mutation", "prompt_attachment", 10,
+    async signal => new Promise<string>(() => {
+      signal.addEventListener("abort", () => { sawAbort = true; }, { once: true });
+    }),
+    { suspendedMs: () => 0 }, true, 25,
+  )).rejects.toThrow("in-flight mutation did not stop");
+  expect(sawAbort).toBe(true);
+  expect(Date.now() - started).toBeLessThan(1_000);
 });
 
 test("a mutating stage timeout preserves a failed cleanup integrity error", async () => {
@@ -1164,6 +1188,27 @@ test("a failed stale-browser disconnect prevents the replacement connection", as
   )).rejects.toBe(disconnectFailure);
 
   expect(replacementAttempts).toBe(0);
+});
+
+test("a hung stale-browser disconnect fails closed before any replacement transport connects", async () => {
+  let replacementAttempts = 0;
+  await expect(connectAfterClosingBrowserConnection(
+    { close: () => new Promise<void>(() => {}) },
+    async () => { replacementAttempts++; return "replacement"; },
+    20,
+  )).rejects.toBeInstanceOf(ChatGptBrowserObservationTimeoutError);
+  expect(replacementAttempts).toBe(0);
+});
+
+test("intermittent viewport collapses cannot evade the total per-turn rebind budget", () => {
+  expect(MAX_CHATGPT_BROWSER_PAGE_REBINDS_PER_TURN).toBe(8);
+  for (let attempt = 1; attempt <= MAX_CHATGPT_BROWSER_PAGE_REBINDS_PER_TURN; attempt++) {
+    // A successful DOM read resets consecutive errors, but not lifetime usage.
+    expect(() => assertChatGptBrowserRebindBudget(1, attempt)).not.toThrow();
+  }
+  expect(() => assertChatGptBrowserRebindBudget(1, MAX_CHATGPT_BROWSER_PAGE_REBINDS_PER_TURN + 1))
+    .toThrow("recoveries per turn");
+  expect(() => assertChatGptBrowserRebindBudget(3, 3)).toThrow("2 same-page rebinds");
 });
 
 test("collapsed launcher viewport repairs the same leased tab after closing its stale CDP session", async () => {

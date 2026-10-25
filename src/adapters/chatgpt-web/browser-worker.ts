@@ -1348,7 +1348,19 @@ export function remainingStageBudgetMs(
 }
 
 export const CHATGPT_BROWSER_OBSERVATION_PROBE_TIMEOUT_MS = 5_000;
+export const CHATGPT_BROWSER_DISCONNECT_TIMEOUT_MS = 10_000;
+export const CHATGPT_STAGE_ABORT_SETTLEMENT_GRACE_MS = 10_000;
 export const MAX_CHATGPT_BROWSER_PAGE_REBINDS = 2;
+export const MAX_CHATGPT_BROWSER_PAGE_REBINDS_PER_TURN = 8;
+
+export function assertChatGptBrowserRebindBudget(consecutive: number, total: number): void {
+  if (consecutive > MAX_CHATGPT_BROWSER_PAGE_REBINDS) {
+    throw new Error(`ChatGPT browser DOM remained unresponsive after ${MAX_CHATGPT_BROWSER_PAGE_REBINDS} same-page rebinds`);
+  }
+  if (total > MAX_CHATGPT_BROWSER_PAGE_REBINDS_PER_TURN) {
+    throw new Error(`ChatGPT browser page exceeded its ${MAX_CHATGPT_BROWSER_PAGE_REBINDS_PER_TURN} recoveries per turn`);
+  }
+}
 
 export class ChatGptBrowserObservationTimeoutError extends Error {
   constructor(timeoutMs: number) {
@@ -1377,8 +1389,11 @@ export async function withChatGptBrowserObservationTimeout<T>(
 export async function connectAfterClosingBrowserConnection<T>(
   previousConnection: Pick<Browser, "close"> | undefined,
   connect: () => Promise<T>,
+  disconnectTimeoutMs = CHATGPT_BROWSER_DISCONNECT_TIMEOUT_MS,
 ): Promise<T> {
-  if (previousConnection) await previousConnection.close();
+  // A stalled transport can hang on close() too. Never open a second connection
+  // until the first one is confirmed closed; on timeout fail closed instead.
+  if (previousConnection) await withChatGptBrowserObservationTimeout(previousConnection.close(), disconnectTimeoutMs);
   return connect();
 }
 
@@ -2653,6 +2668,7 @@ export class ChatGptBrowserWorker {
     action: (abortSignal: AbortSignal) => Promise<T>,
     suspensionClock: Pick<ChatGptSuspensionClock, "suspendedMs"> = chatGptSuspensionClock,
     awaitAbortedActionSettlement = false,
+    abortSettlementGraceMs = CHATGPT_STAGE_ABORT_SETTLEMENT_GRACE_MS,
   ): Promise<T> {
     chatGptSuspensionClock.start();
     const startedAt = performance.now();
@@ -2691,10 +2707,15 @@ export class ChatGptBrowserWorker {
       let surfacedError = error;
       if (stageTimedOut && awaitAbortedActionSettlement && actionPromise) {
         try {
-          await actionPromise;
+          await withChatGptBrowserObservationTimeout(actionPromise, abortSettlementGraceMs);
         } catch (settlementError) {
           if (settlementError instanceof ChatGptPersistentBrowserStateError) {
             surfacedError = settlementError;
+          } else if (settlementError instanceof ChatGptBrowserObservationTimeoutError) {
+            surfacedError = new Error(
+              `ChatGPT browser stage ${stage} timed out and its in-flight mutation did not stop within ${abortSettlementGraceMs}ms; refusing an unsafe retry`,
+              { cause: error },
+            );
           }
         }
       }
@@ -5982,18 +6003,16 @@ export class ChatGptBrowserWorker {
       const domHealthTracker = new ChatGptTurnDomHealthTracker();
       const responseDomCache: ChatGptResponseDomCache = {};
       let consecutiveObservationRebinds = 0;
+      let totalObservationRebinds = 0;
       let internalObservationFaults = 0;
       let observedThisIteration = false;
       let completionFenceRevision: number | undefined;
       let lastViewportProbeAt = 0;
       const rebindLiveResponsePage = async (cause: Error): Promise<void> => {
         consecutiveObservationRebinds += 1;
-        if (consecutiveObservationRebinds > MAX_CHATGPT_BROWSER_PAGE_REBINDS) {
-          throw new Error(
-            `ChatGPT browser DOM remained unresponsive after ${MAX_CHATGPT_BROWSER_PAGE_REBINDS} same-page rebinds`,
-            { cause },
-          );
-        }
+        totalObservationRebinds += 1;
+        try { assertChatGptBrowserRebindBudget(consecutiveObservationRebinds, totalObservationRebinds); }
+        catch (error) { throw new Error(error instanceof Error ? error.message : "ChatGPT browser recovery budget exceeded", { cause }); }
         // Send was already accepted. A new browser turn would duplicate the prompt and possibly
         // side-effecting tools; only reconnect to the existing launcher-owned conversation.
         await rebindLauncherPage(consecutiveObservationRebinds, cause, turn.abortSignal);

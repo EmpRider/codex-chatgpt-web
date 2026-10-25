@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
 import {
   ChatGptBrowserWorker, assertChatGptWebMultipartInputWithinLimits,
-  isChatGptBrowserViewportUnavailableError, resolveChatGptWebMultipartStagingMode, type BrowserTurn,
+  chatGptSuspensionClock, isChatGptBrowserViewportUnavailableError,
+  remainingStageBudgetMs, resolveChatGptWebMultipartStagingMode, type BrowserTurn,
 } from "../../adapters/chatgpt-web/browser-worker";
 import { ChatGptExternalTurnProgress } from "../../adapters/chatgpt-web/turn-progress";
 import { TurnBroker, type BrokerToolRequest, type BrokerTurnEnvironment } from "../../adapters/chatgpt-web/turn-broker";
@@ -29,6 +30,11 @@ import { logNineRouter } from "./diagnostics";
 // a tool is returned to the coding agent, not while ChatGPT is still thinking.
 const SESSION_TTL_MS = CHATGPT_WEB_MCP_INVOCATION_TIMEOUT_MS - 10_000;
 const MAX_ACTIVE_SESSIONS = MAX_CHATGPT_BROWSER_TABS;
+// Each HTTP stage must eventually settle even if an out-of-process browser helper
+// never resolves its promise or fails to observe cancellation. A tool-result wait
+// happens between stages and has its own much shorter deadline.
+export const NINE_ROUTER_MAX_STAGE_WAIT_MS = 30 * 60_000;
+export const NINE_ROUTER_MAX_PENDING_TEXT_CHARS = 8_000_000;
 // Browser's rich-text composer has mutated large external-agent JSON near 112K
 // characters. Multipart transport is safer for long turns when opted in.
 const EXTERNAL_AGENT_MULTIPART_THRESHOLD_CHARS = 100_000;
@@ -52,6 +58,23 @@ export async function runNineRouterPreSendViewportRecovery(
       onRetry(attempt + 1);
     }
   }
+}
+
+/** A broken broker transport must not pin a cancelled HTTP continuation forever.
+ * The original operation still owns its late settlement, but its owner capability
+ * has been revoked, so we never retry an ambiguous tool-result handoff.
+ */
+async function waitForNineRouterOwner<T>(operation: Promise<T>, signal: AbortSignal): Promise<T> {
+  let detach = () => {};
+  const stopped = new Promise<never>((_resolve, reject) => {
+    const onAbort = () => reject(signal.reason instanceof Error
+      ? signal.reason : new NineRouterRequestError("9Router session was cancelled", 499));
+    signal.addEventListener("abort", onAbort, { once: true });
+    detach = () => signal.removeEventListener("abort", onAbort);
+    if (signal.aborted) onAbort();
+  });
+  try { return await Promise.race([operation, stopped]); }
+  finally { detach(); }
 }
 
 /** All checks run before opening a browser, avoiding a partially uploaded task. */
@@ -87,6 +110,8 @@ export interface NineRouterStage {
   text: string;
   calls: BrokerToolRequest[];
   finished: boolean;
+  /** Browser text already emitted to this stage's SSE observer; never replay it. */
+  streamedText?: string;
 }
 
 interface NineRouterSession {
@@ -100,7 +125,9 @@ interface NineRouterSession {
   parallelToolCalls: boolean;
   choiceFulfilled: boolean;
   outstanding: Map<string, BrokerToolRequest>;
-  pendingText: string[];
+  pendingText: string;
+  deliveredText: string;
+  textObserver?: (text: string) => void;
   settled?: { text: string; error?: Error };
   browser: Promise<string>;
   progress: ChatGptExternalTurnProgress;
@@ -118,12 +145,19 @@ export interface NineRouterBrowserRunner {
 export class NineRouterSessionManager {
   private readonly sessions = new Set<NineRouterSession>();
   private readonly pendingCalls = new Map<string, NineRouterSession>();
+  private pendingRegistrations = 0;
+  private closed = false;
   constructor(
     private readonly broker: TurnBroker,
     private readonly provider: CodexProviderConfig,
     private readonly browser: NineRouterBrowserRunner = ChatGptBrowserWorker.forProvider(provider),
     private readonly toolResultTtlMs = SESSION_TTL_MS,
-  ) {}
+    private readonly stageWaitMs = NINE_ROUTER_MAX_STAGE_WAIT_MS,
+  ) {
+    if (!Number.isFinite(stageWaitMs) || stageWaitMs <= 0) {
+      throw new Error("9Router stage wait must be a positive finite timeout");
+    }
+  }
 
   private wake(session: NineRouterSession): void {
     for (const wake of session.waiters) wake();
@@ -146,7 +180,10 @@ export class NineRouterSessionManager {
     this.wake(session);
   }
 
-  closeAll(): void { for (const session of [...this.sessions]) this.close(session); }
+  closeAll(): void {
+    this.closed = true;
+    for (const session of [...this.sessions]) this.close(session);
+  }
 
   activeCount(): number { return this.sessions.size; }
   hasPendingCall(callId: string): boolean { this.evictExpired(); return this.pendingCalls.has(callId); }
@@ -176,10 +213,13 @@ export class NineRouterSessionManager {
     }
   }
 
-  async start(request: NineRouterRequest, model: { backendModel: string; adapterEffort: string; modelFamily?: "5.6" | "6" }, observerSignal?: AbortSignal, requestId?: string): Promise<NineRouterStage> {
+  async start(request: NineRouterRequest, model: { backendModel: string; adapterEffort: string; modelFamily?: "5.6" | "6" }, observerSignal?: AbortSignal, requestId?: string, onTextDelta?: (delta: string) => void): Promise<NineRouterStage> {
+    if (this.closed) throw new NineRouterRequestError("9Router provider is shutting down", 503);
     if (observerSignal?.aborted) throw new NineRouterRequestError("Provider request was cancelled", 499);
     this.evictExpired();
-    if (this.sessions.size >= MAX_ACTIVE_SESSIONS) throw new NineRouterRequestError("Too many active 9Router tool sessions", 429);
+    if (this.sessions.size + this.pendingRegistrations >= MAX_ACTIVE_SESSIONS) {
+      throw new NineRouterRequestError("Too many active 9Router tool sessions", 429);
+    }
     const traceId = `router_${randomUUID().replaceAll("-", "")}`;
     const chosenTool = typeof request.toolChoice === "object" ? request.toolChoice.name : undefined;
     const tools = request.toolChoice === "none" ? []
@@ -189,13 +229,26 @@ export class NineRouterSessionManager {
     // A bounded capability is sufficient; no local paths, native thread IDs or Codex sandbox claims.
     // An absolute broker TTL would silently shorten MCP invocations after a long-running
     // ChatGPT generation. The session itself owns and revokes this capability on settlement.
-    const token = await this.broker.register(environment, undefined, traceId);
+    // Claim capacity before the first await. Otherwise simultaneous registrations
+    // all pass the size check and can oversubscribe the five browser slots.
+    this.pendingRegistrations += 1;
+    let token: string;
+    try { token = await this.broker.register(environment, undefined, traceId); }
+    finally { this.pendingRegistrations -= 1; }
+    if (this.closed || observerSignal?.aborted) {
+      try { await this.broker.revoke(token); }
+      catch (error) { console.warn(`[9router] late_owner_revoke_failed ${error instanceof Error ? error.name : "Error"}`); }
+      throw new NineRouterRequestError(this.closed
+        ? "9Router provider shut down during broker registration" : "Provider request was cancelled",
+      this.closed ? 503 : 499);
+    }
     const session: NineRouterSession = {
       traceId, requestId,
       token, model: request.model, originalHistory: structuredClone(request.history),
       tools: new Set(tools.map(tool => tool.name)), toolChoice: request.toolChoice,
       parallelToolCalls: request.parallelToolCalls, choiceFulfilled: false,
-      outstanding: new Map(), pendingText: [], progress: new ChatGptExternalTurnProgress(),
+      outstanding: new Map(), pendingText: "", deliveredText: "",
+      progress: new ChatGptExternalTurnProgress(),
       browser: undefined as unknown as Promise<string>, abort: new AbortController(),
       expiresAt: Number.POSITIVE_INFINITY, consuming: false, waiters: new Set(),
     };
@@ -290,7 +343,14 @@ export class NineRouterSessionManager {
       onSendActivated: () => { submissionStarted = true; },
       onSubmitted: () => { submissionStarted = true; },
       onMultipartStageAcknowledged: () => { submissionStarted = true; },
-      onTextDelta: text => { session.pendingText.push(text); this.wake(session); },
+      onTextDelta: text => {
+        if (session.deliveredText.length + session.pendingText.length + text.length > NINE_ROUTER_MAX_PENDING_TEXT_CHARS) {
+          throw new NineRouterRequestError("9Router browser response exceeds its safe in-memory output budget", 507);
+        }
+        session.pendingText += text;
+        session.textObserver?.(text);
+        this.wake(session);
+      },
       externalProgress: session.progress,
       completionFence: {
         begin: async () => this.broker.beginCompletionFence(token),
@@ -308,12 +368,13 @@ export class NineRouterSessionManager {
       session.settled = { text: "", error: error instanceof Error ? error : new Error(String(error)) };
       this.wake(session); return "";
     });
-    try { return await this.nextStage(session); }
+    try { return await this.nextStage(session, onTextDelta); }
     catch (error) { this.close(session, error instanceof Error ? error : undefined); throw error; }
     finally { observerSignal?.removeEventListener("abort", onAbort); }
   }
 
-  async continue(request: NineRouterRequest, observerSignal?: AbortSignal, requestId?: string): Promise<NineRouterStage> {
+  async continue(request: NineRouterRequest, observerSignal?: AbortSignal, requestId?: string, onTextDelta?: (delta: string) => void): Promise<NineRouterStage> {
+    if (this.closed) throw new NineRouterRequestError("9Router provider is shutting down", 503);
     if (observerSignal?.aborted) throw new NineRouterRequestError("Provider continuation was cancelled", 499);
     this.evictExpired();
     const matching = new Set<NineRouterSession>();
@@ -344,13 +405,21 @@ export class NineRouterSessionManager {
     if ([...session.outstanding.keys()].some(id => outputsById.get(id)?.output === "[No response received]")) {
       throw new NineRouterRequestError("9Router synthesized a missing tool result; refusing to report fabricated execution", 409);
     }
+    const onAbort = () => this.close(session, new Error("9Router continuation observer disconnected"));
+    observerSignal?.addEventListener("abort", onAbort, { once: true });
+    if (observerSignal?.aborted) {
+      onAbort();
+      observerSignal?.removeEventListener("abort", onAbort);
+      throw new NineRouterRequestError("Provider continuation was cancelled", 499);
+    }
     try {
       for (const call of session.outstanding.values()) {
         const output = outputsById.get(call.callId)!;
         // Tool execution stays at the originating coding agent; the MCP bridge gets only its returned data.
-        await this.broker.completeTool(session.token, call.callId, output.result
+        await waitForNineRouterOwner(Promise.resolve(this.broker.completeTool(session.token, call.callId, output.result
           ? { ...output.result, ...(output.isError ? { isError: true } : {}) }
-          : { content: [{ type: "text", text: output.output }], ...(output.isError ? { isError: true } : {}) });
+          : { content: [{ type: "text", text: output.output }], ...(output.isError ? { isError: true } : {}) })),
+        session.abort.signal);
         session.progress.recordToolResult();
         this.pendingCalls.delete(call.callId);
       }
@@ -358,6 +427,7 @@ export class NineRouterSessionManager {
       // A partial batch cannot be replayed safely. Some agent-side operations may have
       // already happened, so never silently start a second browser or replay those writes.
       this.close(session, error instanceof Error ? error : new Error("Tool result handoff failed"));
+      observerSignal?.removeEventListener("abort", onAbort);
       throw new NineRouterRequestError("Tool result handoff failed; restart with a new task, do not replay mutations", 409);
     }
     const deliveredCount = session.outstanding.size;
@@ -365,18 +435,52 @@ export class NineRouterSessionManager {
     logNineRouter("tool_results_returned", { requestId, traceId: session.traceId,
       token: session.token, callCount: deliveredCount });
     this.resumeBrowser(session);
-    const onAbort = () => this.close(session, new Error("9Router continuation observer disconnected"));
-    observerSignal?.addEventListener("abort", onAbort, { once: true });
-    try { return await this.nextStage(session); }
+    try { return await this.nextStage(session, onTextDelta); }
     catch (error) { this.close(session, error instanceof Error ? error : undefined); throw error; }
     finally { observerSignal?.removeEventListener("abort", onAbort); }
   }
 
-  private async nextStage(session: NineRouterSession): Promise<NineRouterStage> {
+  private async nextStage(session: NineRouterSession, onTextDelta?: (delta: string) => void): Promise<NineRouterStage> {
     if (session.consuming) throw new NineRouterRequestError("Agent session already has a pending HTTP observer", 409);
     session.consuming = true;
+    let streamedText = "";
     const waiting = new AbortController();
+    let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
+    let detachAbort = () => {};
     try {
+      if (onTextDelta) {
+        session.textObserver = text => { onTextDelta(text); streamedText += text; };
+        // Text may have arrived while the agent was executing its preceding tool.
+        if (session.pendingText) session.textObserver(session.pendingText);
+      }
+      const stopped = new Promise<never>((_resolve, reject) => {
+        const signal = session.abort.signal;
+        const onAbort = () => reject(signal.reason instanceof Error
+          ? signal.reason : new NineRouterRequestError("9Router browser session was cancelled", 499));
+        signal.addEventListener("abort", onAbort, { once: true });
+        detachAbort = () => signal.removeEventListener("abort", onAbort);
+        if (signal.aborted) onAbort();
+      });
+      // Match the native Codex stage clock: time while the user's laptop was
+      // suspended is not productive browser-processing time.
+      chatGptSuspensionClock.start();
+      const startedAt = performance.now();
+      const suspendedAtStart = chatGptSuspensionClock.suspendedMs();
+      const checkDeadline = () => {
+        const remainingMs = remainingStageBudgetMs(
+          this.stageWaitMs, performance.now() - startedAt,
+          chatGptSuspensionClock.suspendedMs() - suspendedAtStart,
+        );
+        if (remainingMs > 0) {
+          deadlineTimer = setTimeout(checkDeadline, remainingMs);
+          deadlineTimer.unref?.();
+          return;
+        }
+        this.close(session, new NineRouterRequestError(
+          "9Router browser stage exceeded its bounded execution deadline", 504));
+      };
+      deadlineTimer = setTimeout(checkDeadline, this.stageWaitMs);
+      deadlineTimer.unref?.();
       const nextCalls = this.broker.nextToolBatch(session.token, waiting.signal).then(async calls => {
         if (calls.length > 0) {
           const revision = session.progress.recordToolBatch(calls.length);
@@ -387,13 +491,14 @@ export class NineRouterSessionManager {
       });
       // The browser can settle without emitting any new text; wake when its final DOM result is known.
       const finished = session.browser.then(() => ({ type: "finished" as const }));
-      const outcome = await Promise.race([nextCalls, finished]);
+      const outcome = await Promise.race([nextCalls, finished, stopped]);
       waiting.abort();
       if (outcome.type === "calls" && outcome.calls.length > 0) {
         if (!session.parallelToolCalls && outcome.calls.length > 1) {
           throw new NineRouterRequestError("ChatGPT requested parallel tools but the caller disabled them", 422);
         }
         for (const call of outcome.calls) {
+          if (call.freeform) throw new NineRouterRequestError("9Router provider accepts only standard function calls", 422);
           if (!session.tools.has(call.wireName)) throw new NineRouterRequestError("Model requested a tool not advertised by the caller", 409);
           if (typeof session.toolChoice === "object" && call.wireName !== session.toolChoice.name) {
             throw new NineRouterRequestError("Model requested a different function than the caller's explicit tool_choice", 409);
@@ -406,19 +511,37 @@ export class NineRouterSessionManager {
         this.awaitAgentResults(session);
         logNineRouter("tool_batch_delivered", { requestId: session.requestId, traceId: session.traceId,
           token: session.token, callCount: outcome.calls.length });
-        const text = session.pendingText.join(""); session.pendingText = [];
-        return { text, calls: outcome.calls, finished: false };
+        const text = session.pendingText; session.pendingText = "";
+        session.deliveredText += text;
+        return { text, calls: outcome.calls, finished: false,
+          ...(onTextDelta ? { streamedText } : {}) };
       }
       if (session.settled?.error) throw session.settled.error;
       if (!session.choiceFulfilled && (session.toolChoice === "required" || typeof session.toolChoice === "object")) {
         throw new NineRouterRequestError("ChatGPT Web finished without the tool call required by the coding agent", 422);
       }
-      const text = session.pendingText.join("") || session.settled?.text || "";
+      // The final DOM projection is authoritative. During a long generation the
+      // last observed delta is often only a prefix; returning that prefix as the
+      // entire answer silently truncated responses in the old 9Router path.
+      const finalText = session.settled?.text;
+      const text = finalText === undefined ? session.pendingText
+        : finalText.startsWith(session.deliveredText)
+          ? finalText.slice(session.deliveredText.length) : finalText;
+      if (session.deliveredText.length + text.length > NINE_ROUTER_MAX_PENDING_TEXT_CHARS) {
+        throw new NineRouterRequestError("9Router browser response exceeds its safe in-memory output budget", 507);
+      }
+      if (session.pendingText && !text.startsWith(session.pendingText)) {
+        throw new NineRouterRequestError("ChatGPT browser final text contradicts its observed incremental output", 502);
+      }
       logNineRouter("browser_finished", { requestId: session.requestId, traceId: session.traceId,
         token: session.token });
       this.close(session);
-      return { text, calls: [], finished: true };
+      return { text, calls: [], finished: true,
+        ...(onTextDelta ? { streamedText } : {}) };
     } finally {
+      session.textObserver = undefined;
+      if (deadlineTimer) clearTimeout(deadlineTimer);
+      detachAbort();
       waiting.abort();
       session.consuming = false;
     }
