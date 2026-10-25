@@ -3510,6 +3510,7 @@ export class ChatGptBrowserWorker {
     baseline: ChatGptSubmissionBaseline,
     binding: ChatGptAssistantTurnBinding,
     signal?: AbortSignal,
+    multipartStage?: ChatGptWebMultipartStage,
   ): Promise<ChatGptAssistantTurnBinding> {
     const boundCount = await withChatGptBrowserObservationTimeout(
       withBrowserTurnAbort(binding.locator.count(), signal),
@@ -3534,31 +3535,57 @@ export class ChatGptBrowserWorker {
       // submitted text for browser-only messages. A
       // surviving old group or any competing new turn remains foreign.
       const user = newUsers[0]!;
+      // The renderer may retain an empty optimistic shell after moving a multipart
+      // exchange to its persisted group. Never tolerate a second substantive turn.
+      const oldShell = multipartStage && state.turnIdentities.includes(binding.identity)
+        ? page.locator(chatGptTurnContainerSelector(binding.identity)) : undefined;
+      const oldShellIsEmpty = oldShell && await withChatGptBrowserObservationTimeout(
+        withBrowserTurnAbort(oldShell.count(), signal),
+      ) === 1 && await withChatGptBrowserObservationTimeout(withBrowserTurnAbort(
+        oldShell.locator('[data-user-message-bubble], [data-conversation-role="assistant"], [data-chatgpt-agent-turn-start]').count(),
+        signal,
+      )) === 0 && await withChatGptBrowserObservationTimeout(withBrowserTurnAbort(
+        oldShell.evaluate(element => !(element.textContent ?? "").trim()), signal,
+      ));
       const replacement = identity && newUsers.length === 1
         && binding.identity.startsWith("group:assistant:")
         && user.startsWith("group:user:")
         && identity === `group:assistant:${user.slice("group:user:".length)}`
-        && !state.turnIdentities.includes(binding.identity)
+        && (!state.turnIdentities.includes(binding.identity) || oldShellIsEmpty)
         && state.turnIdentities.every(turn => acceptedTurns.has(turn) || turn === user || turn === identity);
       let matches = false;
       if (replacement) {
         const locator = page.locator(chatGptAssistantTurnSelector(identity!));
-        matches = baseline.acceptedUserIdentity
-          ? user === baseline.acceptedUserIdentity
-          : Boolean(baseline.submittedText) && await this.userMessageMatchesSubmission(locator, baseline.submittedText!, signal, baseline.turnToken);
-        // The accepted user identity, broker token or exact text establishes ownership.
-        // Activity can replace its temporary group while still generating; requiring
-        // a completed answer here mistakes that same unfinished turn for a foreign one.
+        matches = multipartStage
+          ? await this.multipartReboundMatchesStage(page, identity!, multipartStage, signal)
+          : baseline.acceptedUserIdentity
+            ? user === baseline.acceptedUserIdentity
+            : Boolean(baseline.submittedText) && await this.userMessageMatchesSubmission(locator, baseline.submittedText!, signal, baseline.turnToken);
+        // Ordinary turns use their accepted user identity, broker token or exact text.
+        // Multipart stages use their unique header and, once complete, their exact ACK.
       }
-      if (!matches) throw new Error("ChatGPT opened another user turn while the bound assistant response was detached");
-      // Expanding a truncated bubble can yield to another DOM update. Keep the
-      // no-competing-turn check valid after that action, not just before it.
+      if (!matches) {
+        if (multipartStage) throw new Error(
+          `ChatGPT multipart response could not be linked to the accepted submission (replacement=${Boolean(replacement)}, newUsers=${newUsers.length}, recordedUser=${Boolean(baseline.acceptedUserIdentity)})`,
+        );
+        throw new Error("ChatGPT opened another user turn while the bound assistant response was detached");
+      }
+      // Reading a user bubble can yield to another DOM update. Recheck ownership.
       const current = await this.submissionDomState(page, baseline.domCache, signal);
       if (!current.userIdentities.includes(user) || !current.responseIdentities.includes(identity!)
-        || current.turnIdentities.includes(binding.identity)
+        || (current.turnIdentities.includes(binding.identity) && !oldShellIsEmpty)
         || current.turnIdentities.some(turn => !acceptedTurns.has(turn) && turn !== user && turn !== identity)) {
         throw new Error("ChatGPT changed conversation turns while verifying the submitted message");
       }
+      if (multipartStage && oldShellIsEmpty && await withChatGptBrowserObservationTimeout(withBrowserTurnAbort(
+        oldShell!.locator('[data-user-message-bubble], [data-conversation-role="assistant"], [data-chatgpt-agent-turn-start]').count(), signal,
+      )) !== 0) {
+        throw new Error("ChatGPT reactivated its old multipart conversation while verifying the submission");
+      }
+      if (multipartStage && !await this.multipartReboundMatchesStage(page, identity!, multipartStage, signal)) {
+        throw new Error("ChatGPT multipart submission identity changed during response verification");
+      }
+      if (multipartStage) baseline.acceptedUserIdentity = user;
     }
     if (!identity || identity === binding.identity) return binding;
     return {
@@ -3566,6 +3593,35 @@ export class ChatGptBrowserWorker {
       locator: page.locator(chatGptAssistantTurnSelector(identity)),
       acceptedTurnIdentities: state.turnIdentities,
     };
+  }
+
+  private async multipartReboundMatchesStage(
+    page: Page,
+    identity: string,
+    stage: ChatGptWebMultipartStage,
+    signal?: AbortSignal,
+  ): Promise<boolean> {
+    const group = page.locator(chatGptTurnContainerSelector(identity));
+    const user = group.locator('[data-user-message-bubble] [data-search-result-target]:not([data-search-result-target] [data-search-result-target])');
+    if (await withChatGptBrowserObservationTimeout(withBrowserTurnAbort(user.count(), signal)) !== 1) return false;
+    // The first 4 lines identify this exact multipart operation even when ChatGPT
+    // collapses the 180 KB+ user bubble. Byte-for-byte attachment was proved before Send.
+    const markers = stage.text.split("\n", 4);
+    if (markers.length !== 4 || markers[0] !== "<codex_multipart_stage>") return false;
+    const matchingHeader = await withChatGptBrowserObservationTimeout(withBrowserTurnAbort(
+      user.evaluate((element, expected) => {
+        const text = (element.textContent ?? "").slice(0, 2_000);
+        const positions = expected.map(marker => text.indexOf(marker));
+        return positions.every((position, index) => position >= 0 && (index === 0 || position > positions[index - 1]!));
+      }, markers), signal,
+    ));
+    if (!matchingHeader) return false;
+    const response = await withChatGptBrowserObservationTimeout(withBrowserTurnAbort(
+      this.responseDomSnapshot(page.locator(chatGptAssistantTurnSelector(identity)), {}), signal,
+    ));
+    // A still-streaming response may not contain its ACK yet. Let the existing
+    // finite acknowledgement wait verify completion before moving to the next part.
+    return !response.completionActionVisible || response.visibleText.trim() === stage.acknowledgement;
   }
 
   private async withExpandedUserMessage<T>(
@@ -4234,6 +4290,7 @@ export class ChatGptBrowserWorker {
           submissionBaseline,
           responseTurn,
           abortSignal,
+          stage,
         );
         if (rebound.identity !== responseTurn.identity) {
           responseTurn = rebound;

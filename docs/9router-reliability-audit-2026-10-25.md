@@ -215,3 +215,42 @@ The broader `bun test --dots` additionally picked up the launcher's separate tes
 uninstalled Electron/builder dependencies, launcher localization parity, and the proxy-only
 network expectation. A direct runtime bundle attempt was also blocked by the missing launcher
 dependency `motion`. None of these results certify a packaged Windows release.
+
+## Incident follow-up: valid multipart acknowledgment rejected during DOM rekey
+
+The attached privacy-safe diagnostics for 2026-10-25 05:15 UTC show a new concrete failure:
+
+- Multipart part 1 of 2, 184,662 characters, was accepted at 05:15:26 UTC with
+  `generation_running` submission evidence. The user screenshot shows ChatGPT's correct
+  `CODEX_MULTIPART_ACK` for that part; the terminal page diagnostic saw one user and one
+  assistant turn.
+- At 05:15:36 UTC, `reconcileAssistantTurnBinding()` rejected the persisted response as a
+  foreign user turn. The initial temporary assistant DOM group had been detached. A
+  `generation_running` Send can leave `acceptedUserIdentity` unset; the generic rebind then
+  relies on comparing the entire rendered, potentially collapsed 184 KB user message with the
+  exact submitted input. That is too fragile for multipart stage tracking.
+- The guard is intentionally strict for ordinary turns: do not remove it or retry Send after
+  acceptance. The fix only supplies an alternate proof while awaiting a known multipart stage.
+
+**Fix:** A replacement assistant group must correspond to exactly one new user group and no
+unrecognized competing turn. Its displayed user bubble must contain this stage's opening
+marker, transaction ID, part index/total, and payload SHA-256 in order. A completed response
+must exactly match the stage's acknowledgment. A still-streaming response is re-bound for the
+existing finite completion/acknowledgment wait; no success is claimed until that wait accepts
+the final acknowledgment. An empty leftover optimistic group is tolerated only with positive
+replacement proof. The worker rechecks both the conversation structure and stage evidence
+after verification and records a privacy-safe reason if it cannot link the turn. No second
+Send occurs. Existing byte-for-byte composer verification remains the pre-Send payload check;
+the echoed SHA-256 is not an independent full-payload integrity check.
+
+**New synthetic tests:** `tests/multipart-rebind.test.ts` covers a truncated 180 KB+ user
+message with a completed ACK, an inert old shell, an in-progress ACK, wrong transaction ID,
+wrong digest, missing markers, wrong completed ACK, active old shell, competing user turns,
+and conversation or response mutation during verification. The full DOM/Playwright tests are
+still skipped here without `CHATGPT_DOM_TEST_BROWSER`, so this synthetic recovery test does
+not prove a real ChatGPT renderer upgrade or Windows production session will behave the same.
+
+**Verification:** The new tests passed; `tsc --noEmit` passed; the official `./tests` run
+reported **1,118 passed, 91 skipped, 4 failed** before the extra in-progress-ACK case was
+added. The same four failures were unrelated Electron/proxy-environment cases observed in
+the preceding audit. A packaged Windows/ChatGPT authenticated E2E retest remains required.
