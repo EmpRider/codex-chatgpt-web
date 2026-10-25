@@ -199,6 +199,36 @@ Luna and Think use rolling summaries with **Settings → Bigger Context** off. E
 Context keeps the temporary conversation and sends large histories in parts. If earlier details
 are lost in long Free-account chats, turn Bigger Context off and restart Codex.
 
+### 9Router / Claude Code: Bigger Context exceeds its six-part ceiling
+
+If 9Router reports that a 143,000-token context exceeds the 120,000-token GPT-6
+Plus Bigger Context ceiling, **do not increase the browser ceiling**. 9Router's
+Claude Code Auto Compact setting writes `CLAUDE_CODE_AUTO_COMPACT_WINDOW` into
+Claude Code's environment. A setting of 200,000 can therefore allow the agent's
+history to exceed this route's measured 120,000-token maximum.
+
+For **GPT-6 Sol Plus with Bigger Context enabled**, set **9Router → CLI Tools →
+Claude Code → Auto Compact** to **100,000 tokens**, apply the Claude Code setup,
+then fully restart Claude Code. Inspect `/autocompact` for the active override.
+The bridge now advertises each route's `context_length` and
+`auto_compact_token_limit` in its authenticated `/models` response. A request
+that is already too large receives HTTP 400 `Prompt is too long` with the
+`context_length_exceeded` code **before** the browser, idempotency journal or
+streaming response begins. Unmodified 9Router preserves the message text when
+translating the upstream error. Claude Code versions that recognize the
+too-long error can then invoke their own native compaction and resume without
+the provider pretending the request succeeded. Verify this with the actual
+Claude Code version: the fork cannot force the agent's `/compact` command.
+
+This workaround has important limits: Claude Code's configurable auto-compaction
+window has a **100,000-token minimum**, so it cannot protect the 90,000-token
+ordinary Plus or 41,000-token Instant browser routes. Use a compatible larger
+route or a client that can compact canonical history before submission. Also,
+one unusually large tool result may exceed the remaining space in a single turn.
+If Claude Code does not recover automatically, run `/compact` in that same
+session and retry. The provider cannot safely compact external agent history
+itself, and this response-format change alone is not an end-to-end guarantee.
+
 ## Personalization or connector controls are not found
 
 If the connector is missing in Temporary Chat but available in a regular ChatGPT chat, enable

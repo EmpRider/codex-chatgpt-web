@@ -1,8 +1,10 @@
 import { timingSafeEqual } from "node:crypto";
 import { bridgeToResponsesSSE, buildResponseJSON } from "../../bridge";
 import { AsyncEventQueue } from "../../event-queue";
-import { readJsonRequestBody } from "../../http-body";
-import { availableChatGptWebModelRoutes, requireChatGptWebModelRoute } from "../../chatgpt-web-models";
+import { HttpBodyReadError, readJsonRequestBody } from "../../http-body";
+import { availableChatGptWebModelRoutes, requireChatGptWebModelRoute, resolveChatGptWebContextLimits,
+  CHATGPT_LUNA_BROWSER_INPUT_TOKEN_BUDGET, CHATGPT_WEB_PLATFORM_RESERVE_TOKENS,
+  CHATGPT_WEB_LUNA_BACKEND_MODEL } from "../../chatgpt-web-models";
 import type { AppConfig } from "../../config";
 import { providerConfig } from "../../config";
 import { TurnBroker } from "../../adapters/chatgpt-web/turn-broker";
@@ -13,9 +15,40 @@ import { loadNineRouterKey, NINE_ROUTER_KEY_ENV } from "./key-manager";
 import { logNineRouter, newNineRouterRequestId } from "./diagnostics";
 import { estimateNineRouterUsage } from "./usage";
 import type { NineRouterRequest } from "./request";
+import { NineRouterAttemptJournal } from "./attempt-journal";
+import { NineRouterContextLimitError } from "./errors";
 
 export const NINE_ROUTER_BASE_PATH = "/integrations/9router/v1";
 export { NINE_ROUTER_KEY_ENV };
+export const NINE_ROUTER_STAGE_HEARTBEAT_MS = 10_000;
+export const NINE_ROUTER_BODY_UPLOAD_TIMEOUT_MS = 60_000;
+
+/** Native Codex emits adapter heartbeats during thinking, not just wire-level SSE pings.
+ * Renew the bridge's upstream watchdog while an owned browser stage is still pending.
+ * The stage promise controls the lifetime; this never fabricates response content.
+ */
+export function keepNineRouterStageAlive(
+  queue: AsyncEventQueue<AdapterEvent>,
+  stage: Promise<unknown>,
+  intervalMs = NINE_ROUTER_STAGE_HEARTBEAT_MS,
+): () => void {
+  // The queue is intentionally bounded. If its consumer disconnects or stops
+  // reading, don't leave an interval writing into a dead stream indefinitely.
+  let stopped = false;
+  const stop = () => {
+    if (stopped) return;
+    stopped = true;
+    clearInterval(timer);
+  };
+  const timer = setInterval(() => {
+    if (stopped) return;
+    try { queue.push({ type: "heartbeat" }); }
+    catch { stop(); } // Detached/non-consuming streams must not crash the daemon.
+  }, intervalMs);
+  timer.unref?.();
+  void stage.then(stop, stop);
+  return stop;
+}
 
 /** 9Router may retain a single provider prefix in the model alias (e.g. ccw/chatgpt-web/gpt-6-high). */
 export function canonicalNineRouterModel(model: string): string {
@@ -25,8 +58,16 @@ export function canonicalNineRouterModel(model: string): string {
   return match[1]!;
 }
 
-function errorResponse(status: number, message: string): Response {
-  return Response.json({ error: { message, type: status === 401 ? "authentication_error" : "invalid_request_error", code: status } }, { status });
+function errorResponse(status: number, message: string, error?: unknown): Response {
+  const context = error instanceof NineRouterContextLimitError ? {
+    context_window: error.contextWindow,
+    auto_compact_token_limit: error.autoCompactTokenLimit,
+    ...(error.estimatedInputTokens !== undefined ? { estimated_input_tokens: error.estimatedInputTokens } : {}),
+  } : {};
+  return Response.json({ error: { message,
+    type: status === 401 ? "authentication_error" : status >= 500 ? "server_error" : "invalid_request_error",
+    code: error instanceof NineRouterContextLimitError ? error.code : status,
+    ...context } }, { status });
 }
 
 function bearerAuthorized(req: Request, key: string): boolean {
@@ -38,7 +79,14 @@ function bearerAuthorized(req: Request, key: string): boolean {
 
 function stageEvents(stage: NineRouterStage, request: NineRouterRequest): AdapterEvent[] {
   const events: AdapterEvent[] = [];
-  if (stage.text) events.push({ type: "text_delta", text: stage.text });
+  // In a streaming request, the browser's incremental text has already reached
+  // the SSE bridge. Validate the prefix before appending any final remainder:
+  // a changed final projection must fail rather than silently duplicate text.
+  if (stage.streamedText !== undefined && !stage.text.startsWith(stage.streamedText)) {
+    throw new NineRouterRequestError("ChatGPT browser final text diverged from streamed output", 502);
+  }
+  const pendingText = stage.streamedText === undefined ? stage.text : stage.text.slice(stage.streamedText.length);
+  if (pendingText) events.push({ type: "text_delta", text: pendingText });
   for (const call of stage.calls) {
     if (call.freeform) throw new NineRouterRequestError("9Router provider accepts only standard function calls", 422);
     events.push({ type: "tool_call_start", id: call.callId, name: call.wireName });
@@ -53,13 +101,16 @@ function stageEvents(stage: NineRouterStage, request: NineRouterRequest): Adapte
 export class NineRouterProvider {
   private readonly manager: NineRouterSessionManager;
   private readonly key: string | undefined;
+  private readonly journal: NineRouterAttemptJournal;
 
-  constructor(readonly config: AppConfig, broker: TurnBroker, key = loadNineRouterKey(), manager?: NineRouterSessionManager) {
+  constructor(readonly config: AppConfig, broker: TurnBroker, key = loadNineRouterKey(), manager?: NineRouterSessionManager,
+    journal?: NineRouterAttemptJournal) {
     if (key !== undefined && key.length < 32) {
       throw new Error(`${NINE_ROUTER_KEY_ENV} must contain at least 32 characters`);
     }
     this.key = key || undefined;
     this.manager = manager ?? new NineRouterSessionManager(broker, providerConfig(config));
+    this.journal = journal ?? new NineRouterAttemptJournal();
   }
 
   get enabled(): boolean { return this.key !== undefined && this.config.mode === "full" && this.config.browserInteractionMode === "automatic"; }
@@ -83,9 +134,21 @@ export class NineRouterProvider {
     };
     if (req.method === "GET" && path === `${NINE_ROUTER_BASE_PATH}/models`) {
       if (draining) return errorResponse(503, "Service is draining");
-      return Response.json({ object: "list", data: availableChatGptWebModelRoutes(caps).map(route => ({
-        id: route.slug, object: "model", created: 0, owned_by: "chatgpt-web",
-      })) });
+      return Response.json({ object: "list", data: availableChatGptWebModelRoutes(caps).map(route => {
+        const limits = resolveChatGptWebContextLimits(
+          route.backendModel, route.adapterEffort, caps, route.interactionMode === "automatic" ? route.modelFamily : undefined,
+        );
+        // Native Codex's Luna checkpoints support long *cumulative* histories,
+        // but external 9Router requests are whole-history uploads. Do not advertise
+        // the native 1M rolling window as if a single browser message could hold it.
+        const singleMessageLuna = route.backendModel === CHATGPT_WEB_LUNA_BACKEND_MODEL && !caps.experimentalBiggerContext;
+        const window = singleMessageLuna ? CHATGPT_LUNA_BROWSER_INPUT_TOKEN_BUDGET : limits.contextWindow;
+        const compact = singleMessageLuna
+          ? CHATGPT_LUNA_BROWSER_INPUT_TOKEN_BUDGET - CHATGPT_WEB_PLATFORM_RESERVE_TOKENS
+          : limits.autoCompactTokenLimit;
+        return { id: route.slug, object: "model", created: 0, owned_by: "chatgpt-web",
+          context_length: window, context_window: window, auto_compact_token_limit: compact };
+      }) });
     }
     if (req.method !== "POST" || path !== `${NINE_ROUTER_BASE_PATH}/responses`) {
       return errorResponse(404, "Unknown 9Router provider route");
@@ -94,7 +157,8 @@ export class NineRouterProvider {
       return errorResponse(415, "Responses provider requires application/json");
     }
     try {
-      const request = parseNineRouterRequest(await readJsonRequestBody(req));
+      const rawBody = await readJsonRequestBody(req, { readTimeoutMs: NINE_ROUTER_BODY_UPLOAD_TIMEOUT_MS });
+      const request = parseNineRouterRequest(rawBody);
       const matchesPendingTool = request.outputs.some(output => this.manager.hasPendingCall(output.callId));
       if (matchesPendingTool && request.newUserAfterToolHistory) {
         throw new NineRouterRequestError("A new user turn cannot preempt an outstanding agent tool call", 409);
@@ -112,31 +176,68 @@ export class NineRouterProvider {
       try { route = requireChatGptWebModelRoute(canonicalModel, caps); }
       catch { throw new NineRouterRequestError("ChatGPT Web model is unknown or unavailable", 400); }
       if (route.interactionMode !== "automatic") throw new NineRouterRequestError("Manual browser mode is unsupported", 422);
+      // This is a deterministic, side-effect-free admission check. A rejected oversized
+      // context must not consume a durable idempotency key or open an SSE stream.
+      if (!matchesPendingTool) this.manager.preflight(request, route);
+      // Reserve the caller's identity on disk before any potentially accepted Send or tool
+      // result handoff. Even if the daemon crashes before Send, retry must fail closed.
+      const attempt = this.journal.claim(req.headers.get("idempotency-key"), rawBody);
+      if (matchesPendingTool) attempt?.advance("tool_handoff_possible");
       logNineRouter("request_started", { requestId, toolCount: request.tools.length });
+      const streamObserver = new AbortController();
+      const observerSignal = request.stream ? AbortSignal.any([req.signal, streamObserver.signal]) : req.signal;
+      const queue = request.stream ? new AsyncEventQueue<AdapterEvent>() : undefined;
+      const onTextDelta = queue ? (delta: string) => queue.push({ type: "text_delta", text: delta }) : undefined;
       const stagePromise = matchesPendingTool
-        ? this.manager.continue(request, req.signal, requestId)
-        : this.manager.start(request, route, req.signal, requestId);
-      if (!request.stream) return Response.json(buildResponseJSON(stageEvents(await stagePromise, request), request.model));
-      const queue = new AsyncEventQueue<AdapterEvent>();
+        ? this.manager.continue(request, observerSignal, requestId, onTextDelta)
+        : this.manager.start(request, route, observerSignal, requestId, onTextDelta,
+          state => attempt?.advance(state));
+      let stagePublished = false;
+      const prepareStage = (stage: NineRouterStage) => {
+        const events = stageEvents(stage, request);
+        attempt?.advance(stage.finished ? "response_prepared" : "tools_pending");
+        stagePublished = true;
+        return events;
+      };
+      if (!request.stream) return Response.json(buildResponseJSON(prepareStage(await stagePromise), request.model));
+      if (!queue) throw new Error("Streaming queue was not initialized");
+      const stopHeartbeat = keepNineRouterStageAlive(queue, stagePromise);
       void stagePromise.then(stage => {
-        for (const event of stageEvents(stage, request)) queue.push(event);
-      }, error => {
+        if (observerSignal.aborted) return;
+        for (const event of prepareStage(stage)) queue.push(event);
+      }).catch(error => {
+        if (observerSignal.aborted) return; // Expected disconnect; browser owner was already retired.
+        try { attempt?.advance("outcome_unknown"); }
+        catch { /* Intent was already committed; the retry remains blocked. */ }
         logNineRouter("request_failed", { requestId, status: error instanceof NineRouterRequestError ? error.status : 502,
           category: error instanceof NineRouterRequestError ? "agent" : "browser",
           durationMs: Date.now() - started });
-        queue.push({ type: "error", message: error instanceof NineRouterRequestError
-          ? error.message : "ChatGPT Web provider turn failed; see privacy-safe local logs" });
-      }).finally(() => queue.close());
-      return new Response(bridgeToResponsesSSE(queue, request.model), {
+        try {
+          queue.push({ type: "error", message: error instanceof NineRouterRequestError
+            ? error.message : "ChatGPT Web provider turn failed; see privacy-safe local logs" });
+        } catch { /* A detached or full output queue cannot make the provider crash. */ }
+      }).finally(() => { stopHeartbeat(); queue.close(); });
+      return new Response(bridgeToResponsesSSE(queue, request.model, undefined, undefined, undefined,
+        () => {
+          stopHeartbeat();
+          queue.close();
+          if (!stagePublished) {
+            try { attempt?.advance("outcome_unknown"); }
+            catch { /* Already committed intent still blocks unsafe duplicate execution. */ }
+          }
+          streamObserver.abort(new Error("9Router streaming observer disconnected"));
+        }), {
         headers: { "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-cache", "x-accel-buffering": "no" },
       });
     } catch (error) {
-      const status = error instanceof NineRouterRequestError ? error.status : error instanceof SyntaxError ? 400 : 502;
-      const message = error instanceof NineRouterRequestError ? error.message : "ChatGPT Web provider turn failed; see privacy-safe local logs";
-      logNineRouter(status === 400 || status === 413 || status === 415 || status === 422 ? "parse_rejected" : "request_failed",
-        { requestId, status, category: status === 400 || status === 413 || status === 415 || status === 422
+      const status = error instanceof NineRouterRequestError || error instanceof HttpBodyReadError
+        ? error.status : error instanceof SyntaxError ? 400 : 502;
+      const message = error instanceof NineRouterRequestError || error instanceof HttpBodyReadError
+        ? error.message : "ChatGPT Web provider turn failed; see privacy-safe local logs";
+      logNineRouter(status === 400 || status === 413 || status === 415 || status === 422 || status === 429 ? "parse_rejected" : "request_failed",
+        { requestId, status, category: status === 400 || status === 413 || status === 415 || status === 422 || status === 429
           ? "input" : status === 409 ? "agent" : "browser", durationMs: Date.now() - started });
-      return errorResponse(status, message);
+      return errorResponse(status, message, error);
     }
   }
 }

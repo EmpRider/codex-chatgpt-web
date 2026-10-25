@@ -51,7 +51,9 @@ test("synthetic read/edit/test cycle traverses real stdio MCP, broker and one 9R
         seen.push({ name, reply });
         turn.onTextDelta(`${name}: ${reply}\n`);
       }
-      return "Read/edit/test completed";
+      // Mirror the browser worker's authoritative final Markdown: its last
+      // projection contains every incremental delta, not an unrelated summary.
+      return seen.map(({ name, reply }) => `${name}: ${reply}\n`).join("");
     },
   });
   const key = "integration-test_" + "v".repeat(45);
