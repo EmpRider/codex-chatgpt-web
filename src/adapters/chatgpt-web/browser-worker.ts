@@ -1384,6 +1384,19 @@ export async function connectAfterClosingBrowserConnection<T>(
 
 export const CHATGPT_MIN_OPERATIONAL_VIEWPORT = Object.freeze({ width: 320, height: 240 });
 
+export class ChatGptBrowserViewportUnavailableError extends Error {
+  constructor(cause: unknown) {
+    super(`ChatGPT browser surface did not expose an operational viewport: ${cause instanceof Error ? cause.message : String(cause)}`);
+    this.name = "ChatGptBrowserViewportUnavailableError";
+  }
+}
+
+/** The launcher helper crosses a process boundary and transports ordinary Error messages. */
+export function isChatGptBrowserViewportUnavailableError(error: unknown): boolean {
+  return error instanceof ChatGptBrowserViewportUnavailableError
+    || (error instanceof Error && error.message.startsWith("ChatGPT browser surface did not expose an operational viewport:"));
+}
+
 async function waitForOperationalChatGptViewport(page: Page, signal?: AbortSignal): Promise<void> {
   try {
     await withBrowserTurnAbort(page.waitForFunction(
@@ -1393,10 +1406,40 @@ async function waitForOperationalChatGptViewport(page: Page, signal?: AbortSigna
     ), signal);
   } catch (error) {
     if (signal?.aborted) throw new DOMException("ChatGPT browser page acquisition aborted", "AbortError");
-    throw new Error(
-      `ChatGPT browser surface did not expose an operational viewport: ${error instanceof Error ? error.message : String(error)}`,
-    );
+    throw new ChatGptBrowserViewportUnavailableError(error);
   }
+}
+
+/**
+ * A CDP disconnect can clear Electron's device emulation while the tab is still leased.
+ * Restore the *same* launcher surface before any Send. Never reconnect alongside an
+ * unclosed Playwright connection, and never reuse a replacement that failed validation.
+ */
+export async function recoverOperationalLauncherViewport<T extends { browser: Pick<Browser, "close">; page: Page }>(
+  original: T,
+  validate: (page: Page) => Promise<void>,
+  refresh: () => Promise<void>,
+  reconnect: () => Promise<T>,
+  signal?: AbortSignal,
+): Promise<T> {
+  try {
+    await validate(original.page);
+    return original;
+  } catch (error) {
+    if (!isChatGptBrowserViewportUnavailableError(error) || signal?.aborted) throw error;
+  }
+  return connectAfterClosingBrowserConnection(original.browser, async () => {
+    if (signal?.aborted) throw new DOMException("ChatGPT browser viewport recovery aborted", "AbortError");
+    await refresh();
+    const replacement = await reconnect();
+    try {
+      await validate(replacement.page);
+      return replacement;
+    } catch (error) {
+      await replacement.browser.close().catch(() => {});
+      throw error;
+    }
+  });
 }
 
 export const CHATGPT_COMPOSER_DOCUMENT_END_KEY = process.platform === "darwin"
@@ -5448,8 +5491,32 @@ export class ChatGptBrowserWorker {
           throw new DOMException("ChatGPT browser page acquisition aborted", "AbortError");
         }
         turnConnection = connection.browser;
-        await waitForOperationalChatGptViewport(connection.page, abortSignal);
-        return connection.page;
+        const operational = await recoverOperationalLauncherViewport(
+          connection,
+          page => waitForOperationalChatGptViewport(page, abortSignal),
+          async () => {
+            turnConnection = undefined;
+            console.warn(`[chatgpt-web] browser turn ${turn.traceId} refreshing collapsed launcher viewport before Send`);
+            await notifyLauncherTurn(this.config.browserHostDescriptorPath!, {
+              phase: "heartbeat",
+              traceId: turn.traceId,
+              helperPid: process.pid,
+              refreshViewport: true,
+            });
+          },
+          async () => {
+            const replacement = await connectLauncherBrowserHost(
+              this.config.browserHostDescriptorPath!,
+              browserStageTimeouts.browserPage,
+              launcherSurfaceId,
+              abortSignal,
+            );
+            turnConnection = replacement.browser;
+            return replacement;
+          },
+          abortSignal,
+        );
+        return operational.page;
       });
       if (!maintenancePage && !launcherSurfaceId) managedPage = page;
       diagnosticPage = page;
@@ -5918,6 +5985,34 @@ export class ChatGptBrowserWorker {
       let internalObservationFaults = 0;
       let observedThisIteration = false;
       let completionFenceRevision: number | undefined;
+      let lastViewportProbeAt = 0;
+      const rebindLiveResponsePage = async (cause: Error): Promise<void> => {
+        consecutiveObservationRebinds += 1;
+        if (consecutiveObservationRebinds > MAX_CHATGPT_BROWSER_PAGE_REBINDS) {
+          throw new Error(
+            `ChatGPT browser DOM remained unresponsive after ${MAX_CHATGPT_BROWSER_PAGE_REBINDS} same-page rebinds`,
+            { cause },
+          );
+        }
+        // Send was already accepted. A new browser turn would duplicate the prompt and possibly
+        // side-effecting tools; only reconnect to the existing launcher-owned conversation.
+        await rebindLauncherPage(consecutiveObservationRebinds, cause, turn.abortSignal);
+        submissionBaseline = {
+          ...submissionBaseline,
+          userTurns: page.locator(CHATGPT_USER_TURN_SELECTOR),
+          responseTurns: page.locator(CHATGPT_ASSISTANT_TURN_SELECTOR),
+          domCache: {},
+        };
+        responseTurn = {
+          ...responseTurn,
+          locator: page.locator(chatGptAssistantTurnSelector(responseTurn.identity)),
+        };
+        responseDomCache.key = undefined;
+        responseDomCache.snapshot = undefined;
+        completionFenceRevision = undefined;
+        lastViewportProbeAt = Date.now();
+        await diagnostics.capture(page, "response-page-rebound");
+      };
       for (;;) {
         // The heartbeat is a consumer callback, so it stays outside the observation-fault region:
         // a defect in the caller must not be retried as though the page could not be read.
@@ -5937,6 +6032,21 @@ export class ChatGptBrowserWorker {
         }
         if (deadline !== undefined && Date.now() >= deadline) {
           throw new Error("ChatGPT web turn timed out");
+        }
+        // An Electron WebContentsView can collapse to 1x1 after another CDP transport closes.
+        // Detect this even when the response DOM remains readable (and never re-click Send).
+        if (launcherSurfaceId && Date.now() - lastViewportProbeAt >= 10_000) {
+          lastViewportProbeAt = Date.now();
+          const viewport = await withBrowserTurnAbort(withChatGptBrowserObservationTimeout(
+            page.evaluate(() => ({ width: innerWidth, height: innerHeight })),
+          ), turn.abortSignal);
+          if (viewport.width < CHATGPT_MIN_OPERATIONAL_VIEWPORT.width
+            || viewport.height < CHATGPT_MIN_OPERATIONAL_VIEWPORT.height) {
+            await rebindLiveResponsePage(new ChatGptBrowserViewportUnavailableError(
+              `response viewport collapsed to ${viewport.width}x${viewport.height}`,
+            ));
+            continue;
+          }
         }
         await throwIfChatGptSessionFailureAlert(page);
         await generation.checkFailure();
@@ -5966,7 +6076,9 @@ export class ChatGptBrowserWorker {
 
         await throwIfChatGptToolApprovalRequired(page.locator(chatGptTurnContainerSelector(responseTurn.identity)));
 
-        let snapshot = await this.responseDomSnapshot(responseTurn.locator, responseDomCache);
+        let snapshot = await withBrowserTurnAbort(withChatGptBrowserObservationTimeout(
+          this.responseDomSnapshot(responseTurn.locator, responseDomCache),
+        ), turn.abortSignal);
         if (!snapshot.responsePresent) {
           try {
             const rebound = await withChatGptBrowserObservationTimeout(
@@ -5981,31 +6093,13 @@ export class ChatGptBrowserWorker {
               responseTurn = rebound;
               responseDomCache.key = undefined;
               responseDomCache.snapshot = undefined;
-              snapshot = await this.responseDomSnapshot(responseTurn.locator, responseDomCache);
+              snapshot = await withBrowserTurnAbort(withChatGptBrowserObservationTimeout(
+                this.responseDomSnapshot(responseTurn.locator, responseDomCache),
+              ), turn.abortSignal);
             }
           } catch (error) {
             if (!(error instanceof ChatGptBrowserObservationTimeoutError) || !launcherSurfaceId) throw error;
-            consecutiveObservationRebinds += 1;
-            if (consecutiveObservationRebinds > MAX_CHATGPT_BROWSER_PAGE_REBINDS) {
-              throw new Error(
-                `ChatGPT browser DOM remained unresponsive after ${MAX_CHATGPT_BROWSER_PAGE_REBINDS} same-page rebinds`,
-                { cause: error },
-              );
-            }
-            await rebindLauncherPage(consecutiveObservationRebinds, error, turn.abortSignal);
-            submissionBaseline = {
-              ...submissionBaseline,
-              userTurns: page.locator(CHATGPT_USER_TURN_SELECTOR),
-              responseTurns: page.locator(CHATGPT_ASSISTANT_TURN_SELECTOR),
-              domCache: {},
-            };
-            responseTurn = {
-              ...responseTurn,
-              locator: page.locator(chatGptAssistantTurnSelector(responseTurn.identity)),
-            };
-            responseDomCache.key = undefined;
-            responseDomCache.snapshot = undefined;
-            await diagnostics.capture(page, "response-page-rebound");
+            await rebindLiveResponsePage(error);
             continue;
           }
         }
@@ -6154,6 +6248,10 @@ export class ChatGptBrowserWorker {
         }
         await new Promise(resolveSleep => setTimeout(resolveSleep, 250));
        } catch (error) {
+        if (error instanceof ChatGptBrowserObservationTimeoutError && launcherSurfaceId) {
+          await rebindLiveResponsePage(error);
+          continue;
+        }
         // Only a defect in this worker is retried here. Every deliberate signal — adapter errors,
         // aborts, closed tabs, DOM-health verdicts — still fails the turn immediately.
         // Retry only faults raised while reading the page. Once observation succeeded, a

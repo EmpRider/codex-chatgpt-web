@@ -16,6 +16,24 @@ import type { NineRouterRequest } from "./request";
 
 export const NINE_ROUTER_BASE_PATH = "/integrations/9router/v1";
 export { NINE_ROUTER_KEY_ENV };
+export const NINE_ROUTER_STAGE_HEARTBEAT_MS = 10_000;
+
+/** Native Codex emits adapter heartbeats during thinking, not just wire-level SSE pings.
+ * Renew the bridge's upstream watchdog while an owned browser stage is still pending.
+ * The stage promise controls the lifetime; this never fabricates response content.
+ */
+export function keepNineRouterStageAlive(
+  queue: AsyncEventQueue<AdapterEvent>,
+  stage: Promise<unknown>,
+  intervalMs = NINE_ROUTER_STAGE_HEARTBEAT_MS,
+): void {
+  const timer = setInterval(() => {
+    try { queue.push({ type: "heartbeat" }); }
+    catch { clearInterval(timer); } // Detached/non-consuming streams must not crash the daemon.
+  }, intervalMs);
+  timer.unref?.();
+  void stage.then(() => clearInterval(timer), () => clearInterval(timer));
+}
 
 /** 9Router may retain a single provider prefix in the model alias (e.g. ccw/chatgpt-web/gpt-6-high). */
 export function canonicalNineRouterModel(model: string): string {
@@ -113,21 +131,29 @@ export class NineRouterProvider {
       catch { throw new NineRouterRequestError("ChatGPT Web model is unknown or unavailable", 400); }
       if (route.interactionMode !== "automatic") throw new NineRouterRequestError("Manual browser mode is unsupported", 422);
       logNineRouter("request_started", { requestId, toolCount: request.tools.length });
+      const streamObserver = new AbortController();
+      const observerSignal = request.stream ? AbortSignal.any([req.signal, streamObserver.signal]) : req.signal;
       const stagePromise = matchesPendingTool
-        ? this.manager.continue(request, req.signal, requestId)
-        : this.manager.start(request, route, req.signal, requestId);
+        ? this.manager.continue(request, observerSignal, requestId)
+        : this.manager.start(request, route, observerSignal, requestId);
       if (!request.stream) return Response.json(buildResponseJSON(stageEvents(await stagePromise, request), request.model));
       const queue = new AsyncEventQueue<AdapterEvent>();
+      keepNineRouterStageAlive(queue, stagePromise);
       void stagePromise.then(stage => {
+        if (observerSignal.aborted) return;
         for (const event of stageEvents(stage, request)) queue.push(event);
-      }, error => {
+      }).catch(error => {
+        if (observerSignal.aborted) return; // Expected disconnect; browser owner was already retired.
         logNineRouter("request_failed", { requestId, status: error instanceof NineRouterRequestError ? error.status : 502,
           category: error instanceof NineRouterRequestError ? "agent" : "browser",
           durationMs: Date.now() - started });
-        queue.push({ type: "error", message: error instanceof NineRouterRequestError
-          ? error.message : "ChatGPT Web provider turn failed; see privacy-safe local logs" });
+        try {
+          queue.push({ type: "error", message: error instanceof NineRouterRequestError
+            ? error.message : "ChatGPT Web provider turn failed; see privacy-safe local logs" });
+        } catch { /* A detached or full output queue cannot make the provider crash. */ }
       }).finally(() => queue.close());
-      return new Response(bridgeToResponsesSSE(queue, request.model), {
+      return new Response(bridgeToResponsesSSE(queue, request.model, undefined, undefined, undefined,
+        () => streamObserver.abort(new Error("9Router streaming observer disconnected"))), {
         headers: { "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-cache", "x-accel-buffering": "no" },
       });
     } catch (error) {

@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import {
   ChatGptBrowserWorker, assertChatGptWebMultipartInputWithinLimits,
-  resolveChatGptWebMultipartStagingMode, type BrowserTurn,
+  isChatGptBrowserViewportUnavailableError, resolveChatGptWebMultipartStagingMode, type BrowserTurn,
 } from "../../adapters/chatgpt-web/browser-worker";
 import { ChatGptExternalTurnProgress } from "../../adapters/chatgpt-web/turn-progress";
 import { TurnBroker, type BrokerToolRequest, type BrokerTurnEnvironment } from "../../adapters/chatgpt-web/turn-broker";
@@ -33,6 +33,26 @@ const MAX_ACTIVE_SESSIONS = MAX_CHATGPT_BROWSER_TABS;
 // characters. Multipart transport is safer for long turns when opted in.
 const EXTERNAL_AGENT_MULTIPART_THRESHOLD_CHARS = 100_000;
 const EXTERNAL_AGENT_INLINE_MAX_CHARS = 180_000;
+// Retrying a new page is safe only when the previous page never activated Send.
+// A separate same-page recovery handles errors after ChatGPT accepted a submission.
+export const MAX_NINE_ROUTER_PRE_SEND_VIEWPORT_RETRIES = 1;
+
+export async function runNineRouterPreSendViewportRecovery(
+  run: () => Promise<string>,
+  isSubmissionStarted: () => boolean,
+  signal: AbortSignal,
+  onRetry: (attempt: number) => void = () => {},
+): Promise<string> {
+  for (let attempt = 0; ; attempt += 1) {
+    try { return await run(); }
+    catch (error) {
+      if (signal.aborted || isSubmissionStarted()
+        || !isChatGptBrowserViewportUnavailableError(error)
+        || attempt >= MAX_NINE_ROUTER_PRE_SEND_VIEWPORT_RETRIES) throw error;
+      onRetry(attempt + 1);
+    }
+  }
+}
 
 /** All checks run before opening a browser, avoiding a partially uploaded task. */
 function verifyNineRouterMultipart(
@@ -245,17 +265,31 @@ export class NineRouterSessionManager {
       }
       throw error;
     }
+    // Register the observer before invoking the browser runner. The HTTP stream can be
+    // cancelled while broker registration or prompt preparation is awaiting I/O;
+    // addEventListener does not replay an AbortSignal that already fired.
+    const onAbort = () => this.close(session, new Error("9Router HTTP observer disconnected before tool delivery"));
+    observerSignal?.addEventListener("abort", onAbort, { once: true });
+    if (observerSignal?.aborted) {
+      onAbort();
+      observerSignal?.removeEventListener("abort", onAbort);
+      throw new NineRouterRequestError("Provider request was cancelled", 499);
+    }
     logNineRouter("prompt_prepared", { requestId, traceId, token, instructionChars: request.instructions.length,
       historyChars: request.history.reduce((total, message) => total + message.text.length, 0),
       toolListChars: tools.reduce((total, tool) => total + tool.name.length, 0),
       promptChars: compiledChatGptWebMaxMessageChars(compiled),
       contextParts: compiled.multipart?.parts.length ?? 1 });
+    let submissionStarted = false;
     const turn: BrowserTurn = {
       traceId, modelId: model.backendModel, reasoning: model.adapterEffort, modelFamily: model.modelFamily,
       capabilities,
       nativeConnector: tools.length > 0,
       prepare: async () => ({ ...compiled, release: () => {} }),
       abortSignal: session.abort.signal,
+      onSendActivated: () => { submissionStarted = true; },
+      onSubmitted: () => { submissionStarted = true; },
+      onMultipartStageAcknowledged: () => { submissionStarted = true; },
       onTextDelta: text => { session.pendingText.push(text); this.wake(session); },
       externalProgress: session.progress,
       completionFence: {
@@ -263,14 +297,17 @@ export class NineRouterSessionManager {
         commit: async revision => this.broker.commitCompletionFence(token, revision),
       },
     };
-    session.browser = this.browser.run(turn).then(text => {
+    session.browser = runNineRouterPreSendViewportRecovery(
+      () => this.browser.run(turn),
+      () => submissionStarted || compiled.multipart !== undefined,
+      session.abort.signal,
+      attempt => logNineRouter("browser_viewport_retry", { requestId, traceId, token, callCount: attempt }),
+    ).then(text => {
       session.settled = { text }; this.wake(session); return text;
     }, error => {
       session.settled = { text: "", error: error instanceof Error ? error : new Error(String(error)) };
       this.wake(session); return "";
     });
-    const onAbort = () => this.close(session, new Error("9Router HTTP observer disconnected before tool delivery"));
-    observerSignal?.addEventListener("abort", onAbort, { once: true });
     try { return await this.nextStage(session); }
     catch (error) { this.close(session, error instanceof Error ? error : undefined); throw error; }
     finally { observerSignal?.removeEventListener("abort", onAbort); }

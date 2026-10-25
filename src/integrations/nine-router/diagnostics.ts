@@ -4,7 +4,7 @@ import { createHash, randomUUID } from "node:crypto";
 export type NineRouterDiagnosticStage =
   | "auth_rejected" | "parse_rejected" | "model_rejected" | "request_started"
   | "browser_started" | "tool_batch_delivered" | "tool_results_returned"
-  | "browser_finished" | "session_retired" | "request_failed" | "prompt_prepared";
+  | "browser_finished" | "browser_viewport_retry" | "session_retired" | "request_failed" | "prompt_prepared";
 
 interface SafeNineRouterFields {
   requestId?: string;

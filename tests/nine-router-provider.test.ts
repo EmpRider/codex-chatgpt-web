@@ -5,14 +5,18 @@ import { join } from "node:path";
 import { defaultConfig, providerConfig } from "../src/config";
 import { startServer } from "../src/server";
 import { TurnBroker, callTurnBroker } from "../src/adapters/chatgpt-web/turn-broker";
-import { NineRouterProvider, canonicalNineRouterModel } from "../src/integrations/nine-router/routes";
+import { NineRouterProvider, canonicalNineRouterModel, keepNineRouterStageAlive } from "../src/integrations/nine-router/routes";
+import { AsyncEventQueue } from "../src/event-queue";
+import type { AdapterEvent } from "../src/types";
 import { NineRouterRequestError, parseNineRouterRequest } from "../src/integrations/nine-router/request";
-import { NineRouterSessionManager } from "../src/integrations/nine-router/session-manager";
+import { NineRouterSessionManager, MAX_NINE_ROUTER_PRE_SEND_VIEWPORT_RETRIES,
+  runNineRouterPreSendViewportRecovery } from "../src/integrations/nine-router/session-manager";
 import { requireNativeToolOwner } from "../src/adapters/chatgpt-web/mcp-server";
 import { disableNineRouterKey, loadNineRouterKey, provisionNineRouterKey } from "../src/integrations/nine-router/key-manager";
 import { assertNineRouterToolArguments } from "../src/integrations/nine-router/tool-policy";
 import { estimateNineRouterUsage } from "../src/integrations/nine-router/usage";
 import { compiledChatGptWebMessages } from "../src/adapters/chatgpt-web/input-tokens";
+import { ChatGptBrowserViewportUnavailableError } from "../src/adapters/chatgpt-web/browser-worker";
 import { compileExternalAgentBiggerContextPrompt, formatChatGptWebMultipartCommit,
   formatChatGptWebMultipartStage, type ExternalAgentChatGptPromptInput } from "../src/adapters/chatgpt-web/prompt";
 
@@ -20,6 +24,149 @@ const advertised = {
   type: "function", name: "Read", description: "Read an agent-side file",
   parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"] },
 };
+
+test("9Router forwards owned-stage keepalives without inventing model output, then stops", async () => {
+  const queue = new AsyncEventQueue<AdapterEvent>();
+  let settle!: () => void;
+  const stage = new Promise<void>(resolve => { settle = resolve; });
+  keepNineRouterStageAlive(queue, stage, 5);
+  const iterator = queue[Symbol.asyncIterator]();
+  expect(await iterator.next()).toEqual({ value: { type: "heartbeat" }, done: false });
+  settle();
+  await stage;
+  await new Promise(resolve => setTimeout(resolve, 20));
+  queue.close();
+  expect(await iterator.next()).toEqual({ value: undefined, done: true });
+});
+
+test("9Router transparently retries only a pre-Send collapsed viewport, preserving the request", async () => {
+  const controller = new AbortController();
+  const attempts: number[] = [];
+  let started = false;
+  const result = await runNineRouterPreSendViewportRecovery(async () => {
+    attempts.push(attempts.length + 1);
+    if (attempts.length === 1) throw new Error(
+      "ChatGPT browser surface did not expose an operational viewport: page.waitForFunction: Timeout 10000ms exceeded.",
+    );
+    started = true;
+    return "done";
+  }, () => started, controller.signal);
+  expect(result).toBe("done");
+  expect(attempts).toHaveLength(MAX_NINE_ROUTER_PRE_SEND_VIEWPORT_RETRIES + 1);
+});
+
+test("9Router never resends after Send activation, on cancellation, or for non-viewport errors", async () => {
+  const controller = new AbortController();
+  let attempts = 0;
+  const failedViewport = async () => {
+    attempts += 1;
+    throw new ChatGptBrowserViewportUnavailableError("1x1 viewport");
+  };
+  await expect(runNineRouterPreSendViewportRecovery(failedViewport, () => true, controller.signal))
+    .rejects.toThrow("operational viewport");
+  expect(attempts).toBe(1);
+  attempts = 0;
+  controller.abort();
+  await expect(runNineRouterPreSendViewportRecovery(failedViewport, () => false, controller.signal))
+    .rejects.toThrow("operational viewport");
+  expect(attempts).toBe(1);
+  attempts = 0;
+  await expect(runNineRouterPreSendViewportRecovery(async () => {
+    attempts += 1;
+    throw new Error("ChatGPT already accepted the message");
+  }, () => false, new AbortController().signal)).rejects.toThrow("already accepted");
+  expect(attempts).toBe(1);
+});
+
+test("9Router session retains one broker owner across a pre-Send viewport recovery", async () => {
+  const config = defaultConfig("full");
+  const preparedTokens: string[] = [];
+  let browserAttempts = 0;
+  const manager = new NineRouterSessionManager(broker, providerConfig(config), {
+    async run(turn) {
+      browserAttempts += 1;
+      preparedTokens.push((await turn.prepare()).turnToken!);
+      if (browserAttempts === 1) throw new ChatGptBrowserViewportUnavailableError("1x1 browser viewport");
+      await turn.onSendActivated?.();
+      await turn.onSubmitted?.();
+      turn.onTextDelta("Recovered response");
+      return "Recovered response";
+    },
+  });
+  try {
+    const stage = await manager.start(parseNineRouterRequest({
+      model: "chatgpt-web/gpt-5.6-luna", input: "Continue safely",
+    }), { backendModel: "gpt-5.6-luna", adapterEffort: "low" });
+    expect(stage).toEqual({ text: "Recovered response", calls: [], finished: true });
+    expect(browserAttempts).toBe(2);
+    expect(new Set(preparedTokens).size).toBe(1);
+    expect(manager.activeCount()).toBe(0);
+  } finally { manager.closeAll(); }
+});
+
+test("9Router SSE disconnect cancels the exact browser owner, not just its output queue", async () => {
+  const config = defaultConfig("full");
+  config.solAvailable = false;
+  config.browserInteractionMode = "automatic";
+  let aborted = false;
+  let runnerStarted!: () => void;
+  const running = new Promise<void>(resolve => { runnerStarted = resolve; });
+  const manager = new NineRouterSessionManager(broker, providerConfig(config), {
+    run(turn) {
+      runnerStarted();
+      return new Promise((_resolve, reject) => {
+        turn.abortSignal!.addEventListener("abort", () => {
+          aborted = true;
+          reject(new Error("observer disconnected"));
+        }, { once: true });
+      });
+    },
+  });
+  const key = "test-only_" + "k".repeat(40);
+  const provider = new NineRouterProvider(config, broker, key, manager);
+  const path = "/integrations/9router/v1/responses";
+  try {
+    const response = await provider.handle(new Request(`http://127.0.0.1${path}`, {
+      method: "POST", headers: { authorization: `Bearer ${key}`, "content-type": "application/json" },
+      body: JSON.stringify({ model: "chatgpt-web/gpt-5.6-luna", input: "Do not repeat side effects", stream: true }),
+    }), path);
+    expect(response.status).toBe(200);
+    await running;
+    await response.body!.cancel();
+    for (let i = 0; i < 40 && !aborted; i++) await new Promise(resolve => setTimeout(resolve, 5));
+    expect(aborted).toBe(true);
+    expect(manager.activeCount()).toBe(0);
+  } finally { provider.close(); }
+});
+
+test("9Router cancelled during broker registration never starts a detached browser", async () => {
+  const config = defaultConfig("full");
+  let finishRegistration!: () => void;
+  let browserRuns = 0;
+  let revocations = 0;
+  const delayedBroker = {
+    register: () => new Promise<string>(resolve => {
+      finishRegistration = () => resolve("cancelled-registration-token");
+    }),
+    revoke: async () => { revocations++; },
+  } as unknown as TurnBroker;
+  const manager = new NineRouterSessionManager(delayedBroker, providerConfig(config), {
+    async run() { browserRuns++; return "unexpected"; },
+  });
+  const controller = new AbortController();
+  try {
+    const start = manager.start(parseNineRouterRequest({
+      model: "chatgpt-web/gpt-5.6-luna", input: "Do not start after cancellation",
+    }), { backendModel: "gpt-5.6-luna", adapterEffort: "low" }, controller.signal);
+    controller.abort();
+    finishRegistration();
+    await expect(start).rejects.toThrow("cancelled");
+    expect(browserRuns).toBe(0);
+    expect(manager.activeCount()).toBe(0);
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(revocations).toBe(1);
+  } finally { manager.closeAll(); }
+});
 
 test("9Router normalizer retains role order, schemas and tool results without constructing native Codex metadata", () => {
   const parsed = parseNineRouterRequest({
