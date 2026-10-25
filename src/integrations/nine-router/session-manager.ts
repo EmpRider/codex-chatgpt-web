@@ -213,7 +213,8 @@ export class NineRouterSessionManager {
     }
   }
 
-  async start(request: NineRouterRequest, model: { backendModel: string; adapterEffort: string; modelFamily?: "5.6" | "6" }, observerSignal?: AbortSignal, requestId?: string, onTextDelta?: (delta: string) => void): Promise<NineRouterStage> {
+  async start(request: NineRouterRequest, model: { backendModel: string; adapterEffort: string; modelFamily?: "5.6" | "6" }, observerSignal?: AbortSignal, requestId?: string, onTextDelta?: (delta: string) => void,
+    onSendState?: (state: "send_activated" | "browser_accepted") => void): Promise<NineRouterStage> {
     if (this.closed) throw new NineRouterRequestError("9Router provider is shutting down", 503);
     if (observerSignal?.aborted) throw new NineRouterRequestError("Provider request was cancelled", 499);
     this.evictExpired();
@@ -340,9 +341,9 @@ export class NineRouterSessionManager {
       nativeConnector: tools.length > 0,
       prepare: async () => ({ ...compiled, release: () => {} }),
       abortSignal: session.abort.signal,
-      onSendActivated: () => { submissionStarted = true; },
-      onSubmitted: () => { submissionStarted = true; },
-      onMultipartStageAcknowledged: () => { submissionStarted = true; },
+      onSendActivated: () => { submissionStarted = true; onSendState?.("send_activated"); },
+      onSubmitted: () => { submissionStarted = true; onSendState?.("browser_accepted"); },
+      onMultipartStageAcknowledged: () => { submissionStarted = true; onSendState?.("send_activated"); },
       onTextDelta: text => {
         if (session.deliveredText.length + session.pendingText.length + text.length > NINE_ROUTER_MAX_PENDING_TEXT_CHARS) {
           throw new NineRouterRequestError("9Router browser response exceeds its safe in-memory output budget", 507);

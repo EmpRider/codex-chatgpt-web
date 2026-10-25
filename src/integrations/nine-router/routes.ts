@@ -13,6 +13,7 @@ import { loadNineRouterKey, NINE_ROUTER_KEY_ENV } from "./key-manager";
 import { logNineRouter, newNineRouterRequestId } from "./diagnostics";
 import { estimateNineRouterUsage } from "./usage";
 import type { NineRouterRequest } from "./request";
+import { NineRouterAttemptJournal } from "./attempt-journal";
 
 export const NINE_ROUTER_BASE_PATH = "/integrations/9router/v1";
 export { NINE_ROUTER_KEY_ENV };
@@ -91,13 +92,16 @@ function stageEvents(stage: NineRouterStage, request: NineRouterRequest): Adapte
 export class NineRouterProvider {
   private readonly manager: NineRouterSessionManager;
   private readonly key: string | undefined;
+  private readonly journal: NineRouterAttemptJournal;
 
-  constructor(readonly config: AppConfig, broker: TurnBroker, key = loadNineRouterKey(), manager?: NineRouterSessionManager) {
+  constructor(readonly config: AppConfig, broker: TurnBroker, key = loadNineRouterKey(), manager?: NineRouterSessionManager,
+    journal?: NineRouterAttemptJournal) {
     if (key !== undefined && key.length < 32) {
       throw new Error(`${NINE_ROUTER_KEY_ENV} must contain at least 32 characters`);
     }
     this.key = key || undefined;
     this.manager = manager ?? new NineRouterSessionManager(broker, providerConfig(config));
+    this.journal = journal ?? new NineRouterAttemptJournal();
   }
 
   get enabled(): boolean { return this.key !== undefined && this.config.mode === "full" && this.config.browserInteractionMode === "automatic"; }
@@ -132,8 +136,8 @@ export class NineRouterProvider {
       return errorResponse(415, "Responses provider requires application/json");
     }
     try {
-      const request = parseNineRouterRequest(await readJsonRequestBody(req,
-        { readTimeoutMs: NINE_ROUTER_BODY_UPLOAD_TIMEOUT_MS }));
+      const rawBody = await readJsonRequestBody(req, { readTimeoutMs: NINE_ROUTER_BODY_UPLOAD_TIMEOUT_MS });
+      const request = parseNineRouterRequest(rawBody);
       const matchesPendingTool = request.outputs.some(output => this.manager.hasPendingCall(output.callId));
       if (matchesPendingTool && request.newUserAfterToolHistory) {
         throw new NineRouterRequestError("A new user turn cannot preempt an outstanding agent tool call", 409);
@@ -151,6 +155,10 @@ export class NineRouterProvider {
       try { route = requireChatGptWebModelRoute(canonicalModel, caps); }
       catch { throw new NineRouterRequestError("ChatGPT Web model is unknown or unavailable", 400); }
       if (route.interactionMode !== "automatic") throw new NineRouterRequestError("Manual browser mode is unsupported", 422);
+      // Reserve the caller's identity on disk before any potentially accepted Send or tool
+      // result handoff. Even if the daemon crashes before Send, retry must fail closed.
+      const attempt = this.journal.claim(req.headers.get("idempotency-key"), rawBody);
+      if (matchesPendingTool) attempt?.advance("tool_handoff_possible");
       logNineRouter("request_started", { requestId, toolCount: request.tools.length });
       const streamObserver = new AbortController();
       const observerSignal = request.stream ? AbortSignal.any([req.signal, streamObserver.signal]) : req.signal;
@@ -158,15 +166,25 @@ export class NineRouterProvider {
       const onTextDelta = queue ? (delta: string) => queue.push({ type: "text_delta", text: delta }) : undefined;
       const stagePromise = matchesPendingTool
         ? this.manager.continue(request, observerSignal, requestId, onTextDelta)
-        : this.manager.start(request, route, observerSignal, requestId, onTextDelta);
-      if (!request.stream) return Response.json(buildResponseJSON(stageEvents(await stagePromise, request), request.model));
+        : this.manager.start(request, route, observerSignal, requestId, onTextDelta,
+          state => attempt?.advance(state));
+      let stagePublished = false;
+      const prepareStage = (stage: NineRouterStage) => {
+        const events = stageEvents(stage, request);
+        attempt?.advance(stage.finished ? "response_prepared" : "tools_pending");
+        stagePublished = true;
+        return events;
+      };
+      if (!request.stream) return Response.json(buildResponseJSON(prepareStage(await stagePromise), request.model));
       if (!queue) throw new Error("Streaming queue was not initialized");
       const stopHeartbeat = keepNineRouterStageAlive(queue, stagePromise);
       void stagePromise.then(stage => {
         if (observerSignal.aborted) return;
-        for (const event of stageEvents(stage, request)) queue.push(event);
+        for (const event of prepareStage(stage)) queue.push(event);
       }).catch(error => {
         if (observerSignal.aborted) return; // Expected disconnect; browser owner was already retired.
+        try { attempt?.advance("outcome_unknown"); }
+        catch { /* Intent was already committed; the retry remains blocked. */ }
         logNineRouter("request_failed", { requestId, status: error instanceof NineRouterRequestError ? error.status : 502,
           category: error instanceof NineRouterRequestError ? "agent" : "browser",
           durationMs: Date.now() - started });
@@ -179,6 +197,10 @@ export class NineRouterProvider {
         () => {
           stopHeartbeat();
           queue.close();
+          if (!stagePublished) {
+            try { attempt?.advance("outcome_unknown"); }
+            catch { /* Already committed intent still blocks unsafe duplicate execution. */ }
+          }
           streamObserver.abort(new Error("9Router streaming observer disconnected"));
         }), {
         headers: { "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-cache", "x-accel-buffering": "no" },
@@ -188,8 +210,8 @@ export class NineRouterProvider {
         ? error.status : error instanceof SyntaxError ? 400 : 502;
       const message = error instanceof NineRouterRequestError || error instanceof HttpBodyReadError
         ? error.message : "ChatGPT Web provider turn failed; see privacy-safe local logs";
-      logNineRouter(status === 400 || status === 413 || status === 415 || status === 422 ? "parse_rejected" : "request_failed",
-        { requestId, status, category: status === 400 || status === 413 || status === 415 || status === 422
+      logNineRouter(status === 400 || status === 413 || status === 415 || status === 422 || status === 429 ? "parse_rejected" : "request_failed",
+        { requestId, status, category: status === 400 || status === 413 || status === 415 || status === 422 || status === 429
           ? "input" : status === 409 ? "agent" : "browser", durationMs: Date.now() - started });
       return errorResponse(status, message);
     }

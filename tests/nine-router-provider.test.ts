@@ -16,6 +16,7 @@ import { requireNativeToolOwner } from "../src/adapters/chatgpt-web/mcp-server";
 import { disableNineRouterKey, loadNineRouterKey, provisionNineRouterKey } from "../src/integrations/nine-router/key-manager";
 import { assertNineRouterToolArguments } from "../src/integrations/nine-router/tool-policy";
 import { estimateNineRouterUsage } from "../src/integrations/nine-router/usage";
+import { NineRouterAttemptJournal } from "../src/integrations/nine-router/attempt-journal";
 import { compiledChatGptWebMessages } from "../src/adapters/chatgpt-web/input-tokens";
 import { ChatGptBrowserViewportUnavailableError } from "../src/adapters/chatgpt-web/browser-worker";
 import { compileExternalAgentBiggerContextPrompt, formatChatGptWebMultipartCommit,
@@ -383,6 +384,49 @@ test("9Router SSE disconnect cancels the exact browser owner, not just its outpu
     expect(aborted).toBe(true);
     expect(manager.activeCount()).toBe(0);
   } finally { provider.close(); }
+});
+
+test("idempotency journal blocks a second browser Send after an accepted stream is disconnected and the provider restarts", async () => {
+  const config = defaultConfig("full");
+  config.solAvailable = false;
+  const key = "test-only_" + "i".repeat(40);
+  const journalDir = mkdtempSync(join(tmpdir(), "r9-replay-"));
+  const path = "/integrations/9router/v1/responses";
+  const payload = { model: "chatgpt-web/gpt-5.6-luna", input: "Edit file once", stream: true };
+  const makeRequest = (value: unknown = payload) => new Request(`http://127.0.0.1${path}`, {
+    method: "POST", headers: { authorization: `Bearer ${key}`, "content-type": "application/json",
+      "idempotency-key": "agent-turn-123456" }, body: JSON.stringify(value),
+  });
+  let sendCount = 0;
+  const makeManager = () => new NineRouterSessionManager(broker, providerConfig(config), {
+    async run(turn) {
+      sendCount++;
+      turn.onSendActivated?.();
+      turn.onSubmitted?.();
+      return new Promise((_resolve, reject) => turn.abortSignal!.addEventListener("abort",
+        () => reject(new Error("client disconnected")), { once: true }));
+    },
+  });
+  const journal = new NineRouterAttemptJournal(journalDir);
+  const manager = makeManager();
+  const provider = new NineRouterProvider(config, broker, key, manager, journal);
+  try {
+    const response = await provider.handle(makeRequest(), path);
+    expect(response.status).toBe(200);
+    for (let index = 0; index < 30 && sendCount !== 1; index++) await new Promise(resolve => setTimeout(resolve, 5));
+    expect(sendCount).toBe(1);
+    await response.body!.cancel();
+    provider.close();
+    const afterRestart = new NineRouterProvider(config, broker, key, makeManager(),
+      new NineRouterAttemptJournal(journalDir));
+    try {
+      const duplicate = await afterRestart.handle(makeRequest(), path);
+      expect(duplicate.status).toBe(409);
+      expect(await duplicate.text()).toContain("already attempted");
+      expect((await afterRestart.handle(makeRequest({ ...payload, input: "Change another file" }), path)).status).toBe(409);
+      expect(sendCount).toBe(1);
+    } finally { afterRestart.close(); }
+  } finally { provider.close(); rmSync(journalDir, { recursive: true, force: true }); }
 });
 
 test("9Router cancelled during broker registration never starts a detached browser", async () => {

@@ -157,3 +157,61 @@ The implementation is materially safer and its tested paths are bounded. **It is
 correct to call an unrecoverable network/process fault invisible to the coding agent.**
 The safe outcome is an actionable failure, not a fabricated `response.completed` or
 an unguarded second tool execution.
+
+## Follow-up hardening: durable retry barrier and bounded zstd decoding
+
+The following additional work was performed on the same isolated 9Router branch, without
+modifying the original native Codex request or identity paths:
+
+1. **Optional explicit idempotency contract.** An authenticated `/integrations/9router/v1/responses`
+   caller may send `Idempotency-Key: <unique-per-HTTP-attempt-operation>`. The provider creates
+   an exclusive, synchronized, per-installation attempt record **before** a browser Send or
+   tool-result handoff can begin. Reusing a key after a live request, disconnection, key rotation,
+   or daemon restart returns HTTP 409. Reuse with a different JSON payload also returns 409.
+   A missing key retains compatibility with existing 9Router clients, but does **not** give
+   them durable duplicate suppression. The current 9Router binary has not been verified to
+   forward this header; it must not be assumed to do so.
+2. **Privacy-safe, fail-closed journal.** Attempt records store only a SHA-256 key digest,
+   SHA-256 request fingerprint, timestamps and one of `send_possible`, `send_activated`,
+   `browser_accepted`, `tool_handoff_possible`, `tools_pending`, `response_prepared`, or
+   `outcome_unknown`. No prompt, cookie, API key, tool argument or tool output is written.
+   The journal uses exclusive file creation and synchronized atomic state updates. A corrupt
+   or half-written record, unavailable storage, and conflicting concurrent claims reject work;
+   they never authorize replay. The installation-scoped digest survives API-key rotation.
+   Location: `<CODEX_CHATGPT_WEB_HOME or default config directory>/integrations/nine-router-attempts`.
+   The fixed 10,000-record cap intentionally fails with 507 instead of deleting still-relevant
+   at-most-once evidence. This cap requires operator retention planning for high-volume use.
+3. **Streaming zstd limit.** The 9Router-only body path now uses `node:zlib`'s streaming
+   `createZstdDecompress()` and rejects expansion past 128 MiB while streaming, instead of
+   creating an unrestricted decompressed allocation first. Native Codex's existing decoder
+   is unchanged. Compressed and uncompressed inputs share the existing 64 MiB encoded limit
+   and upload deadline. Invalid compressed data is a client error. At most two 9Router request
+   bodies may decode/parse concurrently; excess uploads get HTTP 429 before browser work.
+
+**New fault tests:** a 129 MiB expansion bomb, malformed compressed input, simultaneous
+uploads beyond the admission limit, deadline cleanup and later readmission, concurrent
+journal claims, storage failure, corrupt records, contradictory payloads, and a disconnected
+accepted browser Send followed by a repeated request against a fresh provider instance.
+The original Send counter stayed at one and the duplicate received HTTP 409.
+
+**Still blocked by the external protocol or test environment:** Replay with an acknowledgment
+and agent-side tool execution deduplication; automatic continuation after the accepted browser
+conversation is destroyed; ChatGPT's synchronous 90-second MCP invocation and the 80-second
+pending-result window; preservation of metadata and idempotency headers by unmodified 9Router;
+multi-hour authenticated Windows/Electron/9Router/Claude/Codex/OpenCode tests. The local
+journal does not provide true exactly-once delivery and does not persist an executable browser
+session or outstanding MCP tool calls. Older clients without `Idempotency-Key` still lack
+durable duplicate suppression. Two bounded request bodies and up to five retained browser
+turns also consume memory beyond their individual payload caps; no measured global process
+memory ceiling is asserted.
+
+**Follow-up verification (same Linux/Bun 1.4.0 environment):** `bun test ./tests --dots`
+reported **1,115 passed, 91 skipped, 4 failed** across 1,210 tests/86 files. The four
+unchanged environment-dependent failures are the proxy-only `fetch` expectation and three
+Electron-backed Zero Risk tests. The 9Router provider suite passed **60/60**, and the
+compressed-body/journal suite passed **11/11**. `tsc --noEmit` and `git diff --check` passed.
+The broader `bun test --dots` additionally picked up the launcher's separate tests:
+**1,377 passed, 92 skipped, 13 failed and 4 suite-loading errors**; those failures concerned
+uninstalled Electron/builder dependencies, launcher localization parity, and the proxy-only
+network expectation. A direct runtime bundle attempt was also blocked by the missing launcher
+dependency `motion`. None of these results certify a packaged Windows release.
