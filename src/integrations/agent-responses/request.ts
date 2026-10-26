@@ -14,6 +14,8 @@ export interface AgentResponsesRequest {
   tools: CodexTool[];
   toolChoice: "auto" | "none" | "required" | { name: string };
   parallelToolCalls: boolean;
+  /** Best-effort output budget: ChatGPT Web does not expose an exact token limiter. */
+  maxOutputTokens?: number;
   outputs: AgentResponsesToolOutput[];
   /** A new user turn follows earlier, already-completed tool history. */
   newUserAfterToolHistory: boolean;
@@ -25,7 +27,7 @@ const object = (value: unknown): Record<string, unknown> | undefined =>
 
 const SUPPORTED_REQUEST_FIELDS = new Set([
   "model", "input", "instructions", "tools", "tool_choice", "parallel_tool_calls", "stream",
-  "background", "store", "truncation", "previous_response_id", "conversation",
+  "background", "store", "truncation", "previous_response_id", "conversation", "max_output_tokens",
 ]);
 
 function extractText(value: unknown, images?: ChatGptWebPromptImage[], refPrefix = "img"): string {
@@ -119,8 +121,10 @@ function extractMcpOutput(value: Record<string, unknown>): { text: string; resul
 export function parseAgentResponsesRequest(value: unknown): AgentResponsesRequest {
   const body = object(value);
   if (!body) throw new AgentResponsesRequestError("Responses payload must be a JSON object");
-  if (Object.keys(body).some(field => !SUPPORTED_REQUEST_FIELDS.has(field))) {
-    throw new AgentResponsesRequestError("Unsupported Responses request field", 400);
+  const unsupported = Object.keys(body).find(field => !SUPPORTED_REQUEST_FIELDS.has(field));
+  if (unsupported !== undefined) {
+    // Only reflect a bounded field name, never its potentially sensitive value.
+    throw new AgentResponsesRequestError(`Unsupported Responses request field: ${JSON.stringify(unsupported.slice(0, 80))}`, 400);
   }
   // This adapter carries in-memory browser owners between explicit function_call_output
   // requests; it does not keep OpenAI-side response_id or stored conversation state.
@@ -143,6 +147,10 @@ export function parseAgentResponsesRequest(value: unknown): AgentResponsesReques
   }
   if (body.parallel_tool_calls !== undefined && typeof body.parallel_tool_calls !== "boolean") {
     throw new AgentResponsesRequestError("parallel_tool_calls must be a boolean", 422);
+  }
+  if (body.max_output_tokens !== undefined
+    && (!Number.isSafeInteger(body.max_output_tokens) || (body.max_output_tokens as number) < 1)) {
+    throw new AgentResponsesRequestError("max_output_tokens must be a positive integer", 422);
   }
   if (typeof body.model !== "string" || !body.model.trim() || body.model.length > 200) {
     throw new AgentResponsesRequestError("A model ID is required");
@@ -257,6 +265,7 @@ export function parseAgentResponsesRequest(value: unknown): AgentResponsesReques
     tools,
     toolChoice,
     parallelToolCalls: body.parallel_tool_calls !== false,
+    ...(body.max_output_tokens === undefined ? {} : { maxOutputTokens: body.max_output_tokens as number }),
     outputs,
     newUserAfterToolHistory: lastToolResultIndex >= 0 && lastUserIndex > lastToolResultIndex,
     stream: body.stream === true,

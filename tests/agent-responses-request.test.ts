@@ -90,7 +90,7 @@ test("unsupported persisted responses and automatic truncation fail with HTTP 40
 test("unsupported semantic request controls cannot be silently ignored", () => {
   const base = { model, input: "Hi" };
   for (const unsupported of [
-    { max_output_tokens: 100 }, { temperature: 0.2 }, { top_p: 0.8 },
+    { temperature: 0.2 }, { top_p: 0.8 },
     { text: { format: { type: "json_object" } } }, { reasoning: { effort: "high" } },
     { unknown_control: { mode: "privileged" } },
   ]) {
@@ -101,6 +101,20 @@ test("unsupported semantic request controls cannot be silently ignored", () => {
     expect((rejection as AgentResponsesRequestError).status).toBe(400);
   }
   expect(parseAgentResponsesRequest({ ...base, stream: false, parallel_tool_calls: false }).stream).toBe(false);
+});
+
+test("Responses accepts 9Router's translated max_tokens model probe as an output budget", () => {
+  const request = parseAgentResponsesRequest({
+    model, input: [{ type: "message", role: "user", content: [{ type: "input_text", text: "hi" }] }],
+    instructions: "", stream: true, store: false, max_output_tokens: 1024,
+  });
+  expect(request).toMatchObject({ maxOutputTokens: 1024, stream: true, history: [{ role: "user", text: "hi" }] });
+  for (const invalid of [0, -1, 1.5, "1024", null, Number.MAX_SAFE_INTEGER + 1]) {
+    expect(() => parseAgentResponsesRequest({ model, input: "Hi", max_output_tokens: invalid }))
+      .toThrow("max_output_tokens must be a positive integer");
+  }
+  expect(() => parseAgentResponsesRequest({ model, input: "Hi", unknown_control: true }))
+    .toThrow('Unsupported Responses request field: "unknown_control"');
 });
 
 test("named tool choice cannot smuggle unsupported selection controls", () => {

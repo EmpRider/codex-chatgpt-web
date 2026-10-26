@@ -136,6 +136,24 @@ test("valid bearer serves OpenAI Responses JSON and terminal SSE on generic path
   } finally { provider.close(); }
 });
 
+test("9Router model check accepts a translated max_output_tokens budget over Responses SSE", async () => {
+  const Provider = await gatewayConstructor();
+  const manager = fakeManager({ text: "hi", calls: [], finished: true });
+  const provider = new Provider(config(), {} as TurnBroker, bearer, manager);
+  try {
+    const response = await provider.handle(post(JSON.stringify({
+      model, instructions: "", stream: true, store: false, max_output_tokens: 1024,
+      input: [{ type: "message", role: "user", content: [{ type: "input_text", text: "hi" }] }],
+    }), bearer), "/v1/responses");
+    expect(response.status).toBe(200);
+    const events = await response.text();
+    expect(events).toContain("response.output_text.delta");
+    expect(events).toContain("response.completed");
+    expect(events).not.toContain("response.failed");
+    expect(manager.starts).toBe(1);
+  } finally { provider.close(); }
+});
+
 test("host, browser Origin, unknown route and untrusted tools cannot enter an external turn", async () => {
   const Provider = await gatewayConstructor();
   const manager = fakeManager();

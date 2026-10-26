@@ -259,7 +259,8 @@ export class AgentResponsesProvider {
       }), { headers: { "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-cache" } });
     } catch (error) {
       const status = statusOf(error);
-      log({ level: "ERROR", category: "api", event: "request_failed", phase: "completion", code: "internal",
+      log({ level: status >= 500 ? "ERROR" : "WARN", category: "api", event: "request_failed", phase: "completion",
+        code: status >= 500 ? "internal" : "invalid_request",
         duration_ms: Math.min(86_400_000, Date.now() - started) });
       return done(publicError(status, stageStarted ? safeStageMessage(error, status) : safeMessage(error, status), error));
     }

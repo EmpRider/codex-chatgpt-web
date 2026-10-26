@@ -78,6 +78,21 @@ test("generic text turn keeps external authority and completes without a native 
   } finally { manager.closeAll(); }
 });
 
+test("client output-token budget reaches browser instructions without changing native defaults", async () => {
+  const manager = new AgentResponsesSessionManager(broker, providerConfig(defaultConfig("full")), {
+    async run(turn) {
+      const prompt = await turn.prepare();
+      expect(prompt.text).toContain("within 1024 output tokens");
+      return "hi";
+    },
+  });
+  try {
+    const parsed = parseAgentResponsesRequest({ model, input: "hi", max_output_tokens: 1024 });
+    const stage = await manager.start(parsed, backendModel);
+    expect(stage.text).toBe("hi");
+  } finally { manager.closeAll(); }
+});
+
 test("cancelAll retires live generic broker owners without permanently disabling the provider", async () => {
   let entered!: () => void;
   const browserStarted = new Promise<void>(resolve => { entered = resolve; });

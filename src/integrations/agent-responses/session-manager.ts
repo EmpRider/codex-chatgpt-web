@@ -161,7 +161,12 @@ function compileAgentResponsesRequest(
   const images = request.history.flatMap(message => message.images ?? []);
   const input: ExternalAgentChatGptPromptInput = {
     agentKind: "external-agent",
-    instructions: request.instructions,
+    // The browser model has no native output-token setting. Carry the client's
+    // requested cap into the model's instructions instead of silently discarding it.
+    instructions: request.maxOutputTokens === undefined ? request.instructions : [
+      request.instructions,
+      `Keep the entire response, including any function-call arguments, within ${request.maxOutputTokens} output tokens.`,
+    ].filter(Boolean).join("\n"),
     history: request.history.map(message => ({ role: message.role, text: message.text })),
     toolNames: tools.map(tool => tool.name),
     toolChoice: request.toolChoice,
