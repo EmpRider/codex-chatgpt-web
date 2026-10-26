@@ -5,10 +5,11 @@ import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { TurnBroker } from "../src/adapters/chatgpt-web/turn-broker";
+import { defaultBrokerEndpoint } from "../src/config";
 
 test("external Responses agent can inventory and execute through the unchanged native MCP stdio connector", async () => {
   const root = mkdtempSync(join(tmpdir(), "cgw-agent-mcp-"));
-  const broker = TurnBroker.forSocket(join(root, "broker.sock"));
+  const broker = TurnBroker.forSocket(defaultBrokerEndpoint(root));
   const tool = {
     name: "Read", description: "Read a source file in the originating coding agent",
     parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"], additionalProperties: false },

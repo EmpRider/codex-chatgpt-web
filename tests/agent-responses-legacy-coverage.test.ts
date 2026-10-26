@@ -113,7 +113,7 @@ test("44-round large history rejects before external owner admission or browser 
     const request = parseAgentResponsesRequest({ model: "chatgpt-web/gpt-6-sol", input: rounds });
     expect(() => manager.preflight(request, {
       backendModel: "gpt-5.6-sol", adapterEffort: "high", modelFamily: "6",
-    })).toThrow("/compact");
+    })).toThrow("Prompt is too long");
     expect(registrations).toBe(0);
     expect(manager.activeCount()).toBe(0);
   } finally { manager.closeAll(); }

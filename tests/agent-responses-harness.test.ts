@@ -4,14 +4,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-import { defaultConfig, providerConfig } from "../src/config";
+import { defaultBrokerEndpoint, defaultConfig, providerConfig } from "../src/config";
 import { TurnBroker } from "../src/adapters/chatgpt-web/turn-broker";
 import { AgentResponsesSessionManager } from "../src/integrations/agent-responses/session-manager";
 import { AgentResponsesProvider } from "../src/integrations/agent-responses/routes";
 
 test("synthetic read/edit/test cycle traverses real stdio MCP, broker and one generic browser turn", async () => {
   const root = mkdtempSync(join(tmpdir(), "cgw-agent-simulation-"));
-  const broker = TurnBroker.forSocket(join(root, "broker.sock"));
+  const broker = TurnBroker.forSocket(defaultBrokerEndpoint(root));
   const client = new Client({ name: "generic-simulated-coding-agent", version: "1.0.0" });
   const transport = new StdioClientTransport({ command: process.execPath,
     args: ["src/cli.ts", "mcp", "--broker-socket", broker.socketPath], cwd: process.cwd(), stderr: "pipe" });

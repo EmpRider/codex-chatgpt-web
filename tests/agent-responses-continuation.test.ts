@@ -2,7 +2,7 @@ import { afterAll, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { defaultConfig, providerConfig } from "../src/config";
+import { defaultBrokerEndpoint, defaultConfig, providerConfig } from "../src/config";
 import { TurnBroker, callTurnBroker } from "../src/adapters/chatgpt-web/turn-broker";
 import { AgentResponsesSessionManager } from "../src/integrations/agent-responses/session-manager";
 import { parseAgentResponsesRequest } from "../src/integrations/agent-responses/request";
@@ -12,7 +12,7 @@ const backend = { backendModel: "gpt-5.6-luna", adapterEffort: "low" };
 const tool = { type: "function", name: "Read", description: "Read an agent-side file",
   parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"] } };
 const root = mkdtempSync(join(tmpdir(), "cgw-agent-continuation-"));
-const broker = TurnBroker.forSocket(join(root, "broker.sock"));
+const broker = TurnBroker.forSocket(defaultBrokerEndpoint(root));
 afterAll(async () => { await broker.close(); rmSync(root, { recursive: true, force: true }); });
 
 const output = (callId: string, text: string) => ({ type: "function_call_output", call_id: callId, output: text });

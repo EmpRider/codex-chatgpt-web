@@ -1141,7 +1141,7 @@ test("failed terminal migration verifies the unchanged previous runtime instead 
   ]);
 });
 
-test("failed fresh-conversation setting restores every mutable setup file before restarting the previous runtime", async () => {
+test("failed fresh-conversation setting restores every mutable setup file before restarting the previous runtime", async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-web-gpt-setup-checkpoint-"));
   const coreHome = path.join(root, "core");
   const codexHome = path.join(root, "codex");
@@ -1177,7 +1177,16 @@ test("failed fresh-conversation setting restores every mutable setup file before
   fs.writeFileSync(profilePath, "old profile\n", { mode: 0o600 });
   fs.mkdirSync(sharedDirectory, { mode: 0o750 });
   fs.writeFileSync(sharedConfigPath, "old codex config\n", { mode: 0o640 });
-  fs.symlinkSync(sharedConfigPath, codexConfigPath);
+  try {
+    fs.symlinkSync(sharedConfigPath, codexConfigPath);
+  } catch (error) {
+    if (process.platform === "win32" && ["EPERM", "EACCES"].includes(error.code)) {
+      fs.rmSync(root, { recursive: true, force: true });
+      t.skip("Windows symlink creation is unavailable without the required OS privilege");
+      return;
+    }
+    throw error;
+  }
   const linkTarget = fs.readlinkSync(codexConfigPath);
   const linkInode = fs.lstatSync(codexConfigPath).ino;
   const directoryMode = fs.statSync(sharedDirectory).mode & 0o777;

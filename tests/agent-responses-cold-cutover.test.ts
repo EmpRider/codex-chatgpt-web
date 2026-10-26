@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { closeTurnBrokers } from "../src/adapters/chatgpt-web/turn-broker";
-import { defaultConfig } from "../src/config";
+import { defaultBrokerEndpoint, defaultConfig } from "../src/config";
 import { startServer } from "../src/server";
 
 const oldBearer = `synthetic-old-operator-${"k".repeat(48)}`;
@@ -22,7 +22,7 @@ test("cold cutover rejects both former provider routes even with the old bearer 
   const server = startServer({
     ...defaultConfig("full"),
     port: 0,
-    brokerSocketPath: join(root, "synthetic-broker.sock"),
+    brokerSocketPath: defaultBrokerEndpoint(root),
     browserInteractionMode: "automatic",
   });
   try {

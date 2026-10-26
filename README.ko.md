@@ -177,6 +177,7 @@ bun run app
 
 ```bash
 bun run app
+bun run launcher:dev
 bun run dev:launcher
 bun run src/cli.ts dev status
 bun run dev:chat compaction-lab "Reply with exactly: DEV READY"

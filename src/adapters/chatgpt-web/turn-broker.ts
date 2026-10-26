@@ -849,6 +849,10 @@ export class TurnBroker implements TurnBrokerOwner {
     if (this.startPromise) return this.startPromise;
     const attempt = new Promise<void>((resolveStart, rejectStart) => {
       const windowsPipe = isWindowsPipeEndpoint(this.socketPath);
+      if (process.platform === "win32" && !windowsPipe) {
+        rejectStart(new Error("Windows turn broker endpoint must be a named pipe"));
+        return;
+      }
       if (!windowsPipe) {
         // sun_path is a fixed-size field in the kernel, so an over-long path fails inside listen()
         // with nothing but "Failed to listen" and no hint that the length is the problem. Say so.

@@ -7,6 +7,17 @@ import { dirname, join } from "node:path";
 import { callTurnBroker, TurnBroker } from "../src/adapters/chatgpt-web/turn-broker";
 import { defaultBrokerEndpoint, isWindowsPipeEndpoint } from "../src/config";
 
+test.skipIf(process.platform !== "win32")("Windows broker rejects Unix-style paths without waiting for a timeout", async () => {
+  const root = mkdtempSync(join(tmpdir(), "cgw-windows-broker-path-"));
+  const broker = TurnBroker.forSocket(join(root, "broker.sock"));
+  try {
+    await expect(broker.listen()).rejects.toThrow("Windows turn broker endpoint must be a named pipe");
+  } finally {
+    await broker.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test.skipIf(process.platform === "win32")("closing a rejected broker leaves the live socket reachable", async () => {
   const root = mkdtempSync(join(tmpdir(), "cgw-owner-"));
   const endpoint = join(root, "broker.sock");
