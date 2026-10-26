@@ -4,9 +4,9 @@ import { Readable } from "node:stream";
 const MAX_ENCODED_REQUEST_BYTES = 64 * 1024 * 1024;
 const MAX_DECODED_REQUEST_BYTES = 128 * 1024 * 1024;
 // Two maximal uploads can coexist without allowing unbounded concurrent
-// encoded, decoded and parser allocations in the single-user 9Router sidecar.
-export const MAX_CONCURRENT_NINE_ROUTER_BODY_READS = 2;
-let activeNineRouterBodyReads = 0;
+// encoded, decoded and parser allocations for the local Responses provider.
+export const MAX_CONCURRENT_PROVIDER_BODY_READS = 2;
+let activeProviderBodyReads = 0;
 
 export class HttpBodyReadError extends Error {
   constructor(message: string, readonly status: 400 | 408 | 413 | 415 | 429) {
@@ -54,7 +54,7 @@ function assertWithinLimit(bytes: number, limit: number, label: string): void {
   if (bytes > limit) throw new HttpBodyReadError(`${label} exceeds ${limit} bytes`, 413);
 }
 
-/** The 9Router sidecar accepts untrusted HTTP bodies and must not allocate an
+/** The local Responses provider accepts untrusted HTTP bodies and must not allocate an
  * unlimited arrayBuffer for a peer that never finishes uploading its request.
  * Existing native Codex callers keep their current body-read path by default.
  */
@@ -96,10 +96,10 @@ async function readBoundedBody(request: Request, timeoutMs: number): Promise<Uin
 
 export async function readJsonRequestBody(request: Request, options?: { readTimeoutMs?: number }): Promise<unknown> {
   const bounded = options?.readTimeoutMs !== undefined;
-  if (bounded && activeNineRouterBodyReads >= MAX_CONCURRENT_NINE_ROUTER_BODY_READS) {
-    throw new HttpBodyReadError("Too many concurrent 9Router body uploads", 429);
+  if (bounded && activeProviderBodyReads >= MAX_CONCURRENT_PROVIDER_BODY_READS) {
+    throw new HttpBodyReadError("Too many concurrent provider body uploads", 429);
   }
-  if (bounded) activeNineRouterBodyReads++;
+  if (bounded) activeProviderBodyReads++;
   try {
     const startedAt = performance.now();
     const declaredLength = Number(request.headers.get("content-length"));
@@ -134,6 +134,6 @@ export async function readJsonRequestBody(request: Request, options?: { readTime
     const text = new TextDecoder("utf-8", { fatal: true }).decode(decoded);
     return JSON.parse(text) as unknown;
   } finally {
-    if (bounded) activeNineRouterBodyReads--;
+    if (bounded) activeProviderBodyReads--;
   }
 }

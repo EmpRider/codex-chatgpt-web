@@ -6,8 +6,8 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { TurnBroker } from "../src/adapters/chatgpt-web/turn-broker";
 
-test("external 9Router agent can inventory and execute through the unchanged native MCP stdio connector", async () => {
-  const root = mkdtempSync(join(tmpdir(), "cgw-r9-mcp-"));
+test("external Responses agent can inventory and execute through the unchanged native MCP stdio connector", async () => {
+  const root = mkdtempSync(join(tmpdir(), "cgw-agent-mcp-"));
   const broker = TurnBroker.forSocket(join(root, "broker.sock"));
   const tool = {
     name: "Read", description: "Read a source file in the originating coding agent",
@@ -25,7 +25,7 @@ test("external 9Router agent can inventory and execute through the unchanged nat
     } },
   ];
   const token = await broker.register({ kind: "external-agent", tools: declared }, 60_000);
-  const client = new Client({ name: "9router-external-agent-test", version: "1.0.0" });
+  const client = new Client({ name: "agent-responses-external-test", version: "1.0.0" });
   const transport = new StdioClientTransport({
     command: process.execPath, args: ["src/cli.ts", "mcp", "--broker-socket", broker.socketPath],
     cwd: process.cwd(), stderr: "pipe",

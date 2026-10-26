@@ -30,7 +30,7 @@ import { installRuntimeKeyBytes, managedRuntimeKeyPath, stopTunnel, tunnelStatus
 import { getTunnelServiceStatus, restartTunnelService, startTunnelService, stopTunnelService, uninstallTunnelService } from "./tunnel-service";
 import { VERSION } from "./version";
 import { runDevCommand } from "./dev-chat/cli";
-import { disableNineRouterKey, nineRouterKeyPath, provisionNineRouterKey } from "./integrations/nine-router/key-manager";
+import { agentResponsesKeyPath, disableAgentResponsesKey, provisionAgentResponsesKey } from "./integrations/agent-responses/key-manager";
 
 const HELP = `codex-chatgpt-web ${VERSION}
 
@@ -53,7 +53,7 @@ Usage:
   codex-chatgpt-web mcp [--broker-socket PATH]
   codex-chatgpt-web service <status|install|start|restart|stop|cancel-turns>
   codex-chatgpt-web tunnel <status|start|restart|stop|key-import>
-  codex-chatgpt-web 9router-key <create|rotate|disable|path>
+  codex-chatgpt-web agent-responses-key <create|rotate|disable|path>
   codex-chatgpt-web open <tunnels|runtime-keys|connectors>
   codex-chatgpt-web uninstall --yes
 
@@ -82,8 +82,6 @@ Setup options:
   --bigger-context             Enable experimental adaptive 1/2/6-message context
   --fresh-conversation         Start each automatic turn in a fresh browser chat
   --retained-conversation      Reuse the browser chat between turns (default)
-  --saved-chats                Keep task conversations in ChatGPT history (default)
-  --temporary-chats            Use Temporary Chat for task conversations
   --composer-predictions       Enable next-message suggestions using GPT-6 Sol Medium (default)
   --no-composer-predictions    Disable next-message suggestions for Web models
   --skill-attachments         Experimental selected skills as text attachments
@@ -319,10 +317,6 @@ async function setupCommand(args: string[]): Promise<void> {
   const skillAttachments = takeFlag(args, "--skill-attachments");
   const inlineSkills = takeFlag(args, "--inline-skills");
   if (skillAttachments && inlineSkills) throw new Error("Choose --skill-attachments or --inline-skills");
-  const savedChats = takeFlag(args, "--saved-chats");
-  const temporaryChats = takeFlag(args, "--temporary-chats");
-  if (savedChats && temporaryChats) throw new Error("Choose --saved-chats or --temporary-chats");
-  if (savedChats || temporaryChats) options.useSavedChats = savedChats;
   const freshConversation = takeFlag(args, "--fresh-conversation");
   const retainedConversation = takeFlag(args, "--retained-conversation");
   if (freshConversation && retainedConversation) {
@@ -630,16 +624,16 @@ async function main(): Promise<void> {
     await interruptHookCommand(args);
   }
   else if (command === "tunnel") await tunnelCommand(args);
-  else if (command === "9router-key") {
+  else if (command === "agent-responses-key") {
     const action = args.shift();
     assertNoArgs(args);
     if (action === "create" || action === "rotate") {
-      stdout.write(`9Router key saved: ${provisionNineRouterKey(action)}\nRestart the daemon to use it. Enter the key value only in 9Router's local provider UI.\n`);
+      stdout.write(`Generic Responses key saved: ${provisionAgentResponsesKey(action)}\nRestart the daemon to use it.\n`);
     } else if (action === "disable") {
-      const backup = disableNineRouterKey();
+      const backup = disableAgentResponsesKey();
       stdout.write(`${backup ? `Saved key disabled (recoverable at ${backup})` : "No saved key found"}. Restart the daemon to apply.\n`);
-    } else if (action === "path") stdout.write(`${nineRouterKeyPath()}\n`);
-    else throw new Error("9router-key action must be create, rotate, disable or path");
+    } else if (action === "path") stdout.write(`${agentResponsesKeyPath()}\n`);
+    else throw new Error("agent-responses-key action must be create, rotate, disable or path");
   }
   else if (command === "open") await openCommand(args);
   else if (command === "uninstall") await uninstallCommand(args);

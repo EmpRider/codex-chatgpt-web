@@ -23,6 +23,6 @@ function run(args: string[], cwd: string): void {
 run(["install", "--frozen-lockfile"], root);
 run(["install", "--frozen-lockfile"], launcher);
 // `bun run app` is the source equivalent of the installed app: it needs the
-// production supervisor (including the Responses listener for 9Router).
+// production supervisor (including the Settings-configured generic Responses listener).
 // Keep the isolated DEV harness available through `bun run launcher:dev`.
 run(["run", "dev", "--production-profile"], launcher);

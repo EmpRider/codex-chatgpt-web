@@ -4,7 +4,7 @@ const os = require("node:os");
 const path = require("node:path");
 const { spawn } = require("node:child_process");
 const { writePrivateFileAtomic } = require("./atomic-file.cjs");
-const { redactText } = require("./logging.cjs");
+const { GATEWAY_ACTIVITY_PREFIX, parseGatewayActivityLine, redactText } = require("./logging.cjs");
 const {
   DETACH_OWNED_CHILD,
   processRunning,
@@ -510,8 +510,12 @@ class RuntimeSupervisor {
     this.lastChildFailure[name] = null;
     this.lastChildOutput[name] = null;
     collectLines(child.stdout, (line) => {
-      this.lastChildOutput[name] = redactText(line).slice(0, 1_000);
-      this.logger.info(`runtime.${name}_stdout`, { line });
+      this.lastChildOutput[name] = line.startsWith(GATEWAY_ACTIVITY_PREFIX)
+        ? "[gateway-activity]" : redactText(line).slice(0, 1_000);
+      const activity = name === "daemon" ? parseGatewayActivityLine(line) : null;
+      if (activity) this.logger[activity.level](activity.event, activity.detail);
+      else if (line.startsWith(GATEWAY_ACTIVITY_PREFIX)) this.logger.warn("agent_responses.invalid_activity_line");
+      else this.logger.info(`runtime.${name}_stdout`, { line });
     }, (error) => {
       this.logger.warn(`runtime.${name}_stdout_unavailable`, { message: errorMessage(error) });
     });
@@ -1824,13 +1828,16 @@ class RuntimeSupervisor {
         const health = await this.control(config, "drain");
         if (health.accepting_turns !== false
           || !Number.isInteger(health.active_http_turns)
-          || !Number.isInteger(health.active_browser_turns)) {
+          || !Number.isInteger(health.active_browser_turns)
+          || !Number.isInteger(health.active_generic_turns)
+          || health.active_generic_turns < 0) {
           throw new Error("daemon did not acknowledge the drain contract");
         }
-        if (health.active_http_turns === 0 && health.active_browser_turns === 0) return true;
+        const genericTurns = health.active_generic_turns;
+        if (health.active_http_turns === 0 && health.active_browser_turns === 0 && genericTurns === 0) return true;
         if (Date.now() >= deadline) {
           throw new Error(
-            `daemon has ${health.active_http_turns} active HTTP turn(s) and ${health.active_browser_turns} active browser turn(s)`,
+            `daemon has ${health.active_http_turns} active HTTP turn(s), ${health.active_browser_turns} active browser turn(s), and ${genericTurns} active generic turn(s)`,
           );
         }
         await sleep(Math.min(DRAIN_POLL_INTERVAL_MS, Math.max(1, deadline - Date.now())));
@@ -1855,23 +1862,27 @@ class RuntimeSupervisor {
     const config = this.readConfig();
     const daemon = this.daemon;
     if (!config || !daemon || daemon.exitCode !== null || daemon.signalCode !== null) {
-      return { cancelledHttpTurns: 0, cancelledBrowserTurns: 0 };
+      return { cancelledHttpTurns: 0, cancelledBrowserTurns: 0, cancelledGenericTurns: 0 };
     }
     const result = await this.control(config, "cancel-turns");
     if (result.status !== "ok"
       || !Number.isInteger(result.cancelled_http_turns)
       || !Number.isInteger(result.cancelled_browser_turns)
+      || !Number.isInteger(result.cancelled_generic_turns)
       || result.active_http_turns !== 0
-      || result.active_browser_turns !== 0) {
+      || result.active_browser_turns !== 0
+      || result.active_generic_turns !== 0) {
       throw new Error("launcher-owned daemon did not acknowledge complete active-turn cancellation");
     }
     this.logger.info("runtime.active_turns_cancelled", {
       httpTurns: result.cancelled_http_turns,
       browserTurns: result.cancelled_browser_turns,
+      genericTurns: result.cancelled_generic_turns,
     });
     return {
       cancelledHttpTurns: result.cancelled_http_turns,
       cancelledBrowserTurns: result.cancelled_browser_turns,
+      cancelledGenericTurns: result.cancelled_generic_turns,
     };
   }
 

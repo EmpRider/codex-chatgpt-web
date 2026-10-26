@@ -2790,6 +2790,19 @@ code {
 .plugin-name-input input { min-width: 0; width: 100%; border: 0; background: transparent; }
 .plugin-name-setting code { overflow-wrap: anywhere; font-size: 12px; }
 .plugin-name-setting p { color: var(--color-text-secondary); font-size: 13px; margin: 0; }
+.agent-responses-port-setting { width: 100%; }
+.agent-responses-port-controls { display: flex; align-items: center; gap: 8px; padding: 0; }
+.agent-responses-port-controls input {
+  width: 92px;
+  height: 30px;
+  padding: 0 9px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-background-control);
+  color: var(--color-text-primary);
+  font-family: var(--font-mono);
+}
+.agent-responses-port-note { margin: 5px 0 12px; font-size: 12px; color: var(--color-text-secondary); }
 .activity-tasks { margin-bottom: 28px; }
 .activity-task {
   display: flex;

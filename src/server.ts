@@ -21,7 +21,7 @@ import { assertComposerPredictionFits, configureComposerPrediction } from "./com
 import { rememberCompactionContinuation } from "./adapters/chatgpt-web/compaction-continuation";
 import { bridgeToResponsesSSE, buildResponseJSON, formatErrorResponse } from "./bridge";
 import type { AppConfig } from "./config";
-import { providerConfig } from "./config";
+import { parseAgentResponsesPort, providerConfig } from "./config";
 import { AsyncEventQueue } from "./event-queue";
 import { readJsonRequestBody } from "./http-body";
 import { httpStatusFromTerminalError } from "./lib/errors";
@@ -52,7 +52,11 @@ import { namespacedToolName, type AdapterEvent, type CodexParsedRequest } from "
 import type { CodexProviderConfig } from "./types";
 import type { ProviderAdapter } from "./adapters/base";
 import { VERSION } from "./version";
-import { NINE_ROUTER_BASE_PATH, NineRouterProvider } from "./integrations/nine-router/routes";
+import {
+  startAgentResponsesListener,
+  type AgentResponsesListenerState,
+} from "./integrations/agent-responses/listener";
+import { AgentResponsesProvider } from "./integrations/agent-responses/routes";
 
 type HttpTrackedEndpoint = "models" | "responses" | "compact" | "search" | "unspecified" | NativeImageEndpoint;
 
@@ -969,14 +973,15 @@ export function startServer(
     fetchUpstream?: NativeFetch;
     adapterFactory?: ChatGptWebAdapterFactory;
     modelCatalogFetches?: ModelCatalogFetches;
+    agentResponses?: Parameters<typeof startAgentResponsesListener>[0];
   } = {},
 ): ReturnType<typeof Bun.serve> {
   if (config.purpose === "dev-harness") {
     throw new Error("DEV harness configuration cannot start a Responses listener");
   }
+  const configuredAgentResponsesPort = parseAgentResponsesPort(config.agentResponsesPort);
   const startedAt = Date.now();
   const turnBroker = config.mode === "full" ? TurnBroker.forSocket(config.brokerSocketPath) : undefined;
-  const nineRouter = turnBroker ? new NineRouterProvider(config, turnBroker) : undefined;
   if (config.mode === "full") {
     void turnBroker!.listen().catch(error => {
       console.error(
@@ -989,6 +994,8 @@ export function startServer(
   let successfulModelCatalogRequests = 0;
   let lastSuccessfulModelCatalogRequestAt: string | null = null;
   let modelCatalogRequests = 0;
+  let agentResponsesListener: AgentResponsesListenerState = { status: "disabled" };
+  let managedAgentResponses: AgentResponsesProvider | undefined;
   let lastModelCatalogResult: {
     request: number; at: string; status: number; failure?: ModelCatalogFailure;
   } | null = null;
@@ -996,7 +1003,8 @@ export function startServer(
   const modelCatalogFetches = dependencies.modelCatalogFetches ?? new ModelCatalogFetches();
   const activity = () => ({
     active_http_turns: httpTurns.count(),
-    active_browser_turns: chatGptTurnSessions.activeCount() + (turnBroker?.externalOwnerActiveCount() ?? 0) + (nineRouter?.activeCount ?? 0),
+    active_browser_turns: chatGptTurnSessions.activeCount() + (turnBroker?.externalOwnerActiveCount() ?? 0),
+    active_generic_turns: (managedAgentResponses ?? dependencies.agentResponses?.provider)?.activeCount ?? 0,
   });
   const controlAuthorized = (req: Request): boolean => {
     const header = req.headers.get("authorization") ?? "";
@@ -1020,10 +1028,6 @@ export function startServer(
           "Browser-originated requests are not accepted by the local Codex route",
         );
       }
-      if (url.pathname.startsWith(`${NINE_ROUTER_BASE_PATH}/`)) {
-        return nineRouter?.handle(req, url.pathname, draining)
-          ?? formatErrorResponse(404, "invalid_request_error", "9Router integration requires Full mode");
-      }
       if (req.method === "GET" && url.pathname === "/healthz") {
         return Response.json({
           status: "ok",
@@ -1038,6 +1042,10 @@ export function startServer(
           last_successful_model_catalog_request_at: lastSuccessfulModelCatalogRequestAt,
           model_catalog_requests: modelCatalogRequests,
           last_model_catalog_result: lastModelCatalogResult,
+          agent_responses: {
+            status: agentResponsesListener.status,
+            ...(agentResponsesListener.status === "disabled" ? {} : { port: agentResponsesListener.port }),
+          },
           ...activity(),
         });
       }
@@ -1148,11 +1156,11 @@ export function startServer(
       if (req.method === "POST" && url.pathname === "/admin/cancel-turns") {
         if (!controlAuthorized(req)) return new Response("Unauthorized", { status: 401 });
         const reason = new Error("Active turn cancelled by launcher");
-        nineRouter?.close();
         // Abort shared compaction owners before clearing their retained source sessions. The
         // owner signal is the only cancellation boundary for a fresh fallback not in the session
         // registry.
         const compactionCancellation = cancelAllStructuredCompactions(reason);
+        const cancelledGenericTurns = (managedAgentResponses ?? dependencies.agentResponses?.provider)?.cancelActiveTurns() ?? 0;
         const cancelledBrowserTurns = chatGptTurnSessions.clear() + (turnBroker?.revokeExternalOwners() ?? 0);
         const [cancelledHttpTurns, cancelledCompactionRuns] = await Promise.all([
           httpTurns.cancelAll(reason),
@@ -1162,6 +1170,7 @@ export function startServer(
           status: "ok",
           cancelled_http_turns: cancelledHttpTurns,
           cancelled_browser_turns: cancelledBrowserTurns,
+          cancelled_generic_turns: cancelledGenericTurns,
           cancelled_compaction_runs: cancelledCompactionRuns,
           ...activity(),
         });
@@ -1169,7 +1178,8 @@ export function startServer(
       if (req.method === "POST" && url.pathname === "/admin/shutdown") {
         if (!controlAuthorized(req)) return new Response("Unauthorized", { status: 401 });
         const current = activity();
-        if (!draining || current.active_http_turns > 0 || current.active_browser_turns > 0) {
+        if (!draining || current.active_http_turns > 0 || current.active_browser_turns > 0
+          || current.active_generic_turns > 0) {
           return Response.json(
             {
               status: "refused",
@@ -1296,15 +1306,33 @@ export function startServer(
       return new Response("Not found", { status: 404 });
     },
   });
+  if (dependencies.agentResponses) {
+    agentResponsesListener = startAgentResponsesListener({ ...dependencies.agentResponses, isDraining: () => draining });
+  } else if (configuredAgentResponsesPort !== undefined && turnBroker) {
+    try {
+      managedAgentResponses = new AgentResponsesProvider(config, turnBroker);
+      agentResponsesListener = startAgentResponsesListener({
+        port: configuredAgentResponsesPort,
+        provider: managedAgentResponses,
+        isDraining: () => draining,
+      });
+    } catch {
+      // A malformed/unsafe generic key cannot make the independent native listener unavailable.
+      console.warn("[codex-chatgpt-web] generic Responses listener disabled: credential configuration unavailable");
+    }
+  }
   function shutdown(): void {
     if (shutdownPromise) return;
     draining = true;
-    nineRouter?.close();
+    dependencies.agentResponses?.provider.close();
+    managedAgentResponses?.close();
     chatGptTurnSessions.clear();
     modelCatalogFetches.close();
     flushResponseState();
     shutdownPromise = (async () => {
       const results = await Promise.allSettled([
+        ...(agentResponsesListener.status === "ready"
+          ? [Promise.resolve().then(() => agentResponsesListener.server.stop(true))] : []),
         closeChatGptBrowserWorkers(),
         closeTurnBrokers(),
       ]);

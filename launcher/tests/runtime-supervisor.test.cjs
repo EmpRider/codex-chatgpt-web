@@ -1362,8 +1362,8 @@ test("launcher supervisor refuses shutdown while a Codex turn is active and comp
   supervisor.control = async (_config, action) => {
     actions.push(action);
     return action === "drain"
-      ? { accepting_turns: false, active_http_turns: 1, active_browser_turns: 0 }
-      : { accepting_turns: true, active_http_turns: 1, active_browser_turns: 0 };
+      ? { accepting_turns: false, active_http_turns: 1, active_browser_turns: 0, active_generic_turns: 0 }
+      : { accepting_turns: true, active_http_turns: 1, active_browser_turns: 0, active_generic_turns: 0 };
   };
   await assert.rejects(
     supervisor.acquireDrain({}, 0),
@@ -1389,11 +1389,30 @@ test("launcher supervisor waits for an in-flight HTTP turn to finish after drain
       accepting_turns: false,
       active_http_turns: drainChecks === 1 ? 1 : 0,
       active_browser_turns: 0,
+      active_generic_turns: 0,
     };
   };
 
   await supervisor.acquireDrain({}, 1_000);
   assert.deepEqual(actions, ["drain", "drain"]);
+});
+
+test("launcher supervisor also waits for generic Responses turns during drain", async () => {
+  const supervisor = new RuntimeSupervisor({
+    app: { getVersion: () => "0.2.0", isPackaged: false },
+    logger: { info() {}, warn() {}, error() {} },
+    sourceRoot: os.tmpdir(), coreHome: os.tmpdir(),
+    browserDescriptorPath: path.join(os.tmpdir(), "launcher.json"),
+  });
+  let polls = 0;
+  supervisor.control = async (_config, action) => {
+    assert.equal(action, "drain");
+    polls++;
+    return { accepting_turns: false, active_http_turns: 0, active_browser_turns: 0,
+      active_generic_turns: polls === 1 ? 1 : 0 };
+  };
+  await supervisor.acquireDrain({}, 1_000);
+  assert.equal(polls, 2);
 });
 
 test("explicit launcher shutdown cancels active turns before the graceful stop", async () => {
@@ -1892,7 +1911,7 @@ const server = http.createServer((request, response) => {
   if (request.method === "POST" && request.url === "/admin/drain") draining = true;
   else if (request.method === "POST" && request.url === "/admin/resume") draining = false;
   else if (request.method === "POST" && request.url === "/admin/shutdown" && draining) {
-    response.end(JSON.stringify({ status: "ok", accepting_turns: false, active_http_turns: 0, active_browser_turns: 0 }));
+    response.end(JSON.stringify({ status: "ok", accepting_turns: false, active_http_turns: 0, active_browser_turns: 0, active_generic_turns: 0 }));
     server.close(() => process.exit(0));
     return;
   }
@@ -1901,7 +1920,7 @@ const server = http.createServer((request, response) => {
     response.end("{}");
     return;
   }
-  response.end(JSON.stringify({ accepting_turns: !draining, active_http_turns: 0, active_browser_turns: 0 }));
+  response.end(JSON.stringify({ accepting_turns: !draining, active_http_turns: 0, active_browser_turns: 0, active_generic_turns: 0 }));
 });
 server.listen(config.port, config.host);
 process.once("SIGTERM", () => server.close(() => process.exit(0)));
@@ -1984,7 +2003,7 @@ const server = http.createServer((request, response) => {
   if (request.method === "POST" && request.url === "/admin/drain") draining = true;
   else if (request.method === "POST" && request.url === "/admin/resume") draining = false;
   else if (request.method === "POST" && request.url === "/admin/shutdown" && draining) {
-    response.end(JSON.stringify({ status: "ok", accepting_turns: false, active_http_turns: 0, active_browser_turns: 0 }));
+    response.end(JSON.stringify({ status: "ok", accepting_turns: false, active_http_turns: 0, active_browser_turns: 0, active_generic_turns: 0 }));
     server.close(() => process.exit(0));
     return;
   } else {
@@ -1992,7 +2011,7 @@ const server = http.createServer((request, response) => {
     response.end("{}");
     return;
   }
-  response.end(JSON.stringify({ status: "ok", accepting_turns: !draining, active_http_turns: 0, active_browser_turns: 0 }));
+  response.end(JSON.stringify({ status: "ok", accepting_turns: !draining, active_http_turns: 0, active_browser_turns: 0, active_generic_turns: 0 }));
 });
 server.listen(config.port, config.host);
 `);

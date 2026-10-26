@@ -466,6 +466,26 @@ class RuntimeHost {
     };
   }
 
+  /** Settings owns the optional gateway port. The supervised daemon reads it on next launch. */
+  setAgentResponsesPort(port) {
+    if (port !== null && (!Number.isInteger(port) || port < 1 || port > 65_535 || port === 17_841)) {
+      throw new Error("Generic OpenAI API port must be 1–65535, excluding native port 17841");
+    }
+    const snapshot = this.runtimeConfigSnapshot();
+    if (!snapshot.configured || snapshot.owner !== "launcher") {
+      throw new Error("Initialize the launcher-owned runtime before configuring its OpenAI API port");
+    }
+    if (port !== null && port === snapshot.config.port) {
+      throw new Error("Generic OpenAI API must use a different port from the native Codex listener");
+    }
+    const config = this.supervisor.readSetupConfig();
+    if (port === null) delete config.agentResponsesPort;
+    else config.agentResponsesPort = port;
+    writePrivateFileAtomic(this.supervisor.configPath, `${JSON.stringify(config, null, 2)}\n`);
+    this.logger.info("agent_responses.settings_port_saved", { port: port ?? null, restartRequired: true });
+    return { port };
+  }
+
   mcpCredentialsConfigured(requestedMode) {
     const config = this.runtimeConfigSnapshot().config;
     const interactionMode = requestedMode ?? config?.browserInteractionMode ?? "automatic";
@@ -1272,32 +1292,6 @@ class RuntimeHost {
     const result = development
       ? await this.runDevSetup("fresh-conversation-per-turn", args, options)
       : await this.runSetup("fresh-conversation-per-turn", args, options);
-    return { ...result, enabled };
-  }
-
-  async setUseSavedChats(enabled) {
-    if (typeof enabled !== "boolean") throw new Error("Saved chat preference must be a boolean");
-    const current = this.runtimeConfigSnapshot();
-    if (!current.configured) throw new Error("Initialize the runtime before changing saved chats");
-    const development = this.launcherProfile === "development";
-    const args = [
-      ...(development ? ["dev", "setup"] : ["setup"]),
-      current.mode === "full" ? "--full" : "--browser-only",
-      "--browser-host-descriptor", this.browserDescriptorPath,
-      ...this.browserInteractionArgs(),
-      "--acknowledge-unofficial",
-      ...(development ? [] : ["--replace-codex-route", "--restart-service"]),
-      enabled ? "--saved-chats" : "--temporary-chats",
-    ];
-    if (current.config?.autoApproveToolCalls === true) args.push("--auto-approve-tool-calls");
-    const options = {
-      message: enabled ? "Enabling saved ChatGPT conversations" : "Restoring Temporary Chat",
-      successMessage: enabled ? "Saved ChatGPT conversations enabled" : "Temporary Chat restored",
-      timeoutMs: CORE_SETUP_TIMEOUT_MS,
-    };
-    const result = development
-      ? await this.runDevSetup("use-saved-chats", args, options)
-      : await this.runSetup("use-saved-chats", args, options);
     return { ...result, enabled };
   }
 

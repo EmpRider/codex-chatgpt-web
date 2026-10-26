@@ -6,13 +6,13 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { defaultConfig, providerConfig } from "../src/config";
 import { TurnBroker } from "../src/adapters/chatgpt-web/turn-broker";
-import { NineRouterSessionManager } from "../src/integrations/nine-router/session-manager";
-import { NineRouterProvider } from "../src/integrations/nine-router/routes";
+import { AgentResponsesSessionManager } from "../src/integrations/agent-responses/session-manager";
+import { AgentResponsesProvider } from "../src/integrations/agent-responses/routes";
 
-test("synthetic read/edit/test cycle traverses real stdio MCP, broker and one 9Router browser turn", async () => {
-  const root = mkdtempSync(join(tmpdir(), "cgw-r9-simulation-"));
+test("synthetic read/edit/test cycle traverses real stdio MCP, broker and one generic browser turn", async () => {
+  const root = mkdtempSync(join(tmpdir(), "cgw-agent-simulation-"));
   const broker = TurnBroker.forSocket(join(root, "broker.sock"));
-  const client = new Client({ name: "9router-simulated-coding-agent", version: "1.0.0" });
+  const client = new Client({ name: "generic-simulated-coding-agent", version: "1.0.0" });
   const transport = new StdioClientTransport({ command: process.execPath,
     args: ["src/cli.ts", "mcp", "--broker-socket", broker.socketPath], cwd: process.cwd(), stderr: "pipe" });
   const names = ["Read", "Edit", "Bash"] as const;
@@ -27,7 +27,7 @@ test("synthetic read/edit/test cycle traverses real stdio MCP, broker and one 9R
   let previousBatchRevision = 0;
   const config = defaultConfig("full");
   config.solAvailable = false;
-  const manager = new NineRouterSessionManager(broker, providerConfig(config), {
+  const manager = new AgentResponsesSessionManager(broker, providerConfig(config), {
     async run(turn) {
       browserRuns++;
       const token = (await turn.prepare()).turnToken!;
@@ -57,8 +57,8 @@ test("synthetic read/edit/test cycle traverses real stdio MCP, broker and one 9R
     },
   });
   const key = "integration-test_" + "v".repeat(45);
-  const provider = new NineRouterProvider(config, broker, key, manager);
-  const route = "/integrations/9router/v1/responses";
+  const provider = new AgentResponsesProvider(config, broker, key, manager);
+  const route = "/v1/responses";
   const input: Array<Record<string, unknown>> = [{ role: "user", content: "Read, edit and test a file" }];
   const send = async () => {
     const response = await provider.handle(new Request(`http://127.0.0.1${route}`, {

@@ -20,9 +20,9 @@ export interface LauncherState {
   experimentalBiggerContext: boolean;
   biggerContextAvailable?: boolean;
   composerPredictionsEnabled: boolean;
+  agentResponsesPort?: number | null;
   experimentalSkillAttachments: boolean;
   experimentalFreshConversationPerTurn: boolean;
-  useSavedChats: boolean;
   zeroRiskProEnabled: boolean;
   sidebarOpen: boolean;
   sidebarWidth: number;
@@ -177,10 +177,10 @@ export interface LauncherApi {
   setAutostart(enabled: boolean): Promise<{ state: LauncherState; supported: boolean; enabled: boolean }>;
   setBiggerContext(enabled: boolean): Promise<LauncherState>;
   setComposerPredictions(enabled: boolean): Promise<LauncherState>;
+  setAgentResponsesPort(port: number | null): Promise<LauncherState>;
   setSkillAttachments(enabled: boolean): Promise<LauncherState>;
   setAutoApproveToolCalls(enabled: boolean): Promise<LauncherState>;
   setFreshConversationPerTurn(enabled: boolean): Promise<LauncherState>;
-  setUseSavedChats(enabled: boolean): Promise<LauncherState>;
   setZeroRiskPro(enabled: boolean): Promise<LauncherState>;
   setBrowserInteractionMode(mode: BrowserInteractionMode): Promise<{
     state: LauncherState;

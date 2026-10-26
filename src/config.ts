@@ -103,6 +103,8 @@ export interface AppConfig {
   subagentProtocol: SubagentProtocol;
   host: "127.0.0.1";
   port: number;
+  /** Optional separate loopback listener; no implicit generic API port. */
+  agentResponsesPort?: number;
   contextWindow: number;
   appName: string;
   automaticAppName: string;
@@ -121,7 +123,6 @@ export interface AppConfig {
   composerPredictionsEnabled: boolean;
   experimentalSkillAttachments: boolean;
   experimentalFreshConversationPerTurn: boolean;
-  useSavedChats: boolean;
   /** Explicitly install the additional Pro-sized model row while Zero Risk is active. */
   zeroRiskProEnabled: boolean;
   /** Optional adapter-silence budget for the Responses watchdog. */
@@ -255,7 +256,6 @@ export function defaultConfig(mode: RuntimeMode = "browser-only"): AppConfig {
     composerPredictionsEnabled: true,
     experimentalSkillAttachments: false,
     experimentalFreshConversationPerTurn: false,
-    useSavedChats: true,
     zeroRiskProEnabled: false,
     autoApproveToolCalls: false,
     controlToken: randomBytes(32).toString("base64url"),
@@ -385,6 +385,15 @@ export function loadConfig(): AppConfig {
   return parseConfig(JSON.parse(stripUtf8Bom(readFileSync(path, "utf8"))), path);
 }
 
+export function parseAgentResponsesPort(value: unknown): number | undefined {
+  if (value === undefined) return undefined;
+  const port = typeof value === "string" && /^[1-9][0-9]{0,4}$/.test(value) ? Number(value) : value;
+  if (typeof port !== "number" || !Number.isInteger(port) || port < 1 || port > 65_535 || port === 17_841) {
+    throw new Error("Generic Responses port must be an integer from 1 to 65535, other than native 17841");
+  }
+  return port;
+}
+
 export function loadConfigForSetup(): AppConfig {
   const path = getConfigPath();
   if (!existsSync(path)) throw new Error(`Configuration is missing: ${path}. Run codex-chatgpt-web setup first.`);
@@ -410,7 +419,9 @@ export function loadConfigForSetup(): AppConfig {
 
 function parseConfig(value: unknown, path: string): AppConfig {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`Invalid configuration object in ${path}`);
-  const parsed = value as Partial<AppConfig>;
+  const parsed = { ...value } as Partial<AppConfig> & { useSavedChats?: unknown };
+  // Retire the old chat-mode preference without invalidating existing installations.
+  delete parsed.useSavedChats;
   if (parsed.version !== 3) throw new Error(`Unsupported configuration version in ${path}; rerun setup to migrate it`);
   if (parsed.purpose !== undefined && parsed.purpose !== "dev-harness") {
     throw new Error(`Invalid configuration purpose in ${path}`);
@@ -436,6 +447,7 @@ function parseConfig(value: unknown, path: string): AppConfig {
     throw new Error(`Zero Risk requires the launcher browser host in ${path}`);
   }
   if (!Number.isInteger(parsed.port) || parsed.port! < 1 || parsed.port! > 65_535) throw new Error(`Invalid port in ${path}`);
+  const agentResponsesPort = parseAgentResponsesPort(parsed.agentResponsesPort);
   if (!Number.isSafeInteger(parsed.contextWindow) || parsed.contextWindow! <= 0) {
     throw new Error(`Invalid contextWindow in ${path}`);
   }
@@ -559,10 +571,6 @@ function parseConfig(value: unknown, path: string): AppConfig {
     throw new Error(`Invalid experimentalFreshConversationPerTurn in ${path}`);
   }
   const experimentalFreshConversationPerTurn = parsed.experimentalFreshConversationPerTurn === true;
-  if (parsed.useSavedChats !== undefined && typeof parsed.useSavedChats !== "boolean") {
-    throw new Error(`Invalid useSavedChats in ${path}`);
-  }
-  const useSavedChats = parsed.useSavedChats !== false;
   if (browserInteractionMode === "manual" && experimentalSkillAttachments) {
     throw new Error(`Zero Risk does not support Skills as files in ${path}`);
   }
@@ -583,6 +591,7 @@ function parseConfig(value: unknown, path: string): AppConfig {
     automaticAppName,
     manualAppName,
     browserInteractionMode,
+    agentResponsesPort,
     subagentProtocol,
     solAvailable,
     proAvailable,
@@ -590,7 +599,6 @@ function parseConfig(value: unknown, path: string): AppConfig {
     composerPredictionsEnabled,
     experimentalSkillAttachments,
     experimentalFreshConversationPerTurn,
-    useSavedChats,
     zeroRiskProEnabled,
   } as AppConfig;
 }
@@ -648,7 +656,6 @@ export function providerConfig(config: AppConfig): CodexProviderConfig {
       experimentalBiggerContext: manual ? false : config.experimentalBiggerContext,
       experimentalSkillAttachments: manual ? false : config.experimentalSkillAttachments,
       experimentalFreshConversationPerTurn: !manual && config.experimentalFreshConversationPerTurn === true,
-      useSavedChats: config.useSavedChats === true,
       ...(config.stallTimeoutSec !== undefined ? { stallTimeoutSec: config.stallTimeoutSec } : {}),
       autoApproveToolCalls: manual ? false : config.autoApproveToolCalls,
     },

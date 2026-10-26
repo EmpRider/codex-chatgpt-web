@@ -5,6 +5,40 @@ const { renameAtomicFile, writePrivateFileAtomic } = require("./atomic-file.cjs"
 const MAX_LOG_BYTES = 4 * 1024 * 1024;
 const MAX_MEMORY_RECORDS = 300;
 const MAX_LOG_STRING_CHARS = 16 * 1024;
+const GATEWAY_ACTIVITY_PREFIX = "[agent-responses.activity] ";
+const GATEWAY_ACTIVITY_LEVELS = { DEBUG: "debug", INFO: "info", WARN: "warn", ERROR: "error" };
+const GATEWAY_ACTIVITY_FIELDS = new Set([
+  "version", "at", "level", "category", "event", "phase", "code", "http_status",
+  "duration_ms", "count", "buffer_bytes", "request_hash", "session_hash", "turn_hash",
+]);
+
+function parseGatewayActivityLine(line) {
+  if (typeof line !== "string" || !line.startsWith(GATEWAY_ACTIVITY_PREFIX) || line.length > 2048) return null;
+  try {
+    const event = JSON.parse(line.slice(GATEWAY_ACTIVITY_PREFIX.length));
+    if (!event || Array.isArray(event) || event.version !== 1 || !Object.keys(event).every(key => GATEWAY_ACTIVITY_FIELDS.has(key))) return null;
+    if (!Object.hasOwn(GATEWAY_ACTIVITY_LEVELS, event.level)
+      || !["api", "journal", "browser", "broker", "mcp", "recovery"].includes(event.category)
+      || typeof event.event !== "string" || !/^[a-z][a-z_]{1,63}$/.test(event.event)
+      || typeof event.phase !== "string" || !/^[a-z][a-z_]{1,31}$/.test(event.phase)
+      || typeof event.code !== "string" || !/^[a-z][a-z_]{1,31}$/.test(event.code)
+      || typeof event.at !== "string" || !/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/.test(event.at)) return null;
+    const detail = { phase: event.phase, code: event.code };
+    for (const field of ["http_status", "duration_ms", "count", "buffer_bytes"]) {
+      if (field in event) {
+        if (!Number.isSafeInteger(event[field]) || event[field] < 0 || event[field] > 86_400_000) return null;
+        detail[field] = event[field];
+      }
+    }
+    for (const field of ["request_hash", "session_hash", "turn_hash"]) {
+      if (field in event) {
+        if (typeof event[field] !== "string" || !/^[a-f0-9]{32}$/.test(event[field])) return null;
+        detail[field] = event[field];
+      }
+    }
+    return { level: GATEWAY_ACTIVITY_LEVELS[event.level], event: `agent_responses.${event.category}.${event.event}`, detail };
+  } catch { return null; }
+}
 
 function redactText(value) {
   const redacted = value
@@ -223,9 +257,11 @@ function registerLoggedIpc(ipcMain, logger, channel, handler) {
 }
 
 module.exports = {
+  GATEWAY_ACTIVITY_PREFIX,
   createLogger,
   exportSanitizedLogs,
   installProcessDiagnosticGuards,
+  parseGatewayActivityLine,
   readRecent,
   redactExportText,
   redactText,
