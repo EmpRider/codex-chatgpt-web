@@ -91,7 +91,7 @@ test("unsupported semantic request controls cannot be silently ignored", () => {
   const base = { model, input: "Hi" };
   for (const unsupported of [
     { temperature: 0.2 }, { top_p: 0.8 },
-    { text: { format: { type: "json_object" } } }, { reasoning: { effort: "high" } },
+    { text: { format: { type: "json_object" } } }, { reasoning: { summary: "detailed" } },
     { unknown_control: { mode: "privileged" } },
   ]) {
     let rejection: unknown;
@@ -101,6 +101,21 @@ test("unsupported semantic request controls cannot be silently ignored", () => {
     expect((rejection as AgentResponsesRequestError).status).toBe(400);
   }
   expect(parseAgentResponsesRequest({ ...base, stream: false, parallel_tool_calls: false }).stream).toBe(false);
+});
+
+test("Responses reasoning effort supports flat and nested forms without silently changing semantics", () => {
+  const base = { model, input: "Hi" };
+  expect(parseAgentResponsesRequest({ ...base, reasoning_effort: "max" }).reasoningEffort).toBe("max");
+  expect(parseAgentResponsesRequest({ ...base, reasoning: { effort: "high" } }).reasoningEffort).toBe("high");
+  expect(parseAgentResponsesRequest({ ...base, reasoning_effort: "medium", reasoning: { effort: "medium" } })
+    .reasoningEffort).toBe("medium");
+  for (const invalid of [null, 2, "extreme", "HIGH"]) {
+    expect(() => parseAgentResponsesRequest({ ...base, reasoning_effort: invalid })).toThrow(AgentResponsesRequestError);
+  }
+  expect(() => parseAgentResponsesRequest({ ...base, reasoning_effort: "max", reasoning: { effort: "low" } }))
+    .toThrow("reasoning_effort and reasoning.effort must match");
+  expect(() => parseAgentResponsesRequest({ ...base, reasoning: { effort: "high", summary: "auto" } }))
+    .toThrow("reasoning must contain only the supported effort field");
 });
 
 test("Responses accepts 9Router's translated max_tokens model probe as an output budget", () => {

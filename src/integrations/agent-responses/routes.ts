@@ -2,7 +2,7 @@ import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import { bridgeToResponsesSSE, buildResponseJSON } from "../../bridge";
 import { AsyncEventQueue } from "../../event-queue";
 import { HttpBodyReadError, readJsonRequestBody } from "../../http-body";
-import { availableChatGptWebModelRoutes, requireChatGptWebModelRoute,
+import { availableChatGptWebModelRoutes, chatGptWebRouteEfforts, requireChatGptWebModelRoute,
   resolveChatGptWebContextLimits, CHATGPT_LUNA_BROWSER_INPUT_TOKEN_BUDGET,
   CHATGPT_WEB_PLATFORM_RESERVE_TOKENS, CHATGPT_WEB_LUNA_BACKEND_MODEL } from "../../chatgpt-web-models";
 import { providerConfig, type AppConfig } from "../../config";
@@ -190,6 +190,16 @@ export class AgentResponsesProvider {
       let route: ReturnType<typeof requireChatGptWebModelRoute>;
       try { route = requireChatGptWebModelRoute(parsed.model, caps); }
       catch { throw new AgentResponsesRequestError("Unknown or unavailable model", 400); }
+      if (parsed.reasoningEffort !== undefined) {
+        const available = chatGptWebRouteEfforts(route, caps);
+        if (!available.includes(parsed.reasoningEffort)) {
+          throw new AgentResponsesRequestError(
+            `Reasoning effort ${JSON.stringify(parsed.reasoningEffort)} is unavailable for ${JSON.stringify(parsed.model)}; available: ${available.join(", ")}`,
+            422,
+          );
+        }
+        route = requireChatGptWebModelRoute(parsed.model, caps, parsed.reasoningEffort);
+      }
       if (route.interactionMode !== "automatic") {
         throw new AgentResponsesRequestError("Manual browser mode is unsupported", 422);
       }

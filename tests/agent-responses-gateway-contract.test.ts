@@ -154,6 +154,54 @@ test("9Router model check accepts a translated max_output_tokens budget over Res
   } finally { provider.close(); }
 });
 
+test("Responses reasoning selects real model effort and rejects unsupported modes before Send", async () => {
+  const Provider = await gatewayConstructor();
+  const manager = fakeManager();
+  const efforts: string[] = [];
+  manager.start = async (...args: unknown[]) => {
+    efforts.push((args[1] as { adapterEffort: string }).adapterEffort);
+    return { text: "hi", calls: [], finished: true };
+  };
+  const provider = new Provider(config(), {} as TurnBroker, bearer, manager);
+  try {
+    const accepted = await provider.handle(post(JSON.stringify({ model, input: "Hi", stream: true,
+      reasoning_effort: "medium" }), bearer), "/v1/responses");
+    expect(accepted.status).toBe(200);
+    expect(await accepted.text()).toContain("response.completed");
+    expect(efforts).toEqual(["medium"]);
+
+    const denied = await provider.handle(post(JSON.stringify({ model, input: "Hi",
+      reasoning_effort: "max" }), bearer), "/v1/responses");
+    expect(denied.status).toBe(422);
+    expect((await denied.json() as { error: { message: string } }).error.message)
+      .toContain('Reasoning effort "max" is unavailable');
+    expect(efforts).toEqual(["medium"]);
+  } finally { provider.close(); }
+});
+
+test("GPT-6 Sol routes requested High and reports Max as unavailable without browser Send", async () => {
+  const Provider = await gatewayConstructor();
+  const manager = fakeManager();
+  const efforts: string[] = [];
+  manager.start = async (...args: unknown[]) => {
+    efforts.push((args[1] as { adapterEffort: string }).adapterEffort);
+    return { text: "hi", calls: [], finished: true };
+  };
+  const provider = new Provider({ ...config(), solAvailable: true }, {} as TurnBroker, bearer, manager);
+  const sol = "chatgpt-web/gpt-6-sol";
+  try {
+    const accepted = await provider.handle(post(JSON.stringify({ model: sol, input: "Hi",
+      reasoning: { effort: "medium" } }), bearer), "/v1/responses");
+    expect(accepted.status).toBe(200);
+    expect(efforts).toEqual(["medium"]);
+    const rejected = await provider.handle(post(JSON.stringify({ model: sol, input: "Hi",
+      reasoning_effort: "max" }), bearer), "/v1/responses");
+    expect(rejected.status).toBe(422);
+    expect((await rejected.json() as { error: { message: string } }).error.message).toContain("medium, high");
+    expect(efforts).toEqual(["medium"]);
+  } finally { provider.close(); }
+});
+
 test("host, browser Origin, unknown route and untrusted tools cannot enter an external turn", async () => {
   const Provider = await gatewayConstructor();
   const manager = fakeManager();

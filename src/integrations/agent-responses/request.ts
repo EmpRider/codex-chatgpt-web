@@ -1,6 +1,7 @@
 import type { CodexTool } from "../../types";
 import type { BrokerToolResult } from "../../adapters/chatgpt-web/turn-broker";
 import type { ChatGptWebPromptImage } from "../../adapters/chatgpt-web/prompt";
+import type { ChatGptWebCodexEffort } from "../../chatgpt-web-models";
 import { normalizeAgentResponsesTool } from "./tool-policy";
 import { AgentResponsesRequestError } from "./tool-policy";
 
@@ -14,6 +15,8 @@ export interface AgentResponsesRequest {
   tools: CodexTool[];
   toolChoice: "auto" | "none" | "required" | { name: string };
   parallelToolCalls: boolean;
+  /** Explicit model reasoning mode; validated against account capabilities before browser Send. */
+  reasoningEffort?: ChatGptWebCodexEffort;
   /** Best-effort output budget: ChatGPT Web does not expose an exact token limiter. */
   maxOutputTokens?: number;
   outputs: AgentResponsesToolOutput[];
@@ -28,6 +31,11 @@ const object = (value: unknown): Record<string, unknown> | undefined =>
 const SUPPORTED_REQUEST_FIELDS = new Set([
   "model", "input", "instructions", "tools", "tool_choice", "parallel_tool_calls", "stream",
   "background", "store", "truncation", "previous_response_id", "conversation", "max_output_tokens",
+  "reasoning_effort", "reasoning",
+]);
+
+const REASONING_EFFORTS = new Set<ChatGptWebCodexEffort>([
+  "low", "medium", "high", "xhigh", "max", "ultra",
 ]);
 
 function extractText(value: unknown, images?: ChatGptWebPromptImage[], refPrefix = "img"): string {
@@ -152,6 +160,19 @@ export function parseAgentResponsesRequest(value: unknown): AgentResponsesReques
     && (!Number.isSafeInteger(body.max_output_tokens) || (body.max_output_tokens as number) < 1)) {
     throw new AgentResponsesRequestError("max_output_tokens must be a positive integer", 422);
   }
+  const reasoning = body.reasoning === undefined ? undefined : object(body.reasoning);
+  if (body.reasoning !== undefined && (!reasoning
+    || Object.keys(reasoning).some(key => key !== "effort"))) {
+    throw new AgentResponsesRequestError("reasoning must contain only the supported effort field", 400);
+  }
+  if (body.reasoning_effort !== undefined && reasoning?.effort !== undefined
+    && body.reasoning_effort !== reasoning.effort) {
+    throw new AgentResponsesRequestError("reasoning_effort and reasoning.effort must match", 400);
+  }
+  const requestedEffort = body.reasoning_effort === undefined ? reasoning?.effort : body.reasoning_effort;
+  if (requestedEffort !== undefined && !REASONING_EFFORTS.has(requestedEffort as ChatGptWebCodexEffort)) {
+    throw new AgentResponsesRequestError("Unsupported reasoning effort; expected low, medium, high, xhigh, max or ultra", 422);
+  }
   if (typeof body.model !== "string" || !body.model.trim() || body.model.length > 200) {
     throw new AgentResponsesRequestError("A model ID is required");
   }
@@ -265,6 +286,7 @@ export function parseAgentResponsesRequest(value: unknown): AgentResponsesReques
     tools,
     toolChoice,
     parallelToolCalls: body.parallel_tool_calls !== false,
+    ...(requestedEffort === undefined ? {} : { reasoningEffort: requestedEffort as ChatGptWebCodexEffort }),
     ...(body.max_output_tokens === undefined ? {} : { maxOutputTokens: body.max_output_tokens as number }),
     outputs,
     newUserAfterToolHistory: lastToolResultIndex >= 0 && lastUserIndex > lastToolResultIndex,
