@@ -2,10 +2,10 @@
   "task_id": "MCP-RECOVERY",
   "branch": "feat/generic-openai-api-module-20261026",
   "baseline_head": "47893aae5df98a7e73245faacdd1aaee37cda775",
-  "ledger_head": "3293e5144bba494693a26c3199c6e5edbd9f0d84",
+  "ledger_head": "bc5b416749a2c43665c8d9aecbaa6615ec8e630e",
   "origin": "https://github.com/EmpRider/codex-chatgpt-web.git",
   "attribution": "Co-Authored-By: Claude Code <noreply@anthropic.com>",
-  "status": "LEDGER_PUSHED — T1 released; T2-DIAG confirmed; no production remedy selected",
+  "status": "LEDGER_UPDATED — T2-DIAG-FIXTURE-DEFECT resolved; awaiting ledger push before fixture edit release",
   "preserved_user_edits": [
     "src/integrations/agent-responses/session-manager-wrapper.ts (untracked, 300s owner lease)",
     "src/integrations/agent-responses/routes.ts (modified, selects wrapper)"
@@ -57,10 +57,30 @@
     },
     {
       "id": "T2-DIAG-FIXTURE-DEFECT",
-      "title": "Fixture defect remediation (distinct from production fix)",
-      "scope": "Fix gateway-contract.test.ts fixture isolation to use temp app-home with cleanup. CONDITIONAL on EDO review after T2-DIAG-DISABLED-KEY evidence. Separate from any production admission change.",
-      "condition": "EDO must scope fixture-only remedy after reviewing T2-DIAG-DISABLED-KEY evidence",
-      "status": "BLOCKED_ON_EDO_REVIEW"
+      "title": "Fixture defect remediation (EDO RESOLVED)",
+      "file": "tests/agent-responses-gateway-contract.test.ts",
+      "scope": "Fixture-only patch. No production API/route/key-loader changes. No null cast. No runner/global framework changes.",
+      "edo_resolution": {
+        "decision": "ACCEPT implementation proposal + reliability challenge",
+        "implementation_constraints": [
+          "Fresh empty temp app home for disabled-key fixture/imports",
+          "Override CODEX_CHATGPT_WEB_HOME solely around synchronous constructor",
+          "Exact previous value/delete restored in finally before any await, including constructor throw",
+          "Temp dir removed even on constructor/assertion/provider.close throw (nested finally)",
+          "Existing explicit-bearer assertions unchanged"
+        ],
+        "rejected_approaches": [
+          "null cast",
+          "production API/route/key-loader changes",
+          "runner/global framework changes"
+        ],
+        "qa_requirement": "Rerun exact isolated child test under empty AND synthetic provisioned parent homes; prior contrast is baseline red, not patched green"
+      },
+      "assigned_implementation": "a94d40c7ce439b957 (TL tiny fixture patch after gate)",
+      "assigned_qa": "a46f4d002a6357180",
+      "assigned_reviewer": "a010639c3a2e2e6ee",
+      "independence_note": "T1 developer afd876c7e6a07954f remains uninterrupted; TL implements fixture patch separately",
+      "status": "AWAITING_LEDGER_PUSH_BEFORE_EDIT_RELEASE"
     },
     {
       "id": "T2-DIAG-EPERM",
@@ -123,7 +143,7 @@
       "unconditional 409",
       "misattributed withdrawn endpoint/RPC-cure proposals"
     ],
-    "verdict_status": "bounded characterization approved; no production remedy selected"
+    "verdict_status": "bounded characterization approved; no production remedy selected; T2-DIAG-FIXTURE-DEFECT resolved"
   },
   "explicit_deferrals": [
     "Five-tab saturation/reclamation stress: no lifecycle/resource-policy change or demonstrated capacity defect",
@@ -131,13 +151,15 @@
     "Release-failure and staggered sibling expansion: do not duplicate existing coverage automatically"
   ],
   "ledger_push_sequence": [
-    "1. Sanitized ledger commit (this file only) to feat/generic-openai-api-module-20261026 — DONE at 3293e51",
-    "2. Verify remote SHA — DONE (3293e5144bba494693a26c3199c6e5edbd9f0d84)",
+    "1. Sanitized ledger commit (this file only) to feat/generic-openai-api-module-20261026 — DONE at bc5b416",
+    "2. Verify remote SHA — DONE (bc5b416749a2c43665c8d9aecbaa6615ec8e630e)",
     "3. Release T1 developer afd876c7e6a07954f for test-only edits — DONE",
-    "4. T1 characterization commit + push (after QA pass)",
-    "5. T2-DIAG-FIXTURE-DEFECT commit + push ONLY if EDO releases scope",
-    "6. T2-FIX commit + push ONLY if condition met and EDO releases scope",
-    "7. T3 review sign-off commit + push"
+    "4. Update ledger with T2-DIAG-FIXTURE-DEFECT EDO resolution — PENDING COMMIT/PUSH",
+    "5. Release TL for fixture-only edit after ledger push verified",
+    "6. T1 characterization commit + push (after QA pass)",
+    "7. T2-DIAG-FIXTURE-DEFECT commit + push (after QA rerun under both homes)",
+    "8. T2-FIX commit + push ONLY if condition met and EDO releases scope",
+    "9. T3 review sign-off commit + push"
   ],
   "no_merge_pr_release": true,
   "artifacts": [
