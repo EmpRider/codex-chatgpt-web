@@ -1,0 +1,140 @@
+{
+  "task_id": "MCP-RECOVERY",
+  "branch": "feat/generic-openai-api-module-20261026",
+  "baseline_head": "47893aae5df98a7e73245faacdd1aaee37cda775",
+  "origin": "https://github.com/EmpRider/codex-chatgpt-web.git",
+  "attribution": "Co-Authored-By: Claude Code <noreply@anthropic.com>",
+  "status": "AUTHORIZED — ledger-only commit pending; no production remedy selected",
+  "preserved_user_edits": [
+    "src/integrations/agent-responses/session-manager-wrapper.ts (untracked, 300s owner lease)",
+    "src/integrations/agent-responses/routes.ts (modified, selects wrapper)"
+  ],
+  "production_freeze": "All production changes including wrapper deletion frozen until reproduced supported-flow failure and scoped EDO remedy exist. Current 300s route behavior is observable baseline, not endorsed fix.",
+  "tasks": [
+    {
+      "id": "T1",
+      "title": "Bounded characterization tests (two-gap scope)",
+      "scope": "Test edits only. No production changes. Uses existing seams and Bun fake timers (in-process only).",
+      "assigned_developer": "afd876c7e6a07954f",
+      "assigned_qa": "a46f4d002a6357180",
+      "assigned_reviewer": "a010639c3a2e2e6ee",
+      "subtasks": {
+        "T1a": {
+          "file": "tests/agent-responses-continuation.test.ts",
+          "scope": "Owner TTL before/at/after boundary via narrowly scoped fake timers; always restore. Assert expired owner rejects even with live RPC; no unsafe replay. Preserve broker capability lifetime independently. Reuse existing fixture; do not duplicate existing 40ms/75ms tests without added boundary assertion."
+        },
+        "T1b": {
+          "file": "tests/agent-responses-mcp.test.ts",
+          "scope": "Paired real generic manager + MCP timeout/late-continuation test using real handler/release path. Owner TTL exceeds scaled environment TTL; child connected before deadline starts. Assert retirement/nonretryable MCP result and rejected late full-batch handoff without replay. Label as environment-TTL scaling, not owner expiry or proof of 90s cap. Test-only broker fixture may supply existing registration TTL seam; production APIs unchanged. If seam cannot preserve real path, report exact gap before expanding code."
+        }
+      },
+      "acceptance_criteria": [
+        "T1a demonstrates expired-owner rejection at exact boundary with controlled callback ordering",
+        "T1b demonstrates MCP retirement/nonretryable result and late-handoff rejection via real release path",
+        "All tests pass with bun test commands below",
+        "No swallowed errors, no journal TTL eviction changes, no extra Clock interface, no production clock policy changes"
+      ],
+      "qa_commands": [
+        "bun test ./tests/agent-responses-continuation.test.ts ./tests/agent-responses-session.test.ts ./tests/agent-responses-mcp.test.ts ./tests/turn-broker-diagnostics.test.ts --timeout 15000",
+        "bun test ./tests/chatgpt-web-harness.test.ts --test-name-pattern 'an explicitly aborted MCP request|a native tool deadline|an undelivered MCP call' --timeout 15000"
+      ],
+      "known_suite_limitations": [
+        "gateway-contract.test.ts:78 disabled-key expectation fails (fixture passes undefined key, triggers ambient config load)",
+        "codex-integration.test.ts symlink EPERM at lines 73 and 108 (Windows fixture setup, not product defect)",
+        "Full suite NOT green; these are environment/isolation issues, not T1 scope"
+      ],
+      "evidence_gate": "QA a46f4d002a6357180 independent run validation + reviewer a010639c3a2e2e6ee sign-off before any T2 consideration",
+      "status": "PENDING_LEDGER_PUSH"
+    },
+    {
+      "id": "T2-DIAG-DISABLED-KEY",
+      "title": "Isolated disabled-key diagnosis (read-only diagnostic)",
+      "scope": "Diagnose gateway-contract.test.ts:78 failure using fresh scoped direct runner with temp app home supplied BEFORE import. No source edits, no remedy selected.",
+      "assigned_reliability": "a0100f7314f249e0a",
+      "status": "IN_PROGRESS_READ_ONLY",
+      "finding": "Hypothesized test isolation defect: fixture passes undefined key triggering default load from ambient config/home. Code-derived conditional cause, not runtime reproduction."
+    },
+    {
+      "id": "T2-DIAG-EPERM",
+      "title": "EPERM symlink classification (environment limitation)",
+      "scope": "Classify codex-integration.test.ts symlink EPERM failures. No permission/config changes, no remedy.",
+      "assigned_architecture": "a6bd9846fc0e4b7b5",
+      "status": "CLASSIFIED_ENVIRONMENT_LIMITATION",
+      "finding": "EPERM at fixture setup (lines 73/108) before product actions. Temp-only fixtures, exact Windows denial mechanism unknown. Not a product defect."
+    },
+    {
+      "id": "T2-FIX",
+      "title": "Conditional production fix (NOT SELECTED)",
+      "scope": "CONDITIONAL on T1 reproducing supported-flow failure AND EDO scoping remedy within user design boundaries. No remedy currently selected.",
+      "condition": "Reproduced failure in supported flow + scoped EDO remedy required before any edit",
+      "status": "BLOCKED_NO_DEFECT_REPRODUCED"
+    },
+    {
+      "id": "T3",
+      "title": "Independent verification and review",
+      "scope": "Run focused QA commands, verify each new test case, then authorized project suite subset. Report all failures by exact name.",
+      "assigned_reviewer": "a010639c3a2e2e6ee",
+      "acceptance_criteria": [
+        "All T1 evidence verified independently",
+        "Red/green documented for any actual bug fix (characterization expected to pass baseline is not falsely called defect RED)",
+        "Task-specific commit/push through PM ledger workflow"
+      ],
+      "evidence_gate": "Reviewer sign-off required before any T2-FIX consideration",
+      "status": "BLOCKED_ON_T1"
+    }
+  ],
+  "council_record": {
+    "edo": "a94d40c7ce439b957",
+    "advisors": {
+      "architecture": "a6bd9846fc0e4b7b5",
+      "implementation": "afd876c7e6a07954f",
+      "reliability": "a0100f7314f249e0a",
+      "qa": "a46f4d002a6357180",
+      "alternative": "a326ea44f059776a0"
+    },
+    "peer_reviewers": [
+      "aa0d9a103073b79f8",
+      "aa7a6643f677b3542",
+      "ad9161c36512622e7",
+      "a49e8b9303fab798f",
+      "a087f9f0d483e4ac7"
+    ],
+    "independent_record_reviewer": "a010639c3a2e2e6ee",
+    "pm": "a5af1ee843f73d915",
+    "excluded": ["a39176f2a399c987d (wrong-worktree verifier)"],
+    "rebuttals_accepted": [
+      "owner+every RPC live required; expired owner rejects even with live RPC",
+      "complete-batch validation precedes sequential ACK with no rollback",
+      "protocol-specific timeout errors (codex_tool_timeout/nonretryable vs AggregateError)",
+      "scaled real handler/broker polling tests allowed without live-host claims",
+      "partial ACK consumption confirmed; assert close/revoke attempt, no replay/fabrication"
+    ],
+    "rebuttals_rejected": [
+      "contradictory expired-owner success criterion",
+      "zero-consumption after partial ACK",
+      "unconditional 409",
+      "misattributed withdrawn endpoint/RPC-cure proposals"
+    ],
+    "verdict_status": "bounded characterization approved; no production remedy selected"
+  },
+  "explicit_deferrals": [
+    "Five-tab saturation/reclamation stress: no lifecycle/resource-policy change or demonstrated capacity defect",
+    "New multi-poll sequence: no polling feature changed; existing bounded behavior preserved",
+    "Release-failure and staggered sibling expansion: do not duplicate existing coverage automatically"
+  ],
+  "ledger_push_sequence": [
+    "1. Sanitized ledger commit (this file only) to feat/generic-openai-api-module-20261026",
+    "2. Verify remote SHA",
+    "3. Release T1 developer afd876c7e6a07954f for test-only edits",
+    "4. T1 characterization commit + push (after QA pass)",
+    "5. T2-FIX commit + push ONLY if condition met and EDO releases scope",
+    "6. T3 review sign-off commit + push"
+  ],
+  "no_merge_pr_release": true,
+  "artifacts": [
+    "D:/mcp-recovery-scratch/council-ledger-handoff-input.txt",
+    "D:/mcp-recovery-scratch/council-review-context.txt",
+    "D:/mcp-recovery-scratch/council-anonymous-proposals.txt",
+    "D:/mcp-recovery-scratch/council-review-audit-input.txt"
+  ]
+}
