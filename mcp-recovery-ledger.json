@@ -2,9 +2,10 @@
   "task_id": "MCP-RECOVERY",
   "branch": "feat/generic-openai-api-module-20261026",
   "baseline_head": "47893aae5df98a7e73245faacdd1aaee37cda775",
+  "ledger_head": "3293e5144bba494693a26c3199c6e5edbd9f0d84",
   "origin": "https://github.com/EmpRider/codex-chatgpt-web.git",
   "attribution": "Co-Authored-By: Claude Code <noreply@anthropic.com>",
-  "status": "AUTHORIZED — ledger-only commit pending; no production remedy selected",
+  "status": "LEDGER_PUSHED — T1 released; T2-DIAG confirmed; no production remedy selected",
   "preserved_user_edits": [
     "src/integrations/agent-responses/session-manager-wrapper.ts (untracked, 300s owner lease)",
     "src/integrations/agent-responses/routes.ts (modified, selects wrapper)"
@@ -43,16 +44,23 @@
         "codex-integration.test.ts symlink EPERM at lines 73 and 108 (Windows fixture setup, not product defect)",
         "Full suite NOT green; these are environment/isolation issues, not T1 scope"
       ],
-      "evidence_gate": "QA a46f4d002a6357180 independent run validation + reviewer a010639c3a2e2e6ee sign-off before any T2 consideration",
-      "status": "PENDING_LEDGER_PUSH"
+      "evidence_gate": "QA a46f4d002a6357180 independent run validation + reviewer a010639c3a2e2e6ee sign-off",
+      "status": "RELEASED_FOR_IMPLEMENTATION"
     },
     {
       "id": "T2-DIAG-DISABLED-KEY",
-      "title": "Isolated disabled-key diagnosis (read-only diagnostic)",
-      "scope": "Diagnose gateway-contract.test.ts:78 failure using fresh scoped direct runner with temp app home supplied BEFORE import. No source edits, no remedy selected.",
+      "title": "Disabled-key fixture isolation defect (CONFIRMED)",
+      "scope": "Root cause reproduced by reliability a0100f7314f249e0a. Fixture passes undefined key at gateway-contract.test.ts:77 triggering routes.ts:107 default load. Product enabled behavior correct; fixture-only temp app-home isolation defect confirmed. No remedy authorized.",
       "assigned_reliability": "a0100f7314f249e0a",
-      "status": "IN_PROGRESS_READ_ONLY",
-      "finding": "Hypothesized test isolation defect: fixture passes undefined key triggering default load from ambient config/home. Code-derived conditional cause, not runtime reproduction."
+      "status": "ROOT_CAUSE_CONFIRMED_NO_REMEDY_AUTHORIZED",
+      "finding": "Controlled child with fresh temp home: empty home 1pass/0fail; synthetic key via provisionAgentResponsesKey('create') then 0pass/1fail at line 78. No real key/config read, no source edits. Candidate fix: fixture-only temp app-home isolation with restoration/cleanup, not production admission change. Remedy under targeted EDO review."
+    },
+    {
+      "id": "T2-DIAG-FIXTURE-DEFECT",
+      "title": "Fixture defect remediation (distinct from production fix)",
+      "scope": "Fix gateway-contract.test.ts fixture isolation to use temp app-home with cleanup. CONDITIONAL on EDO review after T2-DIAG-DISABLED-KEY evidence. Separate from any production admission change.",
+      "condition": "EDO must scope fixture-only remedy after reviewing T2-DIAG-DISABLED-KEY evidence",
+      "status": "BLOCKED_ON_EDO_REVIEW"
     },
     {
       "id": "T2-DIAG-EPERM",
@@ -72,7 +80,7 @@
     {
       "id": "T3",
       "title": "Independent verification and review",
-      "scope": "Run focused QA commands, verify each new test case, then authorized project suite subset. Report all failures by exact name.",
+      "scope": "Run focused QA commands, verify each new test case, then authorized project suite subset. Report all failures by exact name. Independent of T2 diagnosis tasks.",
       "assigned_reviewer": "a010639c3a2e2e6ee",
       "acceptance_criteria": [
         "All T1 evidence verified independently",
@@ -123,12 +131,13 @@
     "Release-failure and staggered sibling expansion: do not duplicate existing coverage automatically"
   ],
   "ledger_push_sequence": [
-    "1. Sanitized ledger commit (this file only) to feat/generic-openai-api-module-20261026",
-    "2. Verify remote SHA",
-    "3. Release T1 developer afd876c7e6a07954f for test-only edits",
+    "1. Sanitized ledger commit (this file only) to feat/generic-openai-api-module-20261026 — DONE at 3293e51",
+    "2. Verify remote SHA — DONE (3293e5144bba494693a26c3199c6e5edbd9f0d84)",
+    "3. Release T1 developer afd876c7e6a07954f for test-only edits — DONE",
     "4. T1 characterization commit + push (after QA pass)",
-    "5. T2-FIX commit + push ONLY if condition met and EDO releases scope",
-    "6. T3 review sign-off commit + push"
+    "5. T2-DIAG-FIXTURE-DEFECT commit + push ONLY if EDO releases scope",
+    "6. T2-FIX commit + push ONLY if condition met and EDO releases scope",
+    "7. T3 review sign-off commit + push"
   ],
   "no_merge_pr_release": true,
   "artifacts": [
