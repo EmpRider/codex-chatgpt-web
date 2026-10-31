@@ -5,7 +5,61 @@
   "ledger_head": "bc5b416749a2c43665c8d9aecbaa6615ec8e630e",
   "origin": "https://github.com/EmpRider/codex-chatgpt-web.git",
   "attribution": "Co-Authored-By: Claude Code <noreply@anthropic.com>",
-  "status": "LEDGER_UPDATED — T2-DIAG-FIXTURE-DEFECT resolved; awaiting ledger push before fixture edit release",
+  "status": "LOCAL_TESTING_BUILD_READY — boundary fix reviewed; root suite 1166 pass, 92 skip, 0 fail; rebuilt runtime smoke passed; authenticated validation and historical landing approval remain open",
+  "testing_build_2026_10_31": {
+    "installer": "launcher/artifacts/codex-web-gpt-6.1.14-win-x64.exe",
+    "sha256": "271ff6680bc73163f818005295ce4f3c619d94c38183e39a2c51b25c4e25b65f",
+    "bytes": 154045228,
+    "signature": "NotSigned",
+    "verification": "Bun 1.4.0 packaging exited 0; RELOCATABLE_RUNTIME_SMOKE_OK on rebuilt bundle",
+    "limitations": "Local testing candidate only. No installer execution, authenticated E2E, commit, push or release. Earlier transient MCP connection failures remain unexplained. Previous installer preserved in launcher/artifacts/previous-* subdirectory."
+  },
+  "boundary_fix_checkpoint_2026_10_30": {
+    "scope": "session-manager.ts evictExpired comparison only: expiresAt < Date.now() becomes expiresAt <= Date.now(); no lease duration, broker, auth or protocol changes",
+    "red": "Admission-first exact-deadline regression failed: hasPendingCall returned true; timer-first passed",
+    "green": "Both callback orderings passed on bundled Bun 1.4.0: 2 pass, 0 fail",
+    "verification": [
+      "Recovered full suite: 1164 pass, 92 skip, 2 fail; both agent-responses-mcp tests failed with MCP error -32000: Connection closed",
+      "Isolated agent-responses-mcp rerun: 2 pass, 0 fail; cause of earlier connection closures remains unproven",
+      "Full suite rerun: 1166 pass, 92 skip, 0 fail across 100 files; earlier MCP closures remain unexplained",
+      "Focused lifecycle suite: 24 pass, 0 fail; launcher suite: 422 pass, 5 skip, 0 fail",
+      "Root and launcher typecheck passed; git diff --check passed",
+      "Independent source review completed for session-manager and five changed test files: no confirmed defects; reviewer did not rerun tests and excluded preexisting routes/wrapper edits. Initial unrelated council-status report was rejected as evidence"
+    ],
+    "ruling": "Ruling: keep the reproduced one-line boundary correction as a provisional local candidate under the user's implementation request — it aligns admission with the existing expiry timer without extending authority — cost if wrong: retirement one millisecond earlier at the exact boundary. Historical scoped EDO approval is not claimed; no landing or release authorized.",
+    "installer_state": "Rebuilt with boundary fix; current hash in testing_build_2026_10_31. Older local_testing_checkpoint_2026_10_30 hash is historical only",
+    "unfinished_inventory": [
+      "Phase 0: actual ChatGPT Tasks negotiation and authenticated slow-A/fast-B timeline remain unverified",
+      "Phase 1: MCP invoke failures still release the whole binding; atomic queued-only cancellation and bounded tombstones are not implemented",
+      "Phase 2: exact-deadline owner admission candidate implemented, full suite green, independent source review found no confirmed defects; historical EDO landing gate remains open",
+      "Generic attempt-journal uses an in-memory Map; durable retry barrier/recovery requires a separately scoped persistence and acknowledgment contract",
+      "Phase 3: task-bound browser retention and negotiated Tasks support remain conditional; no SDK migration or incremental continuation authorized by capability evidence",
+      "Phase 4: real-host deadline, multi-hour, resource-capacity, authenticated Windows clean-install/upgrade and cross-platform acceptance remain open",
+      "Historical T1/T2/T3 named-agent sign-offs and commit/push rows are not current completion evidence"
+    ]
+  },
+  "local_testing_checkpoint_2026_10_30": {
+    "installer": "launcher/artifacts/codex-web-gpt-6.1.14-win-x64.exe",
+    "sha256": "cda7c28f197fc948d61d6a76fafecd9ae1e1bfb6522dc5d522aab916cb0c54c7",
+    "runtime": "Bun 1.4.0, Windows x64; unsigned installer",
+    "verification": [
+      "Root and launcher typecheck passed",
+      "Final root suite on bundled Bun 1.4.0: 1165 pass, 92 skip, 0 fail across 100 files",
+      "Scaled MCP timeout test passed three additional consecutive runs",
+      "Launcher: 422 pass, 5 skip, 0 fail",
+      "Fixture isolation/gateway/Codex integration: 63 pass, 2 Windows symlink privilege skips, 0 fail",
+      "T1 focused lifecycle suite: 23 pass, 0 fail",
+      "Native MCP abort/deadline subset: 3 pass, 0 fail",
+      "Relocatable bundled runtime smoke passed",
+      "Independent source review approved fixture and T1 test changes; reviewer did not rerun tests"
+    ],
+    "limitations": [
+      "No authenticated ChatGPT end-to-end or installer execution",
+      "T1b scales environment TTL; does not prove real-host 90-second deadline behavior",
+      "Existing 300-second wrapper preserved, not endorsed as a production remedy",
+      "No commit, push, merge or release; historical workflow statuses below are not updated sign-offs"
+    ]
+  },
   "preserved_user_edits": [
     "src/integrations/agent-responses/session-manager-wrapper.ts (untracked, 300s owner lease)",
     "src/integrations/agent-responses/routes.ts (modified, selects wrapper)"

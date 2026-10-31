@@ -9,6 +9,11 @@ const EVENTS = [
   "send_unknown", "browser_rebound", "browser_finished", "tool_batch_delivered",
   "tool_results_received", "tool_results_returned", "tool_results_rejected", "owner_retired", "session_retired",
   "recovery_observed",
+  "invoke_started", "invoke_completed", "invoke_failed",
+  "cancel_attempted", "cancel_proved", "cancel_failed",
+  "turn_released", "turn_release_failed",
+  "journal_storage_failed", "journal_advanced",
+  "capability_observed", "call_received", "reply_sent", "reply_send_failed", "transport_closed", "uncorrelated_call",
 ] as const;
 const PHASES = [
   "admission", "auth", "validation", "journal", "send", "accepted", "tools",
@@ -17,7 +22,8 @@ const PHASES = [
 const CODES = [
   "ok", "unauthorized", "invalid_request", "model_rejected", "conflict", "capacity",
   "unavailable", "timeout", "storage_failed", "unknown_outcome", "owner_mismatch",
-  "partial_results", "cancelled", "internal",
+  "partial_results", "cancelled", "internal", "tasks_advertised", "tasks_not_advertised",
+  "send_possible", "send_activated", "browser_accepted", "tool_handoff_possible", "tools_pending", "response_prepared", "outcome_unknown",
 ] as const;
 const HTTP_STATUSES = [200, 400, 401, 403, 404, 409, 413, 415, 422, 429, 500, 503, 504, 507] as const;
 

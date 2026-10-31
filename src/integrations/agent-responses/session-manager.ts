@@ -380,7 +380,7 @@ export class AgentResponsesSessionManager {
 
   private evictExpired(): void {
     for (const session of this.sessions) {
-      if (session.outstanding.size > 0 && session.expiresAt < Date.now()) {
+      if (session.outstanding.size > 0 && session.expiresAt <= Date.now()) {
         this.close(session, new Error("Agent Responses agent tool results expired"));
       }
     }

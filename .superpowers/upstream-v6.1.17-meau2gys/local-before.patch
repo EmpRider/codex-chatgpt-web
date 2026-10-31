@@ -1,0 +1,1182 @@
+diff --git a/.gitignore b/.gitignore
+index 8ebaba9..fb3fc05 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -17,4 +17,7 @@ launcher/artifacts/
+ .playwright-cli/
+ output/
+ notes.md
+-/.agents/skills/github-pairing/
++/.agents/*
++.claude/*
++.specify/*
++bash.exe.stackdump
+diff --git a/mcp-recovery-ledger.json b/mcp-recovery-ledger.json
+index cc79c92..d831f93 100644
+--- a/mcp-recovery-ledger.json
++++ b/mcp-recovery-ledger.json
+@@ -5,7 +5,61 @@
+   "ledger_head": "bc5b416749a2c43665c8d9aecbaa6615ec8e630e",
+   "origin": "https://github.com/EmpRider/codex-chatgpt-web.git",
+   "attribution": "Co-Authored-By: Claude Code <noreply@anthropic.com>",
+-  "status": "LEDGER_UPDATED — T2-DIAG-FIXTURE-DEFECT resolved; awaiting ledger push before fixture edit release",
++  "status": "LOCAL_TESTING_BUILD_READY — boundary fix reviewed; root suite 1166 pass, 92 skip, 0 fail; rebuilt runtime smoke passed; authenticated validation and historical landing approval remain open",
++  "testing_build_2026_10_31": {
++    "installer": "launcher/artifacts/codex-web-gpt-6.1.14-win-x64.exe",
++    "sha256": "271ff6680bc73163f818005295ce4f3c619d94c38183e39a2c51b25c4e25b65f",
++    "bytes": 154045228,
++    "signature": "NotSigned",
++    "verification": "Bun 1.4.0 packaging exited 0; RELOCATABLE_RUNTIME_SMOKE_OK on rebuilt bundle",
++    "limitations": "Local testing candidate only. No installer execution, authenticated E2E, commit, push or release. Earlier transient MCP connection failures remain unexplained. Previous installer preserved in launcher/artifacts/previous-* subdirectory."
++  },
++  "boundary_fix_checkpoint_2026_10_30": {
++    "scope": "session-manager.ts evictExpired comparison only: expiresAt < Date.now() becomes expiresAt <= Date.now(); no lease duration, broker, auth or protocol changes",
++    "red": "Admission-first exact-deadline regression failed: hasPendingCall returned true; timer-first passed",
++    "green": "Both callback orderings passed on bundled Bun 1.4.0: 2 pass, 0 fail",
++    "verification": [
++      "Recovered full suite: 1164 pass, 92 skip, 2 fail; both agent-responses-mcp tests failed with MCP error -32000: Connection closed",
++      "Isolated agent-responses-mcp rerun: 2 pass, 0 fail; cause of earlier connection closures remains unproven",
++      "Full suite rerun: 1166 pass, 92 skip, 0 fail across 100 files; earlier MCP closures remain unexplained",
++      "Focused lifecycle suite: 24 pass, 0 fail; launcher suite: 422 pass, 5 skip, 0 fail",
++      "Root and launcher typecheck passed; git diff --check passed",
++      "Independent source review completed for session-manager and five changed test files: no confirmed defects; reviewer did not rerun tests and excluded preexisting routes/wrapper edits. Initial unrelated council-status report was rejected as evidence"
++    ],
++    "ruling": "Ruling: keep the reproduced one-line boundary correction as a provisional local candidate under the user's implementation request — it aligns admission with the existing expiry timer without extending authority — cost if wrong: retirement one millisecond earlier at the exact boundary. Historical scoped EDO approval is not claimed; no landing or release authorized.",
++    "installer_state": "Rebuilt with boundary fix; current hash in testing_build_2026_10_31. Older local_testing_checkpoint_2026_10_30 hash is historical only",
++    "unfinished_inventory": [
++      "Phase 0: actual ChatGPT Tasks negotiation and authenticated slow-A/fast-B timeline remain unverified",
++      "Phase 1: MCP invoke failures still release the whole binding; atomic queued-only cancellation and bounded tombstones are not implemented",
++      "Phase 2: exact-deadline owner admission candidate implemented, full suite green, independent source review found no confirmed defects; historical EDO landing gate remains open",
++      "Generic attempt-journal uses an in-memory Map; durable retry barrier/recovery requires a separately scoped persistence and acknowledgment contract",
++      "Phase 3: task-bound browser retention and negotiated Tasks support remain conditional; no SDK migration or incremental continuation authorized by capability evidence",
++      "Phase 4: real-host deadline, multi-hour, resource-capacity, authenticated Windows clean-install/upgrade and cross-platform acceptance remain open",
++      "Historical T1/T2/T3 named-agent sign-offs and commit/push rows are not current completion evidence"
++    ]
++  },
++  "local_testing_checkpoint_2026_10_30": {
++    "installer": "launcher/artifacts/codex-web-gpt-6.1.14-win-x64.exe",
++    "sha256": "cda7c28f197fc948d61d6a76fafecd9ae1e1bfb6522dc5d522aab916cb0c54c7",
++    "runtime": "Bun 1.4.0, Windows x64; unsigned installer",
++    "verification": [
++      "Root and launcher typecheck passed",
++      "Final root suite on bundled Bun 1.4.0: 1165 pass, 92 skip, 0 fail across 100 files",
++      "Scaled MCP timeout test passed three additional consecutive runs",
++      "Launcher: 422 pass, 5 skip, 0 fail",
++      "Fixture isolation/gateway/Codex integration: 63 pass, 2 Windows symlink privilege skips, 0 fail",
++      "T1 focused lifecycle suite: 23 pass, 0 fail",
++      "Native MCP abort/deadline subset: 3 pass, 0 fail",
++      "Relocatable bundled runtime smoke passed",
++      "Independent source review approved fixture and T1 test changes; reviewer did not rerun tests"
++    ],
++    "limitations": [
++      "No authenticated ChatGPT end-to-end or installer execution",
++      "T1b scales environment TTL; does not prove real-host 90-second deadline behavior",
++      "Existing 300-second wrapper preserved, not endorsed as a production remedy",
++      "No commit, push, merge or release; historical workflow statuses below are not updated sign-offs"
++    ]
++  },
+   "preserved_user_edits": [
+     "src/integrations/agent-responses/session-manager-wrapper.ts (untracked, 300s owner lease)",
+     "src/integrations/agent-responses/routes.ts (modified, selects wrapper)"
+diff --git a/src/activity-events.ts b/src/activity-events.ts
+index f2c125a..d7626a7 100644
+--- a/src/activity-events.ts
++++ b/src/activity-events.ts
+@@ -9,6 +9,11 @@ const EVENTS = [
+   "send_unknown", "browser_rebound", "browser_finished", "tool_batch_delivered",
+   "tool_results_received", "tool_results_returned", "tool_results_rejected", "owner_retired", "session_retired",
+   "recovery_observed",
++  "invoke_started", "invoke_completed", "invoke_failed",
++  "cancel_attempted", "cancel_proved", "cancel_failed",
++  "turn_released", "turn_release_failed",
++  "journal_storage_failed", "journal_advanced",
++  "capability_observed", "call_received", "reply_sent", "reply_send_failed", "transport_closed", "uncorrelated_call",
+ ] as const;
+ const PHASES = [
+   "admission", "auth", "validation", "journal", "send", "accepted", "tools",
+@@ -17,7 +22,8 @@ const PHASES = [
+ const CODES = [
+   "ok", "unauthorized", "invalid_request", "model_rejected", "conflict", "capacity",
+   "unavailable", "timeout", "storage_failed", "unknown_outcome", "owner_mismatch",
+-  "partial_results", "cancelled", "internal",
++  "partial_results", "cancelled", "internal", "tasks_advertised", "tasks_not_advertised",
++  "send_possible", "send_activated", "browser_accepted", "tool_handoff_possible", "tools_pending", "response_prepared", "outcome_unknown",
+ ] as const;
+ const HTTP_STATUSES = [200, 400, 401, 403, 404, 409, 413, 415, 422, 429, 500, 503, 504, 507] as const;
+ 
+diff --git a/src/adapters/chatgpt-web/mcp-observation.ts b/src/adapters/chatgpt-web/mcp-observation.ts
+index 9cf199d..dfda8bf 100644
+--- a/src/adapters/chatgpt-web/mcp-observation.ts
++++ b/src/adapters/chatgpt-web/mcp-observation.ts
+@@ -25,6 +25,15 @@ export function observeMcpToolCalls(
+   };
+   const receive = transport.onmessage;
+   transport.onmessage = (message, extra) => {
++    if ("method" in message && message.method === "initialize" && "id" in message) {
++      const version = message.params?.protocolVersion;
++      const capabilities = message.params?.capabilities;
++      const tasks = capabilities && typeof capabilities === "object" && !Array.isArray(capabilities)
++        ? (capabilities as Record<string, unknown>).tasks : undefined;
++      emit({ event: "client_capabilities",
++        protocol_version: typeof version === "string" && /^\d{4}-\d{2}-\d{2}$/.test(version) ? version : "unknown",
++        tasks_advertised: tasks !== null && typeof tasks === "object" && !Array.isArray(tasks) });
++    }
+     if ("method" in message && message.method === "tools/call" && "id" in message) {
+       const name = message.params?.name;
+       const tool = typeof name === "string" && knownTools.has(name) ? name : "unknown";
+diff --git a/src/adapters/chatgpt-web/mcp-server.ts b/src/adapters/chatgpt-web/mcp-server.ts
+index 587dc25..4a395bc 100644
+--- a/src/adapters/chatgpt-web/mcp-server.ts
++++ b/src/adapters/chatgpt-web/mcp-server.ts
+@@ -9,6 +9,7 @@ import { CODEX_COMPACTION_CONTROL_WIRE_NAME } from "./native-compaction-control"
+ import { callTurnBroker, TurnBrokerTimeoutError, type BrokerRetirementDiagnostics, type BrokerToolResult } from "./turn-broker";
+ import { observeMcpToolCalls } from "./mcp-observation";
+ import { assertAgentResponsesToolArguments } from "../../integrations/agent-responses/tool-policy";
++import { createActivityContract, type ActivityDraft } from "../../activity-events";
+ 
+ interface ClaimedTurn {
+   bindingId: string;
+@@ -500,6 +501,18 @@ export async function runChatGptMcpServer(options: {
+   contract?: ChatGptMcpContract;
+ }): Promise<void> {
+   const contract = options.contract ?? "native";
++  const activity = createActivityContract();
++  let pendingDiagnostics = 0;
++  const reportActivity = (draft: ActivityDraft, bindingId?: string, callId?: string): void => {
++    if (pendingDiagnostics >= 64) return;
++    pendingDiagnostics++;
++    void callTurnBroker(options.brokerSocketPath, { method: "diagnostic", diagnostic: draft, bindingId, callId }, 1_000)
++      .catch(() => {
++        // MCP stdout is protocol-only; broker loss leaves stderr as the diagnostic fallback.
++        const event = activity.create(draft);
++        try { if (event) console.error(`[agent-responses.activity] ${JSON.stringify(event)}`); } catch {}
++      }).finally(() => { pendingDiagnostics--; });
++  };
+   const server = new McpServer(
+     { name: contract === "safe" ? "codex-safe" : "codex-native", version: VERSION },
+     contract === "safe" ? { instructions: ZERO_RISK_MCP_INSTRUCTIONS } : undefined,
+@@ -605,16 +618,54 @@ export async function runChatGptMcpServer(options: {
+     signal?: AbortSignal,
+   ) => {
+     const timeoutMs = chatGptMcpInvocationTimeout(bound);
++    const isExternal = "kind" in bound && bound.kind === "external-agent";
++    const callId = isExternal
++      ? `call_${randomBytes(24).toString("base64url")}` : undefined;
++    const toolName = wireName(tool);
++    const diagnosticId = callId ?? randomBytes(24).toString("base64url");
++    const started = performance.now();
++    const elapsed = () => Math.min(86_400_000, Math.round(performance.now() - started));
++    reportActivity({ level: "DEBUG", category: "mcp", event: "invoke_started", phase: "send", code: "ok" }, bindingId, diagnosticId);
+     try {
+       const response = await callTurnBroker<BrokerToolResult>(options.brokerSocketPath, {
+         method: "invoke",
+         bindingId,
+-        wireName: wireName(tool),
++        ...(callId === undefined ? {} : { callId }),
++        wireName: toolName,
+         freeform: tool.freeform === true,
+         ...(tool.freeform ? { input: payload.input ?? "" } : { arguments: payload.arguments ?? {} }),
+       }, timeoutMs, signal);
++      reportActivity({ level: response.isError ? "WARN" : "INFO", category: "mcp", event: "invoke_completed",
++        phase: "completion", code: response.isError ? "internal" : "ok", duration_ms: elapsed() }, bindingId, diagnosticId);
+       return asMcpResult(response);
+     } catch (error) {
++      const errorType = error instanceof TurnBrokerTimeoutError ? "timeout"
++        : signal?.aborted ? "aborted" : "error";
++      reportActivity({ level: "ERROR", category: "mcp", event: "invoke_failed", phase: "completion",
++        code: errorType === "timeout" ? "timeout" : errorType === "aborted" ? "cancelled" : "internal",
++        duration_ms: elapsed() }, bindingId, diagnosticId);
++      let invocationError = error;
++      if (callId !== undefined) {
++        reportActivity({ level: "DEBUG", category: "mcp", event: "cancel_attempted", phase: "recovery", code: "ok" }, bindingId, diagnosticId);
++        try {
++          const cancellation = await callTurnBroker<{ cancelled: boolean }>(options.brokerSocketPath, {
++            method: "cancel_queued", bindingId, callId,
++          });
++          reportActivity({ level: "INFO", category: "mcp",
++            event: cancellation.cancelled ? "cancel_proved" : "cancel_failed",
++            phase: "recovery", code: cancellation.cancelled ? "ok" : "unknown_outcome" }, bindingId, diagnosticId);
++          if (cancellation.cancelled === true) {
++            return result({
++              code: error instanceof TurnBrokerTimeoutError ? "codex_tool_timeout" : "codex_tool_cancelled",
++              tool: toolName, retryable: false, delivery_state: "not_delivered",
++              message: "Tool invocation cancelled before delivery. No execution occurred; sibling calls remain active. Do not automatically retry.",
++            }, true);
++          }
++        } catch (cancellationError) {
++          reportActivity({ level: "WARN", category: "mcp", event: "cancel_failed", phase: "recovery", code: "unavailable" }, bindingId, diagnosticId);
++          invocationError = new AggregateError([error, cancellationError], "Could not prove tool non-delivery; retiring the entire turn");
++        }
++      }
+       // A cancelled/timed-out MCP request no longer has a consumer for the native result. Revoke
+       // the whole turn capability so the broker drops the pending invocation and every later call
+       // from that abandoned ChatGPT response fails explicitly against its retired binding.
+@@ -628,18 +679,18 @@ export async function runChatGptMcpServer(options: {
+           } : {}),
+         });
+         diagnostics = retired.diagnostics;
++        reportActivity({ level: "WARN", category: "mcp", event: retired.released ? "turn_released" : "turn_release_failed",
++          phase: "recovery", code: retired.released ? "ok" : "unknown_outcome", duration_ms: elapsed() }, bindingId, diagnosticId);
+       } catch (releaseError) {
++        reportActivity({ level: "ERROR", category: "mcp", event: "turn_release_failed", phase: "recovery", code: "unavailable" }, bindingId, diagnosticId);
+         throw new AggregateError(
+-          [error, releaseError],
++          [invocationError, releaseError],
+           "Codex Native invocation failed and its abandoned broker binding could not be retired",
+         );
+       }
++      if (invocationError !== error) throw invocationError;
+       if (error instanceof TurnBrokerTimeoutError) {
+         const toolName = wireName(tool);
+-        console.error(
+-          `[chatgpt-web-mcp] ${toolName} did not complete within ${timeoutMs}ms; retired its turn binding`
+-          + ` broker_state_at_retirement=${JSON.stringify(diagnostics ?? null)}`,
+-        );
+         return result({
+           code: "codex_tool_timeout",
+           tool: toolName,
+@@ -1046,5 +1097,21 @@ export async function runChatGptMcpServer(options: {
+     );
+   }
+ 
+-  await server.connect(observeMcpToolCalls(new StdioServerTransport(), BRIDGE_TOOL_NAMES));
++  await server.connect(observeMcpToolCalls(new StdioServerTransport(), BRIDGE_TOOL_NAMES, event => {
++    const drafts = {
++      client_capabilities: { level: "INFO", event: "capability_observed", phase: "admission",
++        code: event.tasks_advertised === true ? "tasks_advertised" : "tasks_not_advertised" },
++      call_received: { level: "DEBUG", event: "call_received", phase: "tools", code: "ok" },
++      reply_sent: { level: event.is_error || event.outcome === "protocol_error" ? "WARN" : "DEBUG",
++        event: "reply_sent", phase: "completion", code: event.is_error || event.outcome === "protocol_error" ? "internal" : "ok" },
++      reply_send_failed: { level: "ERROR", event: "reply_send_failed", phase: "completion", code: "unavailable" },
++      transport_closed: { level: "WARN", event: "transport_closed", phase: "shutdown", code: "unavailable" },
++      uncorrelated_call: { level: "WARN", event: "uncorrelated_call", phase: "tools",
++        code: event.reason === "tracking_limit" ? "capacity" : "conflict" },
++    } as const;
++    const draft = drafts[event.event as keyof typeof drafts];
++    if (draft) reportActivity({ ...draft, category: "mcp",
++      ...(typeof event.elapsed_ms === "number" ? { duration_ms: Math.max(0, Math.min(86_400_000, event.elapsed_ms)) } : {}),
++      ...(typeof event.tracked_calls === "number" ? { count: event.tracked_calls } : {}) });
++  }));
+ }
+diff --git a/src/adapters/chatgpt-web/turn-broker.ts b/src/adapters/chatgpt-web/turn-broker.ts
+index 65ae558..e19916a 100644
+--- a/src/adapters/chatgpt-web/turn-broker.ts
++++ b/src/adapters/chatgpt-web/turn-broker.ts
+@@ -1,4 +1,5 @@
+ import { createHash, randomBytes } from "node:crypto";
++import { reportAgentResponsesActivity, type ActivityDraft } from "../../activity-events";
+ import { chmodSync, existsSync, lstatSync, mkdirSync, unlinkSync } from "node:fs";
+ import { createConnection, createServer, type Server, type Socket } from "node:net";
+ import { dirname, isAbsolute, relative, resolve } from "node:path";
+@@ -111,6 +112,7 @@ interface TurnChannel {
+   queuedCallIds: string[];
+   deliveredCallIds: Set<string>;
+   invocations: Map<string, PendingInvocation>;
++  invocationIds: Map<string, "invoked" | "cancelled">;
+   waiters: Set<ToolWaiter>;
+   compactionRequested: boolean;
+   compactionResult?: BrokerToolResult;
+@@ -136,6 +138,8 @@ interface BrokerRequest {
+     | "resolve"
+     | "release"
+     | "invoke"
++    | "cancel_queued"
++    | "diagnostic"
+     | "owner_status"
+     | "owner_register"
+     | "owner_register_safe"
+@@ -174,6 +178,7 @@ interface BrokerRequest {
+   finalAnswer?: string;
+   contract?: "native" | "safe";
+   failure?: BrokerRetirementFailure;
++  diagnostic?: ActivityDraft;
+ }
+ 
+ interface BrokerResponse {
+@@ -389,6 +394,7 @@ export class TurnBroker implements TurnBrokerOwner {
+       queuedCallIds: [],
+       deliveredCallIds: new Set(),
+       invocations: new Map(),
++      invocationIds: new Map(),
+       waiters: new Set(),
+       compactionRequested: false,
+       compactionDeliveryCount: 0,
+@@ -1003,13 +1009,26 @@ export class TurnBroker implements TurnBrokerOwner {
+     if (!request || typeof request !== "object" || typeof request.id !== "string" || request.id.length === 0 || request.id.length > 256) {
+       throw new Error("turn broker request id is invalid");
+     }
+-    if (!["claim", "resolve", "release", "invoke", "owner_status", "owner_register", "owner_register_safe", "owner_update", "owner_safe_sent", "owner_next", "owner_complete", "owner_completion_fence_begin", "owner_completion_fence_commit", "owner_wait_retirement", "owner_revoke", "owner_safe_wait_start", "owner_safe_wait_completion", "owner_request_compaction", "owner_compaction_delivery_count", "safe_start", "safe_complete", "activity_complete", "submit_compaction_handoff"].includes(request.method)) {
++    if (!["diagnostic", "claim", "resolve", "release", "invoke", "cancel_queued", "owner_status", "owner_register", "owner_register_safe", "owner_update", "owner_safe_sent", "owner_next", "owner_complete", "owner_completion_fence_begin", "owner_completion_fence_commit", "owner_wait_retirement", "owner_revoke", "owner_safe_wait_start", "owner_safe_wait_completion", "owner_request_compaction", "owner_compaction_delivery_count", "safe_start", "safe_complete", "activity_complete", "submit_compaction_handoff"].includes(request.method)) {
+       throw new Error("turn broker method is invalid");
+     }
+   }
+ 
+   private async dispatch(request: BrokerRequest, socketSignal?: AbortSignal): Promise<unknown> {
+     this.prune();
++    if (request.method === "diagnostic") {
++      if (request.diagnostic?.category !== "mcp") throw new Error("Invalid diagnostic category");
++      const traceId = typeof request.bindingId === "string"
++        ? this.bindings.get(request.bindingId)?.channel.traceId ?? this.retiredBindings.get(request.bindingId)?.traceId
++        : undefined;
++      reportAgentResponsesActivity(request.diagnostic, {
++        ...(typeof request.bindingId === "string" && request.bindingId.length <= 256 && request.bindingId.length > 0
++          ? { turnId: traceId && traceId !== "unknown" ? traceId : request.bindingId } : {}),
++        ...(typeof request.callId === "string" && request.callId.length > 0 && request.callId.length <= 256
++          ? { requestId: request.callId } : {}),
++      });
++      return {};
++    }
+     if (request.method === "safe_start") {
+       if (!request.token) throw new Error("Zero Risk request_id is required");
+       return this.startSafeTurn(request.token);
+@@ -1215,6 +1234,7 @@ export class TurnBroker implements TurnBrokerOwner {
+     const binding = this.bindings.get(bindingId);
+     if (!binding) {
+       const retiredTurn = this.retiredBindings.get(bindingId);
++      if (request.method === "cancel_queued" && retiredTurn !== undefined) return { cancelled: false };
+       if (request.method === "release" && retiredTurn !== undefined) {
+         if (request.failure !== undefined) assertRetirementFailure(request.failure);
+         return { released: true, duplicate: true,
+@@ -1241,6 +1261,28 @@ export class TurnBroker implements TurnBrokerOwner {
+       };
+     }
+     if (request.method === "resolve") return { environment: binding.channel.environment };
++    const channel = binding.channel;
++    const external = "kind" in channel.environment && channel.environment.kind === "external-agent";
++    if (request.method === "cancel_queued") {
++      if (!external) return { cancelled: false };
++      const callId = request.callId;
++      if (typeof callId !== "string" || !/^call_[A-Za-z0-9_-]{32}$/.test(callId)) {
++        throw new Error("external invocation id is invalid");
++      }
++      if (channel.invocationIds.get(callId) === "cancelled") return { cancelled: true };
++      const pending = channel.invocations.get(callId);
++      if (pending?.deliveredAt !== undefined || (!pending && channel.invocationIds.has(callId))) {
++        return { cancelled: false };
++      }
++      if (!channel.invocationIds.has(callId) && channel.invocationIds.size >= 1024) return { cancelled: false };
++      // Keep pre-arrival tombstones for the whole turn; eviction could let a delayed invoke execute.
++      channel.invocationIds.set(callId, "cancelled");
++      channel.queuedCallIds = channel.queuedCallIds.filter(id => id !== callId);
++      channel.invocations.delete(callId);
++      pending?.reject(new Error("External tool invocation cancelled before delivery"));
++      console.info(`[chatgpt-web] broker trace=${channel.traceId} cancelled_before_delivery call=${callId.slice(0, 17)}`);
++      return { cancelled: true };
++    }
+     this.assertSafeHarnessRunning(binding.channel);
+     if (binding.channel.compactionRequested) {
+       const result = binding.channel.compactionResult;
+@@ -1255,7 +1297,15 @@ export class TurnBroker implements TurnBrokerOwner {
+ 
+     const wireName = request.wireName?.trim();
+     if (!wireName) throw new Error("wire tool name is required");
+-    const callId = opaqueId("call");
++    const callId = external && request.callId !== undefined
++      ? request.callId : opaqueId("call");
++    if (external && request.callId !== undefined) {
++      if (typeof callId !== "string" || !/^call_[A-Za-z0-9_-]{32}$/.test(callId)) throw new Error("external invocation id is invalid");
++      if (channel.invocationIds.has(callId)) throw new Error("External tool invocation was already attempted or cancelled");
++      // ponytail: cap each turn at 1024 identified calls; upgrade with a negotiated bounded lifecycle, never eviction.
++      if (channel.invocationIds.size >= 1024) throw new Error("External tool invocation identity limit reached");
++      channel.invocationIds.set(callId, "invoked");
++    }
+     const toolRequest: BrokerToolRequest = {
+       callId,
+       wireName,
+diff --git a/src/integrations/agent-responses/attempt-journal.ts b/src/integrations/agent-responses/attempt-journal.ts
+index 33b7ecc..07480f6 100644
+--- a/src/integrations/agent-responses/attempt-journal.ts
++++ b/src/integrations/agent-responses/attempt-journal.ts
+@@ -1,5 +1,10 @@
++import { Database } from "bun:sqlite";
+ import { createHash } from "node:crypto";
++import { chmodSync, lstatSync, mkdirSync } from "node:fs";
++import { join } from "node:path";
++import { getConfigDir } from "../../config";
+ import { AgentResponsesRequestError } from "./request";
++import { reportAgentResponsesActivity } from "../../activity-events";
+ 
+ export type AgentResponsesAttemptState = "send_possible" | "send_activated" | "browser_accepted"
+   | "tool_handoff_possible" | "tools_pending" | "response_prepared" | "outcome_unknown";
+@@ -12,11 +17,39 @@ interface AttemptRecord {
+ const MAX_RECORDS = 100_000;
+ const KEY_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{7,127}$/;
+ 
+-// Markers are scoped to a running application. The external client owns retries after exit.
+-// Sharing this Map blocks keyed replays across provider instances in the same process.
+-const liveAttempts = new Map<string, AttemptRecord>();
++function withJournal<T>(configDir: string, action: (database: Database) => T): T {
++  let database: Database | undefined;
++  try {
++    const directory = join(configDir, "integrations");
++    mkdirSync(directory, { recursive: true, mode: 0o700 });
++    if (lstatSync(directory).isSymbolicLink()) throw new Error("Journal directory is a symbolic link");
++    const path = join(directory, "agent-responses-attempts.sqlite");
++    try {
++      const entry = lstatSync(path);
++      if (!entry.isFile() || entry.isSymbolicLink()) throw new Error("Journal must be a regular file");
++    } catch (error) {
++      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
++    }
++    database = new Database(path, { create: true, strict: true });
++    if (process.platform !== "win32") chmodSync(path, 0o600);
++    database.exec("PRAGMA busy_timeout = 5000; PRAGMA synchronous = FULL;");
++    database.exec(`CREATE TABLE IF NOT EXISTS attempts (
++      key_hash TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, state TEXT NOT NULL
++    )`);
++    return action(database);
++  } catch (error) {
++    const status = error instanceof AgentResponsesRequestError ? error.status : 503;
++    reportAgentResponsesActivity({ level: status === 409 ? "WARN" : "ERROR", category: "journal",
++      event: status === 503 ? "journal_storage_failed" : "journal_failed", phase: "journal",
++      code: status === 409 ? "conflict" : status === 507 ? "capacity" : "storage_failed" });
++    if (error instanceof AgentResponsesRequestError) throw error;
++    throw new AgentResponsesRequestError("Generic Responses attempt storage unavailable; execution refused", 503);
++  } finally { database?.close(); }
++}
+ 
+ export class AgentResponsesAttemptJournal {
++  constructor(private readonly configDir = getConfigDir()) {}
++
+   claim(rawKey: string | null, body: unknown): { advance(state: AgentResponsesAttemptState): void } | undefined {
+     if (rawKey === null) return undefined;
+     if (!KEY_PATTERN.test(rawKey)) {
+@@ -24,16 +57,26 @@ export class AgentResponsesAttemptJournal {
+     }
+     const keyHash = createHash("sha256").update("agent-responses-idempotency-v1\0").update(rawKey).digest("hex");
+     const fingerprint = createHash("sha256").update(JSON.stringify(body)).digest("hex");
+-    const prior = liveAttempts.get(keyHash);
+-    if (prior) {
+-      if (prior.fingerprint !== fingerprint) {
+-        throw new AgentResponsesRequestError("Idempotency-Key was already used for another request", 409);
++    withJournal(this.configDir, database => database.transaction(() => {
++      const prior = database.query<AttemptRecord, [string]>("SELECT fingerprint, state FROM attempts WHERE key_hash = ?").get(keyHash);
++      if (prior) {
++        if (prior.fingerprint !== fingerprint) {
++          throw new AgentResponsesRequestError("Idempotency-Key was already used for another request", 409);
++        }
++        throw new AgentResponsesRequestError(`Request was already attempted (${prior.state}); automatic replay is unsafe`, 409);
+       }
+-      throw new AgentResponsesRequestError(`Request was already attempted (${prior.state}); automatic replay is unsafe`, 409);
+-    }
+-    if (liveAttempts.size >= MAX_RECORDS) throw new AgentResponsesRequestError("Too many live-process request markers", 429);
+-    const record: AttemptRecord = { fingerprint, state: "send_possible" };
+-    liveAttempts.set(keyHash, record);
+-    return { advance: state => { record.state = state; } };
++      // ponytail: retain at most 100000 attempts; require operator archival, never automatically erase replay evidence.
++      const count = database.query<{ count: number }, []>("SELECT COUNT(*) AS count FROM attempts").get()!.count;
++      if (count >= MAX_RECORDS) throw new AgentResponsesRequestError("Durable request marker capacity exceeded", 507);
++      database.query("INSERT INTO attempts (key_hash, fingerprint, state) VALUES (?, ?, 'send_possible')").run(keyHash, fingerprint);
++    }).immediate());
++    return { advance: state => {
++      withJournal(this.configDir, database => {
++        const updated = database.query("UPDATE attempts SET state = ? WHERE key_hash = ? AND fingerprint = ?")
++          .run(state, keyHash, fingerprint);
++        if (updated.changes !== 1) throw new AgentResponsesRequestError("Generic Responses attempt storage unavailable; marker missing", 503);
++      });
++      reportAgentResponsesActivity({ level: "DEBUG", category: "journal", event: "journal_advanced", phase: "journal", code: state });
++    } };
+   }
+ }
+diff --git a/src/integrations/agent-responses/routes.ts b/src/integrations/agent-responses/routes.ts
+index feff2a9..2927f15 100644
+--- a/src/integrations/agent-responses/routes.ts
++++ b/src/integrations/agent-responses/routes.ts
+@@ -12,6 +12,7 @@ import { parseAgentResponsesRequest, AgentResponsesRequestError,
+   type AgentResponsesRequest } from "./request";
+ import { AgentResponsesSessionManager, AgentResponsesContextLimitError,
+   type AgentResponsesStage } from "./session-manager";
++import { AgentResponsesSessionManagerWithExtendedLease } from "./session-manager-wrapper";
+ import { loadAgentResponsesKey } from "./key-manager";
+ import { AgentResponsesAttemptJournal } from "./attempt-journal";
+ import { estimateAgentResponsesUsage } from "./usage";
+@@ -107,7 +108,7 @@ export class AgentResponsesProvider {
+     manager?: AgentResponsesSessionManager, journal?: AgentResponsesAttemptJournal) {
+     if (key !== undefined && key.length < 43) throw new Error("Generic Responses bearer must be at least 256 bits");
+     this.key = key || undefined;
+-    this.manager = manager ?? new AgentResponsesSessionManager(broker, providerConfig(config));
++    this.manager = manager ?? new AgentResponsesSessionManagerWithExtendedLease(broker, providerConfig(config));
+     this.journal = journal ?? new AgentResponsesAttemptJournal();
+   }
+ 
+@@ -250,7 +251,7 @@ export class AgentResponsesProvider {
+       }).catch(error => {
+         if (signal.aborted) return;
+         try { attempt?.advance("outcome_unknown"); }
+-        catch { /* The live-process claim still prevents a keyed retry. */ }
++        catch { /* The durable claim still prevents a keyed retry. */ }
+         log({ level: "ERROR", category: "api", event: "request_failed", phase: "completion", code: "internal",
+           duration_ms: Math.min(86_400_000, Date.now() - started) });
+         try { queue.push({ type: "error", message: safeStageMessage(error, statusOf(error)), status: statusOf(error) }); }
+diff --git a/src/integrations/agent-responses/session-manager.ts b/src/integrations/agent-responses/session-manager.ts
+index 51cb791..399a94f 100644
+--- a/src/integrations/agent-responses/session-manager.ts
++++ b/src/integrations/agent-responses/session-manager.ts
+@@ -380,7 +380,7 @@ export class AgentResponsesSessionManager {
+ 
+   private evictExpired(): void {
+     for (const session of this.sessions) {
+-      if (session.outstanding.size > 0 && session.expiresAt < Date.now()) {
++      if (session.outstanding.size > 0 && session.expiresAt <= Date.now()) {
+         this.close(session, new Error("Agent Responses agent tool results expired"));
+       }
+     }
+diff --git a/tests/agent-responses-attempt-journal.test.ts b/tests/agent-responses-attempt-journal.test.ts
+index 26745c4..a00e107 100644
+--- a/tests/agent-responses-attempt-journal.test.ts
++++ b/tests/agent-responses-attempt-journal.test.ts
+@@ -1,43 +1,62 @@
+-import { expect, test } from "bun:test";
+-import { existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
++import { expect, spyOn, test } from "bun:test";
++import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+ import { tmpdir } from "node:os";
+ import { join } from "node:path";
++import { AgentResponsesAttemptJournal } from "../src/integrations/agent-responses/attempt-journal";
+ 
+-const journalModulePath = "../src/integrations/agent-responses/attempt-journal";
+-type Journal = { claim(key: string | null, body: unknown): { advance(state: string): void } | undefined };
+-type JournalCtor = new () => Journal;
++const body = { model: "chatgpt-web/gpt-5.6-luna", input: "PRIVATE synthetic write" };
+ 
+-async function journalConstructor(): Promise<JournalCtor> {
+-  const module = await import(journalModulePath).catch(() => null) as { AgentResponsesAttemptJournal?: JournalCtor } | null;
+-  expect(typeof module?.AgentResponsesAttemptJournal).toBe("function");
+-  return module!.AgentResponsesAttemptJournal!;
+-}
++test("journal logs durable transitions, conflicts and storage loss without private data", () => {
++  const directory = mkdtempSync(join(tmpdir(), "journal-activity-"));
++  const lines: string[] = [];
++  const output = spyOn(process.stdout, "write").mockImplementation(((line: unknown) => {
++    lines.push(String(line)); return true;
++  }) as typeof process.stdout.write);
++  try {
++    const journal = new AgentResponsesAttemptJournal(directory);
++    const attempt = journal.claim("private-request-key", body)!;
++    attempt.advance("send_activated");
++    expect(() => journal.claim("private-request-key", body)).toThrow();
++    rmSync(join(directory, "integrations"), { recursive: true, force: true });
++    expect(() => attempt.advance("browser_accepted")).toThrow();
++    const events = lines.map(line => JSON.parse(line.slice("[agent-responses.activity] ".length)));
++    expect(events).toContainEqual(expect.objectContaining({ event: "journal_advanced", code: "send_activated" }));
++    expect(events).toContainEqual(expect.objectContaining({ event: "journal_failed", code: "conflict" }));
++    expect(events).toContainEqual(expect.objectContaining({ event: "journal_storage_failed", code: "storage_failed" }));
++    expect(lines.join("")).not.toContain("private-request-key");
++    expect(lines.join("")).not.toContain("PRIVATE");
++    expect(lines.join("")).not.toContain(directory);
++  } finally { output.mockRestore(); rmSync(directory, { recursive: true, force: true }); }
++});
+ 
+-test("keyed attempt prevents live-process replay without writing a journal", async () => {
+-  const Journal = await journalConstructor();
++test("keyed attempt persists only digests and rejects changed or repeated requests", () => {
+   const directory = mkdtempSync(join(tmpdir(), "agent-responses-journal-"));
+-  const key = "operator-request-identity-123";
+-  const body = { model: "chatgpt-web/gpt-5.6-luna", input: "Do a write" };
+   try {
+-    const journal = new Journal();
++    const journal = new AgentResponsesAttemptJournal(directory);
+     expect(journal.claim(null, body)).toBeUndefined();
+-    const attempt = journal.claim(key, body);
+-    expect(attempt).toBeDefined();
+-    attempt!.advance("send_activated");
+     expect(readdirSync(directory)).toHaveLength(0);
+-    expect(() => new Journal().claim(key, body)).toThrow("send_activated");
+-    expect(() => new Journal().claim(key, { ...body, input: "Different write" })).toThrow("another request");
+-    expect(existsSync(join(directory, "integrations"))).toBe(false);
++    const attempt = journal.claim("operator-request-identity-123", body)!;
++    attempt.advance("send_activated");
++    expect(() => new AgentResponsesAttemptJournal(directory).claim("operator-request-identity-123", body))
++      .toThrow("send_activated");
++    expect(() => journal.claim("operator-request-identity-123", { ...body, input: "Different write" }))
++      .toThrow("another request");
++    const files = readdirSync(join(directory, "integrations"));
++    expect(files).toContain("agent-responses-attempts.sqlite");
++    for (const file of files) {
++      const content = readFileSync(join(directory, "integrations", file)).toString();
++      expect(content).not.toContain("PRIVATE");
++      expect(content).not.toContain("operator-request-identity-123");
++    }
+   } finally { rmSync(directory, { recursive: true, force: true }); }
+ });
+ 
+-test("invalid idempotency keys fail before reserving any unsafe attempt", async () => {
+-  const Journal = await journalConstructor();
++test("invalid idempotency keys fail before touching storage", () => {
+   const directory = mkdtempSync(join(tmpdir(), "agent-responses-journal-invalid-"));
+   try {
+-    const journal = new Journal();
++    const journal = new AgentResponsesAttemptJournal(directory);
+     for (const invalid of ["short", " spaces ", "invalid/../../path", "x".repeat(129)]) {
+-      expect(() => journal.claim(invalid, { input: "Side effect" })).toThrow();
++      expect(() => journal.claim(invalid, body)).toThrow();
+     }
+     expect(readdirSync(directory)).toHaveLength(0);
+   } finally { rmSync(directory, { recursive: true, force: true }); }
+diff --git a/tests/agent-responses-continuation.test.ts b/tests/agent-responses-continuation.test.ts
+index b90708c..e3122c6 100644
+--- a/tests/agent-responses-continuation.test.ts
++++ b/tests/agent-responses-continuation.test.ts
+@@ -1,4 +1,4 @@
+-import { afterAll, expect, test } from "bun:test";
++import { afterAll, expect, jest, test } from "bun:test";
+ import { mkdtempSync, rmSync } from "node:fs";
+ import { tmpdir } from "node:os";
+ import { join } from "node:path";
+@@ -15,6 +15,29 @@ const root = mkdtempSync(join(tmpdir(), "cgw-agent-continuation-"));
+ const broker = TurnBroker.forSocket(defaultBrokerEndpoint(root));
+ afterAll(async () => { await broker.close(); rmSync(root, { recursive: true, force: true }); });
+ 
++for (const timerFirst of [true, false]) test(`owner expiry rejects a live RPC at the deadline (${timerFirst ? "timer first" : "admission first"})`, async () => {
++  const manager = managerFor([["boundary.ts"]], broker, 1_000, () => jest.useFakeTimers());
++  try {
++    const stage = await manager.start(request("Read boundary.ts"), backend);
++    const id = stage.calls[0]!.callId;
++    const continuation = request([{ role: "user", content: "Read boundary.ts" }, output(id, "late")]);
++    jest.advanceTimersByTime(999);
++    expect(manager.activeCount()).toBe(1);
++    expect(manager.hasPendingCall(id)).toBe(true);
++    if (timerFirst) jest.advanceTimersByTime(1);
++    else jest.setSystemTime(Date.now() + 1);
++    expect(manager.hasPendingCall(id)).toBe(false);
++    expect(manager.activeCount()).toBe(0);
++    await expect(manager.continue(continuation)).rejects.toMatchObject({ status: 409 });
++    jest.advanceTimersByTime(1);
++    await expect(manager.continue(continuation)).rejects.toMatchObject({ status: 409 });
++    expect(manager.activeCount()).toBe(0);
++  } finally {
++    manager.closeAll();
++    jest.useRealTimers();
++  }
++});
++
+ const output = (callId: string, text: string) => ({ type: "function_call_output", call_id: callId, output: text });
+ const richOutput = (callId: string, text: string, version = 1) => ({
+   type: "function_call_output", call_id: callId,
+@@ -23,7 +46,8 @@ const richOutput = (callId: string, text: string, version = 1) => ({
+ });
+ const request = (input: unknown) => parseAgentResponsesRequest({ model, input, tools: [tool] });
+ 
+-function managerFor(rounds: string[][], owner: TurnBroker = broker, toolResultTtlMs?: number): AgentResponsesSessionManager {
++function managerFor(rounds: string[][], owner: TurnBroker = broker, toolResultTtlMs?: number,
++  beforeBatchAcknowledged: () => void = () => {}): AgentResponsesSessionManager {
+   return new AgentResponsesSessionManager(owner, providerConfig(defaultConfig("full")), {
+     async run(turn) {
+       const token = (await turn.prepare()).turnToken!;
+@@ -41,6 +65,7 @@ function managerFor(rounds: string[][], owner: TurnBroker = broker, toolResultTt
+           await progress.waitForChange(progress.snapshot().revision);
+         }
+         revision = progress.snapshot().lastToolBatchRevision;
++        beforeBatchAcknowledged();
+         await progress.acknowledgeToolBatch(revision);
+         received.push(...(await Promise.all(pending)).map(result => result.content[0]?.text ?? ""));
+       }
+diff --git a/tests/agent-responses-gateway-contract.test.ts b/tests/agent-responses-gateway-contract.test.ts
+index ca65720..7862dbf 100644
+--- a/tests/agent-responses-gateway-contract.test.ts
++++ b/tests/agent-responses-gateway-contract.test.ts
+@@ -1,4 +1,8 @@
+ import { expect, test } from "bun:test";
++import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
++import { AgentResponsesAttemptJournal } from "../src/integrations/agent-responses/attempt-journal";
++import { tmpdir } from "node:os";
++import { join } from "node:path";
+ import { defaultConfig } from "../src/config";
+ import type { AppConfig } from "../src/config";
+ import type { TurnBroker } from "../src/adapters/chatgpt-web/turn-broker";
+@@ -74,10 +78,24 @@ function post(body: BodyInit, token?: string, headers: Record<string, string> =
+ 
+ test("generic /v1/models stays disabled without an operator-provisioned key, then requires its own bearer", async () => {
+   const Provider = await gatewayConstructor();
+-  const disabled = new Provider(config(), {} as TurnBroker, undefined, fakeManager());
+-  expect(disabled.enabled).toBe(false);
+-  expect((await disabled.handle(get("/v1/models"), "/v1/models")).status).toBe(404);
+-  disabled.close();
++  // ponytail: fixture-only temp app-home isolates disabled-key construction from ambient operator config; upgrade if routes gains an explicit disabled constructor argument.
++  const isolatedHome = mkdtempSync(join(tmpdir(), "agent-responses-disabled-key-"));
++  const previousHome = process.env.CODEX_CHATGPT_WEB_HOME;
++  let disabled: InstanceType<typeof Provider> | undefined;
++  try {
++    try {
++      process.env.CODEX_CHATGPT_WEB_HOME = isolatedHome;
++      disabled = new Provider(config(), {} as TurnBroker, undefined, fakeManager());
++    } finally {
++      if (previousHome === undefined) delete process.env.CODEX_CHATGPT_WEB_HOME;
++      else process.env.CODEX_CHATGPT_WEB_HOME = previousHome;
++    }
++    expect(disabled.enabled).toBe(false);
++    expect((await disabled.handle(get("/v1/models"), "/v1/models")).status).toBe(404);
++  } finally {
++    try { disabled?.close(); }
++    finally { rmSync(isolatedHome, { recursive: true, force: true }); }
++  }
+ 
+   const provider = new Provider(config(), {} as TurnBroker, bearer, fakeManager());
+   try {
+@@ -225,14 +243,8 @@ test("host, browser Origin, unknown route and untrusted tools cannot enter an ex
+ test("journal duplicate is a 409 before a second browser Send", async () => {
+   const Provider = await gatewayConstructor();
+   const manager = fakeManager();
+-  const claimed = new Set<string>();
+-  const journal = { claim: (key: string | null) => {
+-    if (!key) return undefined;
+-    if (claimed.has(key)) throw new AgentResponsesRequestError("Already attempted", 409);
+-    claimed.add(key);
+-    return { advance: () => undefined };
+-  } };
+-  const provider = new Provider(config(), {} as TurnBroker, bearer, manager, journal);
++  const root = mkdtempSync(join(tmpdir(), "agent-gateway-journal-"));
++  const provider = new Provider(config(), {} as TurnBroker, bearer, manager, new AgentResponsesAttemptJournal(root));
+   const request = () => post(JSON.stringify({ model, input: "Potential side effect" }), bearer,
+     { "idempotency-key": "client-operation-unique-123" });
+   try {
+@@ -240,7 +252,26 @@ test("journal duplicate is a 409 before a second browser Send", async () => {
+     const retry = await provider.handle(request(), "/v1/responses");
+     expect(retry.status).toBe(409);
+     expect(manager.starts).toBe(1);
+-  } finally { provider.close(); }
++    const restarted = new Provider(config(), {} as TurnBroker, bearer, manager, new AgentResponsesAttemptJournal(root));
++    try { expect((await restarted.handle(request(), "/v1/responses")).status).toBe(409); }
++    finally { restarted.close(); }
++    expect(manager.starts).toBe(1);
++  } finally { provider.close(); rmSync(root, { recursive: true, force: true }); }
++});
++
++test("unavailable durable storage rejects a keyed request before browser Send", async () => {
++  const Provider = await gatewayConstructor();
++  const manager = fakeManager();
++  const root = mkdtempSync(join(tmpdir(), "agent-gateway-storage-"));
++  writeFileSync(join(root, "integrations"), "not a directory");
++  const provider = new Provider(config(), {} as TurnBroker, bearer, manager, new AgentResponsesAttemptJournal(root));
++  try {
++    const response = await provider.handle(post(JSON.stringify({ model, input: "Synthetic side effect" }), bearer,
++      { "idempotency-key": "blocked-operation-12345678" }), "/v1/responses");
++    expect(response.status).toBe(503);
++    expect(manager.starts).toBe(0);
++    expect(await response.text()).not.toContain(root);
++  } finally { provider.close(); rmSync(root, { recursive: true, force: true }); }
+ });
+ 
+ test("failure after SSE headers emits one terminal response.failed and no private exception", async () => {
+diff --git a/tests/agent-responses-marker-lifecycle.test.ts b/tests/agent-responses-marker-lifecycle.test.ts
+index 69c7b96..7b5a82a 100644
+--- a/tests/agent-responses-marker-lifecycle.test.ts
++++ b/tests/agent-responses-marker-lifecycle.test.ts
+@@ -1,38 +1,82 @@
+ import { expect, test } from "bun:test";
+-import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
++import { Database } from "bun:sqlite";
++import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+ import { tmpdir } from "node:os";
+-import { join } from "node:path";
++import { join, resolve } from "node:path";
+ import { AgentResponsesAttemptJournal } from "../src/integrations/agent-responses/attempt-journal";
++import { AGENT_RESPONSES_ACTIVITY_PREFIX, validateActivityEvent } from "../src/activity-events";
++
++function resultLines(output: string): string {
++  return output.trim().split(/\r?\n/).filter(line => {
++    if (!line.startsWith(AGENT_RESPONSES_ACTIVITY_PREFIX)) return true;
++    expect(validateActivityEvent(JSON.parse(line.slice(AGENT_RESPONSES_ACTIVITY_PREFIX.length)))).not.toBeNull();
++    return false;
++  }).join("\n");
++}
+ 
+ const request = { model: "chatgpt-web/gpt-5.6-luna", input: "Synthetic edit; never run" };
++const modulePath = resolve(import.meta.dir, "../src/integrations/agent-responses/attempt-journal.ts");
++
++function child(directory: string, key: string) {
++  return Bun.spawn([process.execPath, "-e", `import { AgentResponsesAttemptJournal } from ${JSON.stringify(modulePath)};
++try { new AgentResponsesAttemptJournal(${JSON.stringify(directory)}).claim(${JSON.stringify(key)}, ${JSON.stringify(request)}); console.log('reserved'); }
++catch (error) { console.log(error.status); }`], { stdout: "pipe", stderr: "pipe" });
++}
+ 
+-test("interrupted in-memory attempt rejects replay during the same app run", () => {
+-  const directory = mkdtempSync(join(tmpdir(), "agent-crash-journal-"));
++test("a fresh process rejects an interrupted durable attempt", async () => {
++  const root = mkdtempSync(join(tmpdir(), "agent-crash-journal-"));
+   try {
+-    const initial = new AgentResponsesAttemptJournal();
+-    expect(initial.claim(null, request)).toBeUndefined();
+-    expect(readdirSync(directory)).toHaveLength(0);
+-    initial.claim("interrupted_attempt_12345678", request);
+-    expect(readdirSync(directory)).toHaveLength(0);
+-    expect(() => new AgentResponsesAttemptJournal().claim("interrupted_attempt_12345678", request))
+-      .toThrow("automatic replay is unsafe");
+-  } finally { rmSync(directory, { recursive: true, force: true }); }
++    const first = child(root, "interrupted_attempt_12345678");
++    expect(await first.exited).toBe(0);
++    expect((await new Response(first.stdout).text()).trim()).toBe("reserved");
++    const second = child(root, "interrupted_attempt_12345678");
++    expect(await second.exited).toBe(0);
++    expect(resultLines(await new Response(second.stdout).text())).toBe("409");
++  } finally { rmSync(root, { recursive: true, force: true }); }
+ });
+ 
+-test("simultaneous reservations reject the second key without filesystem dependencies", () => {
++test("concurrent processes reserve a durable attempt exactly once", async () => {
+   const root = mkdtempSync(join(tmpdir(), "agent-concurrent-journal-"));
+   try {
+-    const dir = join(root, "journal");
+-    const journals = [new AgentResponsesAttemptJournal(), new AgentResponsesAttemptJournal()];
+-    const outcomes = journals.map(journal => {
+-      try { journal.claim("same_request_12345678", request); return "reserved"; }
+-      catch (error) { return (error as { status?: number }).status; }
+-    });
+-    expect(outcomes).toEqual(["reserved", 409]);
+-    const inaccessible = join(root, "existing-file-not-directory");
+-    writeFileSync(inaccessible, "not a directory");
+-    expect(() => new AgentResponsesAttemptJournal().claim("another_request_12345678", request))
+-      .not.toThrow();
+-    expect(existsSync(dir)).toBe(false);
++    const children = [child(root, "same_request_12345678"), child(root, "same_request_12345678")];
++    expect(await Promise.all(children.map(process => process.exited))).toEqual([0, 0]);
++    const results = await Promise.all(children.map(async process => resultLines(await new Response(process.stdout).text())));
++    expect(results.sort()).toEqual(["409", "reserved"]);
++  } finally { rmSync(root, { recursive: true, force: true }); }
++});
++
++test("durable marker capacity refuses new claims without forgetting previous attempts", () => {
++  const root = mkdtempSync(join(tmpdir(), "agent-journal-capacity-"));
++  try {
++    const journal = new AgentResponsesAttemptJournal(root);
++    journal.claim("original_attempt_12345678", request);
++    const database = new Database(join(root, "integrations", "agent-responses-attempts.sqlite"));
++    try {
++      database.exec(`WITH RECURSIVE entries(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM entries WHERE n < 99999)
++        INSERT INTO attempts SELECT printf('%064x', n), 'synthetic-digest', 'outcome_unknown' FROM entries`);
++    } finally { database.close(); }
++    expect(() => journal.claim("new_attempt_12345678", request)).toThrow("capacity exceeded");
++    expect(() => journal.claim("original_attempt_12345678", request)).toThrow("automatic replay is unsafe");
++  } finally { rmSync(root, { recursive: true, force: true }); }
++});
++
++test("lost storage after claim refuses state advancement", () => {
++  const root = mkdtempSync(join(tmpdir(), "agent-journal-lost-"));
++  try {
++    const attempt = new AgentResponsesAttemptJournal(root).claim("original_attempt_12345678", request)!;
++    rmSync(join(root, "integrations"), { recursive: true });
++    expect(() => attempt.advance("send_activated")).toThrow("marker missing");
++  } finally { rmSync(root, { recursive: true, force: true }); }
++});
++
++for (const corrupt of [false, true]) test(`journal fails closed on ${corrupt ? "corrupt database" : "unavailable storage"}`, () => {
++  const root = mkdtempSync(join(tmpdir(), "agent-journal-failure-"));
++  try {
++    if (corrupt) {
++      mkdirSync(join(root, "integrations"));
++      writeFileSync(join(root, "integrations", "agent-responses-attempts.sqlite"), "not a database");
++    } else writeFileSync(join(root, "integrations"), "not a directory");
++    expect(() => new AgentResponsesAttemptJournal(root).claim("blocked_attempt_12345678", request))
++      .toThrow("storage unavailable");
+   } finally { rmSync(root, { recursive: true, force: true }); }
+ });
+diff --git a/tests/agent-responses-mcp.test.ts b/tests/agent-responses-mcp.test.ts
+index 4b7325a..a932039 100644
+--- a/tests/agent-responses-mcp.test.ts
++++ b/tests/agent-responses-mcp.test.ts
+@@ -1,11 +1,127 @@
+-import { expect, test } from "bun:test";
++import { expect, spyOn, test } from "bun:test";
+ import { mkdtempSync, rmSync } from "node:fs";
+ import { tmpdir } from "node:os";
+ import { join } from "node:path";
+ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+-import { TurnBroker } from "../src/adapters/chatgpt-web/turn-broker";
+-import { defaultBrokerEndpoint } from "../src/config";
++import { callTurnBroker, TurnBroker } from "../src/adapters/chatgpt-web/turn-broker";
++import { defaultBrokerEndpoint, defaultConfig, providerConfig } from "../src/config";
++import { AgentResponsesSessionManager } from "../src/integrations/agent-responses/session-manager";
++import { parseAgentResponsesRequest } from "../src/integrations/agent-responses/request";
++import { createRequire } from "node:module";
++import { AGENT_RESPONSES_ACTIVITY_PREFIX } from "../src/activity-events";
++
++test("MCP diagnostics reach the Activity logger without corrupting JSON-RPC stdout", async () => {
++  const require = createRequire(import.meta.url);
++  const { parseGatewayActivityLine, createLogger } = require("../launcher/electron/logging.cjs");
++  const root = mkdtempSync(join(tmpdir(), "cgw-mcp-activity-"));
++  const logger = createLogger({ filePath: join(root, "activity.jsonl") });
++  const broker = TurnBroker.forSocket(defaultBrokerEndpoint(root));
++  const client = new Client({ name: "activity-test", version: "1" });
++  const protocolErrors: Error[] = [];
++  client.onerror = error => protocolErrors.push(error);
++  const write = process.stdout.write.bind(process.stdout);
++  const output = spyOn(process.stdout, "write").mockImplementation(((chunk: unknown, ...args: unknown[]) => {
++    const line = String(chunk).trim();
++    if (line.startsWith(AGENT_RESPONSES_ACTIVITY_PREFIX)) {
++      const record = parseGatewayActivityLine(line);
++      if (record) logger[record.level](record.event, record.detail);
++    }
++    return (write as Function)(chunk, ...args);
++  }) as typeof process.stdout.write);
++  const transport = new StdioClientTransport({ command: process.execPath,
++    args: ["src/cli.ts", "mcp", "--broker-socket", broker.socketPath], cwd: process.cwd(), stderr: "pipe" });
++  try {
++    const token = await broker.register({ kind: "external-agent", tools: [{ name: "Read", description: "Fixture", parameters: { type: "object" } }] });
++    await client.connect(transport);
++    const pending = client.callTool({ name: "codex_tool_call", arguments: {
++      turn_token: token, wire_name: "Read", arguments: { path: "private-canary-path" },
++    } });
++    const batch = await broker.nextToolBatch(token);
++    await broker.completeTool(token, batch[0]!.callId, { content: [{ type: "text", text: "private-canary-result" }] });
++    await pending;
++    expect(protocolErrors).toEqual([]);
++    for (let i = 0; i < 100 && !logger.recent(300).some((row: { event: string }) => row.event === "agent_responses.mcp.reply_sent"); i++) await Bun.sleep(10);
++    const records = logger.recent(300);
++    expect(records.map((row: { event: string }) => row.event)).toContain("agent_responses.mcp.invoke_completed");
++    expect(records.map((row: { event: string }) => row.event)).toContain("agent_responses.mcp.capability_observed");
++    expect(records.find((row: { event: string }) => row.event === "agent_responses.mcp.capability_observed").detail.code).toBe("tasks_not_advertised");
++    expect(records.map((row: { event: string }) => row.event)).toContain("agent_responses.mcp.call_received");
++    const invocations = records.filter((row: { event: string }) => /mcp\.invoke_(started|completed)$/.test(row.event));
++    expect(invocations).toHaveLength(2);
++    expect(invocations[0].detail.request_hash).toMatch(/^[a-f0-9]{32}$/);
++    expect(invocations[0].detail.request_hash).toBe(invocations[1].detail.request_hash);
++    expect(invocations[0].detail.turn_hash).toBe(invocations[1].detail.turn_hash);
++    expect(JSON.stringify(records)).not.toContain("private-canary");
++    expect(JSON.stringify(records)).not.toContain(token);
++    const before = records.length;
++    await callTurnBroker(broker.socketPath, { method: "diagnostic", diagnostic: {
++      level: "INFO", category: "mcp", event: "invoke_completed", phase: "completion", code: "ok",
++      secret: "private-canary-forged",
++    } } as Parameters<typeof callTurnBroker>[1]);
++    expect(logger.recent(300).length).toBe(before);
++    const failed = client.callTool({ name: "codex_tool_call", arguments: {
++      turn_token: token, wire_name: "Read", arguments: {},
++    } });
++    const failedBatch = await broker.nextToolBatch(token);
++    await broker.completeTool(token, failedBatch[0]!.callId, { isError: true, content: [] });
++    expect((await failed).isError).toBe(true);
++    for (let i = 0; i < 100 && !logger.recent(300).some((row: { event: string; detail: { code: string } }) =>
++      row.event === "agent_responses.mcp.invoke_completed" && row.detail.code === "internal"); i++) await Bun.sleep(10);
++    expect(logger.recent(300)).toContainEqual(expect.objectContaining({ event: "agent_responses.mcp.invoke_completed",
++      level: "warning", detail: expect.objectContaining({ code: "internal" }) }));
++    expect(protocolErrors).toEqual([]);
++  } finally {
++    await client.close();
++    await broker.close();
++    output.mockRestore();
++    rmSync(root, { recursive: true, force: true });
++  }
++}, 10_000);
++
++test("aborting an undelivered external MCP call preserves its sibling and turn", async () => {
++  const root = mkdtempSync(join(tmpdir(), "cgw-agent-mcp-cancel-"));
++  const broker = TurnBroker.forSocket(defaultBrokerEndpoint(root));
++  const client = new Client({ name: "queued-cancel-test", version: "1.0.0" });
++  const transport = new StdioClientTransport({
++    command: process.execPath, args: ["src/cli.ts", "mcp", "--broker-socket", broker.socketPath],
++    cwd: process.cwd(), stderr: "pipe",
++  });
++  let onQueue: (() => void) | undefined;
++  let onSettled: (() => void) | undefined;
++  const log = spyOn(console, "info").mockImplementation(message => {
++    if (String(message).includes(" queued call=")) onQueue?.();
++    if (/broker_retired|cancelled_before_delivery/.test(String(message))) onSettled?.();
++  });
++  try {
++    await client.connect(transport);
++    const token = await broker.register({ kind: "external-agent", tools: [{ name: "Read", description: "Read an agent-owned file", parameters: {
++      type: "object", properties: { path: { type: "string" } }, required: ["path"],
++    } }] });
++    const abort = new AbortController();
++    const queued = new Promise<void>(resolve => { onQueue = resolve; });
++    const a = client.callTool({ name: "codex_tool_call", arguments: {
++      turn_token: token, wire_name: "Read", arguments: { path: "cancelled.ts" },
++    } }, undefined, { signal: abort.signal }).then(() => "completed", () => "aborted");
++    await queued;
++    const settled = new Promise<void>(resolve => { onSettled = resolve; });
++    abort.abort();
++    expect(await a).toBe("aborted");
++    await settled;
++    const b = client.callTool({ name: "codex_tool_call", arguments: {
++      turn_token: token, wire_name: "Read", arguments: { path: "sibling.ts" },
++    } });
++    const batch = await broker.nextToolBatch(token);
++    expect(batch).toHaveLength(1);
++    expect(batch[0]?.arguments).toEqual({ path: "sibling.ts" });
++    await broker.completeTool(token, batch[0]!.callId, { content: [{ type: "text", text: "sibling result" }] });
++    expect((await b).isError).toBeFalsy();
++  } finally {
++    log.mockRestore();
++    try { await client.close(); }
++    finally { await broker.close(); rmSync(root, { recursive: true, force: true }); }
++  }
++}, 15_000);
+ 
+ test("external Responses agent can inventory and execute through the unchanged native MCP stdio connector", async () => {
+   const root = mkdtempSync(join(tmpdir(), "cgw-agent-mcp-"));
+@@ -104,3 +220,76 @@ test("external Responses agent can inventory and execute through the unchanged n
+     rmSync(root, { recursive: true, force: true });
+   }
+ }, 20_000);
++
++test("scaled environment TTL retires MCP before owner expiry and rejects late full-batch continuation", async () => {
++  const root = mkdtempSync(join(tmpdir(), "cgw-agent-mcp-expiry-"));
++  const broker = TurnBroker.forSocket(defaultBrokerEndpoint(root));
++  const client = new Client({ name: "agent-expiry-test", version: "1.0.0" });
++  const transport = new StdioClientTransport({
++    command: process.execPath, args: ["src/cli.ts", "mcp", "--broker-socket", broker.socketPath],
++    cwd: process.cwd(), stderr: "pipe",
++  });
++  const model = "chatgpt-web/gpt-5.6-luna";
++  const tools = [{ type: "function", name: "Read", parameters: {
++    type: "object", properties: { path: { type: "string" } }, required: ["path"],
++  } }];
++  const request = (input: unknown) => parseAgentResponsesRequest({ model, tools, input });
++  let browserRuns = 0;
++  let result!: ReturnType<Client["callTool"]>;
++  let finishBrowser!: () => void;
++  const holdBrowser = new Promise<void>(resolve => { finishBrowser = resolve; });
++  // Scale the environment TTL only; the MCP handler and its release path remain real.
++  const boundedBroker = new Proxy(broker, {
++    get(target, key) {
++      if (key === "register") return (environment: Parameters<TurnBroker["register"]>[0],
++        _ttl?: number, traceId?: string, externalOwner?: boolean) =>
++        target.register(environment, 2_000, traceId, externalOwner);
++      const value = Reflect.get(target, key);
++      return typeof value === "function" ? value.bind(target) : value;
++    },
++  });
++  const manager = new AgentResponsesSessionManager(boundedBroker, providerConfig(defaultConfig("full")), {
++    async run(turn) {
++      browserRuns++;
++      const token = (await turn.prepare()).turnToken!;
++      result = client.callTool({ name: "codex_tool_call", arguments: {
++        turn_token: token, wire_name: "Read", arguments: { path: "slow.ts" },
++      } });
++      const progress = turn.externalProgress!;
++      while (progress.snapshot().lastToolBatchRevision === 0) {
++        await progress.waitForChange(progress.snapshot().revision);
++      }
++      await progress.acknowledgeToolBatch(progress.snapshot().lastToolBatchRevision);
++      await holdBrowser;
++      await result;
++      return "";
++    },
++  }, 60_000);
++  try {
++    await client.connect(transport);
++    const stage = await manager.start(request("Read slow.ts"), {
++      backendModel: "gpt-5.6-luna", adapterEffort: "low",
++    });
++    expect(stage.calls).toHaveLength(1);
++    const timeout = await result;
++    expect(timeout.isError).toBe(true);
++    expect(timeout.structuredContent).toMatchObject({ code: "codex_tool_timeout", retryable: false });
++    expect(manager.activeCount()).toBe(1);
++    const continuation = request([{ role: "user", content: "Read slow.ts" }, {
++      type: "function_call_output", call_id: stage.calls[0]!.callId, output: "late result",
++    }]);
++    await expect(manager.continue(continuation)).rejects.toMatchObject({ status: 409 });
++    expect(manager.activeCount()).toBe(0);
++    expect(manager.hasPendingCall(stage.calls[0]!.callId)).toBe(false);
++    await expect(manager.continue(continuation)).rejects.toMatchObject({ status: 409 });
++    expect(browserRuns).toBe(1);
++  } finally {
++    finishBrowser();
++    manager.closeAll();
++    try { await client.close(); }
++    finally {
++      await broker.close();
++      rmSync(root, { recursive: true, force: true });
++    }
++  }
++}, 15_000);
+diff --git a/tests/codex-integration.test.ts b/tests/codex-integration.test.ts
+index 1d287be..d567e2f 100644
+--- a/tests/codex-integration.test.ts
++++ b/tests/codex-integration.test.ts
+@@ -1,5 +1,5 @@
+ import { afterEach, describe, expect, test } from "bun:test";
+-import { existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
++import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+ import { homedir, tmpdir } from "node:os";
+ import { join } from "node:path";
+ import {
+@@ -32,6 +32,22 @@ import {
+ 
+ const roots: string[] = [];
+ 
++const symlinksAvailable = (() => {
++  if (process.platform !== "win32") return true;
++  const root = mkdtempSync(join(tmpdir(), "codex-symlink-probe-"));
++  try {
++    writeFileSync(join(root, "target"), "");
++    symlinkSync(join(root, "target"), join(root, "link"), "file");
++    return true;
++  } catch (error) {
++    if (!["EPERM", "EACCES"].includes((error as NodeJS.ErrnoException).code ?? "")) throw error;
++    console.warn("Skipping Codex symlink tests: Windows symlink creation requires OS privilege");
++    return false;
++  } finally {
++    rmSync(root, { recursive: true, force: true });
++  }
++})();
++
+ function nativeConfig(mode: "browser-only" | "full") {
+   const config = defaultConfig(mode);
+   config.subagentProtocol = "native";
+@@ -62,7 +78,7 @@ afterEach(() => {
+ });
+ 
+ describe("reversible native Codex route integration", () => {
+-  test("route install, update, switching and removal preserve a symlinked shared Codex config", () => {
++  test.skipIf(!symlinksAvailable)("route install, update, switching and removal preserve a symlinked shared Codex config", () => {
+     const { root, codexHome } = fixture();
+     const shared = join(root, "shared");
+     mkdirSync(shared, { mode: 0o750 });
+@@ -96,7 +112,7 @@ describe("reversible native Codex route integration", () => {
+     expect(readFileSync(target, "utf8")).toBe(original);
+   });
+ 
+-  test("config compensation preserves the link and refuses redirected or invalid targets", () => {
++  test.skipIf(!symlinksAvailable)("config compensation preserves the link and refuses redirected or invalid targets", () => {
+     const { root, codexHome } = fixture();
+     const alias = join(codexHome, "config.toml");
+     const target = join(root, "shared.toml");
+diff --git a/tests/mcp-observation.test.ts b/tests/mcp-observation.test.ts
+index a98b695..fa355f7 100644
+--- a/tests/mcp-observation.test.ts
++++ b/tests/mcp-observation.test.ts
+@@ -50,9 +50,10 @@ test("MCP observations separate pre-handler validation and returned tool errors
+     expect(accepted.isError).toBeFalse();
+     expect(refused.content).toEqual(accepted.content);
+     expect(invoked).toBe(2);
+-    expect(events.map(event => event.event)).toEqual(Array(3).fill(["call_received", "reply_sent"]).flat());
++    expect(events.filter(event => event.event !== "client_capabilities").map(event => event.event))
++      .toEqual(Array(3).fill(["call_received", "reply_sent"]).flat());
+     expect(events.filter(event => event.event === "reply_sent").map(event => event.is_error)).toEqual([true, true, false]);
+-    expect(events.map(event => event.call)).toEqual([1, 1, 2, 2, 3, 3]);
++    expect(events.filter(event => event.event !== "client_capabilities").map(event => event.call)).toEqual([1, 1, 2, 2, 3, 3]);
+     expect(JSON.stringify(events)).not.toContain(secret);
+     expect(JSON.stringify(events)).not.toContain("private_key");
+     expect(JSON.stringify(events)).not.toContain("content");
+@@ -62,6 +63,28 @@ test("MCP observations separate pre-handler validation and returned tool errors
+   }
+ });
+ 
++test("initialization diagnostics record advertised Tasks without exposing client metadata", () => {
++  const events: Array<Record<string, unknown>> = [];
++  const received: unknown[] = [];
++  const transport: Transport = { start: async () => {}, close: async () => {}, send: async () => {},
++    onmessage: message => { received.push(message); } };
++  observeMcpToolCalls(transport, new Set(), event => events.push(event));
++  for (const tasks of [undefined, {}, "private-token"]) {
++    const message = { jsonrpc: "2.0" as const, id: 1, method: "initialize", params: {
++      protocolVersion: "2025-11-25", clientInfo: { name: "private-client", version: "private-version" },
++      capabilities: { ...(tasks === undefined ? {} : { tasks }), experimental: { "private-extension": {} } },
++    } };
++    transport.onmessage?.(message);
++    expect(received.at(-1)).toBe(message);
++  }
++  expect(events.map(({ pid, ...event }) => event)).toEqual([
++    { event: "client_capabilities", protocol_version: "2025-11-25", tasks_advertised: false },
++    { event: "client_capabilities", protocol_version: "2025-11-25", tasks_advertised: true },
++    { event: "client_capabilities", protocol_version: "2025-11-25", tasks_advertised: false },
++  ]);
++  expect(JSON.stringify(events)).not.toContain("private");
++});
++
+ test("MCP observation failures, arbitrary IDs and unknown names never alter transport behavior", async () => {
+   const events: Array<Record<string, unknown>> = [];
+   const secret = "private-id-and-tool-name";

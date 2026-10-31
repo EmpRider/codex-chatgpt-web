@@ -1,43 +1,62 @@
-import { expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { expect, spyOn, test } from "bun:test";
+import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { AgentResponsesAttemptJournal } from "../src/integrations/agent-responses/attempt-journal";
 
-const journalModulePath = "../src/integrations/agent-responses/attempt-journal";
-type Journal = { claim(key: string | null, body: unknown): { advance(state: string): void } | undefined };
-type JournalCtor = new () => Journal;
+const body = { model: "chatgpt-web/gpt-5.6-luna", input: "PRIVATE synthetic write" };
 
-async function journalConstructor(): Promise<JournalCtor> {
-  const module = await import(journalModulePath).catch(() => null) as { AgentResponsesAttemptJournal?: JournalCtor } | null;
-  expect(typeof module?.AgentResponsesAttemptJournal).toBe("function");
-  return module!.AgentResponsesAttemptJournal!;
-}
-
-test("keyed attempt prevents live-process replay without writing a journal", async () => {
-  const Journal = await journalConstructor();
-  const directory = mkdtempSync(join(tmpdir(), "agent-responses-journal-"));
-  const key = "operator-request-identity-123";
-  const body = { model: "chatgpt-web/gpt-5.6-luna", input: "Do a write" };
+test("journal logs durable transitions, conflicts and storage loss without private data", () => {
+  const directory = mkdtempSync(join(tmpdir(), "journal-activity-"));
+  const lines: string[] = [];
+  const output = spyOn(process.stdout, "write").mockImplementation(((line: unknown) => {
+    lines.push(String(line)); return true;
+  }) as typeof process.stdout.write);
   try {
-    const journal = new Journal();
+    const journal = new AgentResponsesAttemptJournal(directory);
+    const attempt = journal.claim("private-request-key", body)!;
+    attempt.advance("send_activated");
+    expect(() => journal.claim("private-request-key", body)).toThrow();
+    rmSync(join(directory, "integrations"), { recursive: true, force: true });
+    expect(() => attempt.advance("browser_accepted")).toThrow();
+    const events = lines.map(line => JSON.parse(line.slice("[agent-responses.activity] ".length)));
+    expect(events).toContainEqual(expect.objectContaining({ event: "journal_advanced", code: "send_activated" }));
+    expect(events).toContainEqual(expect.objectContaining({ event: "journal_failed", code: "conflict" }));
+    expect(events).toContainEqual(expect.objectContaining({ event: "journal_storage_failed", code: "storage_failed" }));
+    expect(lines.join("")).not.toContain("private-request-key");
+    expect(lines.join("")).not.toContain("PRIVATE");
+    expect(lines.join("")).not.toContain(directory);
+  } finally { output.mockRestore(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("keyed attempt persists only digests and rejects changed or repeated requests", () => {
+  const directory = mkdtempSync(join(tmpdir(), "agent-responses-journal-"));
+  try {
+    const journal = new AgentResponsesAttemptJournal(directory);
     expect(journal.claim(null, body)).toBeUndefined();
-    const attempt = journal.claim(key, body);
-    expect(attempt).toBeDefined();
-    attempt!.advance("send_activated");
     expect(readdirSync(directory)).toHaveLength(0);
-    expect(() => new Journal().claim(key, body)).toThrow("send_activated");
-    expect(() => new Journal().claim(key, { ...body, input: "Different write" })).toThrow("another request");
-    expect(existsSync(join(directory, "integrations"))).toBe(false);
+    const attempt = journal.claim("operator-request-identity-123", body)!;
+    attempt.advance("send_activated");
+    expect(() => new AgentResponsesAttemptJournal(directory).claim("operator-request-identity-123", body))
+      .toThrow("send_activated");
+    expect(() => journal.claim("operator-request-identity-123", { ...body, input: "Different write" }))
+      .toThrow("another request");
+    const files = readdirSync(join(directory, "integrations"));
+    expect(files).toContain("agent-responses-attempts.sqlite");
+    for (const file of files) {
+      const content = readFileSync(join(directory, "integrations", file)).toString();
+      expect(content).not.toContain("PRIVATE");
+      expect(content).not.toContain("operator-request-identity-123");
+    }
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });
 
-test("invalid idempotency keys fail before reserving any unsafe attempt", async () => {
-  const Journal = await journalConstructor();
+test("invalid idempotency keys fail before touching storage", () => {
   const directory = mkdtempSync(join(tmpdir(), "agent-responses-journal-invalid-"));
   try {
-    const journal = new Journal();
+    const journal = new AgentResponsesAttemptJournal(directory);
     for (const invalid of ["short", " spaces ", "invalid/../../path", "x".repeat(129)]) {
-      expect(() => journal.claim(invalid, { input: "Side effect" })).toThrow();
+      expect(() => journal.claim(invalid, body)).toThrow();
     }
     expect(readdirSync(directory)).toHaveLength(0);
   } finally { rmSync(directory, { recursive: true, force: true }); }

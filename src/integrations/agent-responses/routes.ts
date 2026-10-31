@@ -12,6 +12,7 @@ import { parseAgentResponsesRequest, AgentResponsesRequestError,
   type AgentResponsesRequest } from "./request";
 import { AgentResponsesSessionManager, AgentResponsesContextLimitError,
   type AgentResponsesStage } from "./session-manager";
+import { AgentResponsesSessionManagerWithExtendedLease } from "./session-manager-wrapper";
 import { loadAgentResponsesKey } from "./key-manager";
 import { AgentResponsesAttemptJournal } from "./attempt-journal";
 import { estimateAgentResponsesUsage } from "./usage";
@@ -107,7 +108,7 @@ export class AgentResponsesProvider {
     manager?: AgentResponsesSessionManager, journal?: AgentResponsesAttemptJournal) {
     if (key !== undefined && key.length < 43) throw new Error("Generic Responses bearer must be at least 256 bits");
     this.key = key || undefined;
-    this.manager = manager ?? new AgentResponsesSessionManager(broker, providerConfig(config));
+    this.manager = manager ?? new AgentResponsesSessionManagerWithExtendedLease(broker, providerConfig(config));
     this.journal = journal ?? new AgentResponsesAttemptJournal();
   }
 
@@ -250,7 +251,7 @@ export class AgentResponsesProvider {
       }).catch(error => {
         if (signal.aborted) return;
         try { attempt?.advance("outcome_unknown"); }
-        catch { /* The live-process claim still prevents a keyed retry. */ }
+        catch { /* The durable claim still prevents a keyed retry. */ }
         log({ level: "ERROR", category: "api", event: "request_failed", phase: "completion", code: "internal",
           duration_ms: Math.min(86_400_000, Date.now() - started) });
         try { queue.push({ type: "error", message: safeStageMessage(error, statusOf(error)), status: statusOf(error) }); }

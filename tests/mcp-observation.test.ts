@@ -50,9 +50,10 @@ test("MCP observations separate pre-handler validation and returned tool errors 
     expect(accepted.isError).toBeFalse();
     expect(refused.content).toEqual(accepted.content);
     expect(invoked).toBe(2);
-    expect(events.map(event => event.event)).toEqual(Array(3).fill(["call_received", "reply_sent"]).flat());
+    expect(events.filter(event => event.event !== "client_capabilities").map(event => event.event))
+      .toEqual(Array(3).fill(["call_received", "reply_sent"]).flat());
     expect(events.filter(event => event.event === "reply_sent").map(event => event.is_error)).toEqual([true, true, false]);
-    expect(events.map(event => event.call)).toEqual([1, 1, 2, 2, 3, 3]);
+    expect(events.filter(event => event.event !== "client_capabilities").map(event => event.call)).toEqual([1, 1, 2, 2, 3, 3]);
     expect(JSON.stringify(events)).not.toContain(secret);
     expect(JSON.stringify(events)).not.toContain("private_key");
     expect(JSON.stringify(events)).not.toContain("content");
@@ -60,6 +61,28 @@ test("MCP observations separate pre-handler validation and returned tool errors 
     await client.close();
     await server.close();
   }
+});
+
+test("initialization diagnostics record advertised Tasks without exposing client metadata", () => {
+  const events: Array<Record<string, unknown>> = [];
+  const received: unknown[] = [];
+  const transport: Transport = { start: async () => {}, close: async () => {}, send: async () => {},
+    onmessage: message => { received.push(message); } };
+  observeMcpToolCalls(transport, new Set(), event => events.push(event));
+  for (const tasks of [undefined, {}, "private-token"]) {
+    const message = { jsonrpc: "2.0" as const, id: 1, method: "initialize", params: {
+      protocolVersion: "2025-11-25", clientInfo: { name: "private-client", version: "private-version" },
+      capabilities: { ...(tasks === undefined ? {} : { tasks }), experimental: { "private-extension": {} } },
+    } };
+    transport.onmessage?.(message);
+    expect(received.at(-1)).toBe(message);
+  }
+  expect(events.map(({ pid, ...event }) => event)).toEqual([
+    { event: "client_capabilities", protocol_version: "2025-11-25", tasks_advertised: false },
+    { event: "client_capabilities", protocol_version: "2025-11-25", tasks_advertised: true },
+    { event: "client_capabilities", protocol_version: "2025-11-25", tasks_advertised: false },
+  ]);
+  expect(JSON.stringify(events)).not.toContain("private");
 });
 
 test("MCP observation failures, arbitrary IDs and unknown names never alter transport behavior", async () => {

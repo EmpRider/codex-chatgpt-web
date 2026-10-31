@@ -17,4 +17,7 @@ launcher/artifacts/
 .playwright-cli/
 output/
 notes.md
-/.agents/skills/github-pairing/
+/.agents/*
+.claude/*
+.specify/*
+bash.exe.stackdump

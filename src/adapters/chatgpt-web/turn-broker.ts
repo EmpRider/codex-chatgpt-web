@@ -1,4 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
+import { reportAgentResponsesActivity, type ActivityDraft } from "../../activity-events";
 import { chmodSync, existsSync, lstatSync, mkdirSync, unlinkSync } from "node:fs";
 import { createConnection, createServer, type Server, type Socket } from "node:net";
 import { dirname, isAbsolute, relative, resolve } from "node:path";
@@ -111,6 +112,7 @@ interface TurnChannel {
   queuedCallIds: string[];
   deliveredCallIds: Set<string>;
   invocations: Map<string, PendingInvocation>;
+  invocationIds: Map<string, "invoked" | "cancelled">;
   waiters: Set<ToolWaiter>;
   compactionRequested: boolean;
   compactionResult?: BrokerToolResult;
@@ -136,6 +138,8 @@ interface BrokerRequest {
     | "resolve"
     | "release"
     | "invoke"
+    | "cancel_queued"
+    | "diagnostic"
     | "owner_status"
     | "owner_register"
     | "owner_register_safe"
@@ -174,6 +178,7 @@ interface BrokerRequest {
   finalAnswer?: string;
   contract?: "native" | "safe";
   failure?: BrokerRetirementFailure;
+  diagnostic?: ActivityDraft;
 }
 
 interface BrokerResponse {
@@ -274,10 +279,10 @@ function ownerEnvironment(value: unknown): BrokerTurnEnvironment {
   if (typeof environment.cwd !== "string" || !isAbsolute(environment.cwd)
     || !paths(environment.roots) || !Array.isArray(environment.writableRoots)
     || environment.writableRoots.some(path => typeof path !== "string" || !isAbsolute(path))
-    || !environment.roots.some(root => {
+    || (environment.sandboxPolicy?.type !== "dangerFullAccess" && !environment.roots.some(root => {
       const nested = relative(resolve(root), resolve(environment.cwd!));
       return nested === "" || (!nested.startsWith("..") && !isAbsolute(nested));
-    })
+    }))
     || !environment.sandboxPolicy || !["dangerFullAccess", "workspaceWrite", "readOnly"].includes(environment.sandboxPolicy.type)
     || !Array.isArray(environment.tools)
     || environment.tools.some(tool => !tool || typeof tool.name !== "string" || typeof tool.description !== "string"
@@ -389,6 +394,7 @@ export class TurnBroker implements TurnBrokerOwner {
       queuedCallIds: [],
       deliveredCallIds: new Set(),
       invocations: new Map(),
+      invocationIds: new Map(),
       waiters: new Set(),
       compactionRequested: false,
       compactionDeliveryCount: 0,
@@ -1003,13 +1009,26 @@ export class TurnBroker implements TurnBrokerOwner {
     if (!request || typeof request !== "object" || typeof request.id !== "string" || request.id.length === 0 || request.id.length > 256) {
       throw new Error("turn broker request id is invalid");
     }
-    if (!["claim", "resolve", "release", "invoke", "owner_status", "owner_register", "owner_register_safe", "owner_update", "owner_safe_sent", "owner_next", "owner_complete", "owner_completion_fence_begin", "owner_completion_fence_commit", "owner_wait_retirement", "owner_revoke", "owner_safe_wait_start", "owner_safe_wait_completion", "owner_request_compaction", "owner_compaction_delivery_count", "safe_start", "safe_complete", "activity_complete", "submit_compaction_handoff"].includes(request.method)) {
+    if (!["diagnostic", "claim", "resolve", "release", "invoke", "cancel_queued", "owner_status", "owner_register", "owner_register_safe", "owner_update", "owner_safe_sent", "owner_next", "owner_complete", "owner_completion_fence_begin", "owner_completion_fence_commit", "owner_wait_retirement", "owner_revoke", "owner_safe_wait_start", "owner_safe_wait_completion", "owner_request_compaction", "owner_compaction_delivery_count", "safe_start", "safe_complete", "activity_complete", "submit_compaction_handoff"].includes(request.method)) {
       throw new Error("turn broker method is invalid");
     }
   }
 
   private async dispatch(request: BrokerRequest, socketSignal?: AbortSignal): Promise<unknown> {
     this.prune();
+    if (request.method === "diagnostic") {
+      if (request.diagnostic?.category !== "mcp") throw new Error("Invalid diagnostic category");
+      const traceId = typeof request.bindingId === "string"
+        ? this.bindings.get(request.bindingId)?.channel.traceId ?? this.retiredBindings.get(request.bindingId)?.traceId
+        : undefined;
+      reportAgentResponsesActivity(request.diagnostic, {
+        ...(typeof request.bindingId === "string" && request.bindingId.length <= 256 && request.bindingId.length > 0
+          ? { turnId: traceId && traceId !== "unknown" ? traceId : request.bindingId } : {}),
+        ...(typeof request.callId === "string" && request.callId.length > 0 && request.callId.length <= 256
+          ? { requestId: request.callId } : {}),
+      });
+      return {};
+    }
     if (request.method === "safe_start") {
       if (!request.token) throw new Error("Zero Risk request_id is required");
       return this.startSafeTurn(request.token);
@@ -1215,6 +1234,7 @@ export class TurnBroker implements TurnBrokerOwner {
     const binding = this.bindings.get(bindingId);
     if (!binding) {
       const retiredTurn = this.retiredBindings.get(bindingId);
+      if (request.method === "cancel_queued" && retiredTurn !== undefined) return { cancelled: false };
       if (request.method === "release" && retiredTurn !== undefined) {
         if (request.failure !== undefined) assertRetirementFailure(request.failure);
         return { released: true, duplicate: true,
@@ -1241,6 +1261,28 @@ export class TurnBroker implements TurnBrokerOwner {
       };
     }
     if (request.method === "resolve") return { environment: binding.channel.environment };
+    const channel = binding.channel;
+    const external = "kind" in channel.environment && channel.environment.kind === "external-agent";
+    if (request.method === "cancel_queued") {
+      if (!external) return { cancelled: false };
+      const callId = request.callId;
+      if (typeof callId !== "string" || !/^call_[A-Za-z0-9_-]{32}$/.test(callId)) {
+        throw new Error("external invocation id is invalid");
+      }
+      if (channel.invocationIds.get(callId) === "cancelled") return { cancelled: true };
+      const pending = channel.invocations.get(callId);
+      if (pending?.deliveredAt !== undefined || (!pending && channel.invocationIds.has(callId))) {
+        return { cancelled: false };
+      }
+      if (!channel.invocationIds.has(callId) && channel.invocationIds.size >= 1024) return { cancelled: false };
+      // Keep pre-arrival tombstones for the whole turn; eviction could let a delayed invoke execute.
+      channel.invocationIds.set(callId, "cancelled");
+      channel.queuedCallIds = channel.queuedCallIds.filter(id => id !== callId);
+      channel.invocations.delete(callId);
+      pending?.reject(new Error("External tool invocation cancelled before delivery"));
+      console.info(`[chatgpt-web] broker trace=${channel.traceId} cancelled_before_delivery call=${callId.slice(0, 17)}`);
+      return { cancelled: true };
+    }
     this.assertSafeHarnessRunning(binding.channel);
     if (binding.channel.compactionRequested) {
       const result = binding.channel.compactionResult;
@@ -1255,7 +1297,15 @@ export class TurnBroker implements TurnBrokerOwner {
 
     const wireName = request.wireName?.trim();
     if (!wireName) throw new Error("wire tool name is required");
-    const callId = opaqueId("call");
+    const callId = external && request.callId !== undefined
+      ? request.callId : opaqueId("call");
+    if (external && request.callId !== undefined) {
+      if (typeof callId !== "string" || !/^call_[A-Za-z0-9_-]{32}$/.test(callId)) throw new Error("external invocation id is invalid");
+      if (channel.invocationIds.has(callId)) throw new Error("External tool invocation was already attempted or cancelled");
+      // ponytail: cap each turn at 1024 identified calls; upgrade with a negotiated bounded lifecycle, never eviction.
+      if (channel.invocationIds.size >= 1024) throw new Error("External tool invocation identity limit reached");
+      channel.invocationIds.set(callId, "invoked");
+    }
     const toolRequest: BrokerToolRequest = {
       callId,
       wireName,

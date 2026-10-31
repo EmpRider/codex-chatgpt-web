@@ -9,6 +9,7 @@ import { CODEX_COMPACTION_CONTROL_WIRE_NAME } from "./native-compaction-control"
 import { callTurnBroker, TurnBrokerTimeoutError, type BrokerRetirementDiagnostics, type BrokerToolResult } from "./turn-broker";
 import { observeMcpToolCalls } from "./mcp-observation";
 import { assertAgentResponsesToolArguments } from "../../integrations/agent-responses/tool-policy";
+import { createActivityContract, type ActivityDraft } from "../../activity-events";
 
 interface ClaimedTurn {
   bindingId: string;
@@ -500,6 +501,18 @@ export async function runChatGptMcpServer(options: {
   contract?: ChatGptMcpContract;
 }): Promise<void> {
   const contract = options.contract ?? "native";
+  const activity = createActivityContract();
+  let pendingDiagnostics = 0;
+  const reportActivity = (draft: ActivityDraft, bindingId?: string, callId?: string): void => {
+    if (pendingDiagnostics >= 64) return;
+    pendingDiagnostics++;
+    void callTurnBroker(options.brokerSocketPath, { method: "diagnostic", diagnostic: draft, bindingId, callId }, 1_000)
+      .catch(() => {
+        // MCP stdout is protocol-only; broker loss leaves stderr as the diagnostic fallback.
+        const event = activity.create(draft);
+        try { if (event) console.error(`[agent-responses.activity] ${JSON.stringify(event)}`); } catch {}
+      }).finally(() => { pendingDiagnostics--; });
+  };
   const server = new McpServer(
     { name: contract === "safe" ? "codex-safe" : "codex-native", version: VERSION },
     contract === "safe" ? { instructions: ZERO_RISK_MCP_INSTRUCTIONS } : undefined,
@@ -605,16 +618,54 @@ export async function runChatGptMcpServer(options: {
     signal?: AbortSignal,
   ) => {
     const timeoutMs = chatGptMcpInvocationTimeout(bound);
+    const isExternal = "kind" in bound && bound.kind === "external-agent";
+    const callId = isExternal
+      ? `call_${randomBytes(24).toString("base64url")}` : undefined;
+    const toolName = wireName(tool);
+    const diagnosticId = callId ?? randomBytes(24).toString("base64url");
+    const started = performance.now();
+    const elapsed = () => Math.min(86_400_000, Math.round(performance.now() - started));
+    reportActivity({ level: "DEBUG", category: "mcp", event: "invoke_started", phase: "send", code: "ok" }, bindingId, diagnosticId);
     try {
       const response = await callTurnBroker<BrokerToolResult>(options.brokerSocketPath, {
         method: "invoke",
         bindingId,
-        wireName: wireName(tool),
+        ...(callId === undefined ? {} : { callId }),
+        wireName: toolName,
         freeform: tool.freeform === true,
         ...(tool.freeform ? { input: payload.input ?? "" } : { arguments: payload.arguments ?? {} }),
       }, timeoutMs, signal);
+      reportActivity({ level: response.isError ? "WARN" : "INFO", category: "mcp", event: "invoke_completed",
+        phase: "completion", code: response.isError ? "internal" : "ok", duration_ms: elapsed() }, bindingId, diagnosticId);
       return asMcpResult(response);
     } catch (error) {
+      const errorType = error instanceof TurnBrokerTimeoutError ? "timeout"
+        : signal?.aborted ? "aborted" : "error";
+      reportActivity({ level: "ERROR", category: "mcp", event: "invoke_failed", phase: "completion",
+        code: errorType === "timeout" ? "timeout" : errorType === "aborted" ? "cancelled" : "internal",
+        duration_ms: elapsed() }, bindingId, diagnosticId);
+      let invocationError = error;
+      if (callId !== undefined) {
+        reportActivity({ level: "DEBUG", category: "mcp", event: "cancel_attempted", phase: "recovery", code: "ok" }, bindingId, diagnosticId);
+        try {
+          const cancellation = await callTurnBroker<{ cancelled: boolean }>(options.brokerSocketPath, {
+            method: "cancel_queued", bindingId, callId,
+          });
+          reportActivity({ level: "INFO", category: "mcp",
+            event: cancellation.cancelled ? "cancel_proved" : "cancel_failed",
+            phase: "recovery", code: cancellation.cancelled ? "ok" : "unknown_outcome" }, bindingId, diagnosticId);
+          if (cancellation.cancelled === true) {
+            return result({
+              code: error instanceof TurnBrokerTimeoutError ? "codex_tool_timeout" : "codex_tool_cancelled",
+              tool: toolName, retryable: false, delivery_state: "not_delivered",
+              message: "Tool invocation cancelled before delivery. No execution occurred; sibling calls remain active. Do not automatically retry.",
+            }, true);
+          }
+        } catch (cancellationError) {
+          reportActivity({ level: "WARN", category: "mcp", event: "cancel_failed", phase: "recovery", code: "unavailable" }, bindingId, diagnosticId);
+          invocationError = new AggregateError([error, cancellationError], "Could not prove tool non-delivery; retiring the entire turn");
+        }
+      }
       // A cancelled/timed-out MCP request no longer has a consumer for the native result. Revoke
       // the whole turn capability so the broker drops the pending invocation and every later call
       // from that abandoned ChatGPT response fails explicitly against its retired binding.
@@ -628,18 +679,18 @@ export async function runChatGptMcpServer(options: {
           } : {}),
         });
         diagnostics = retired.diagnostics;
+        reportActivity({ level: "WARN", category: "mcp", event: retired.released ? "turn_released" : "turn_release_failed",
+          phase: "recovery", code: retired.released ? "ok" : "unknown_outcome", duration_ms: elapsed() }, bindingId, diagnosticId);
       } catch (releaseError) {
+        reportActivity({ level: "ERROR", category: "mcp", event: "turn_release_failed", phase: "recovery", code: "unavailable" }, bindingId, diagnosticId);
         throw new AggregateError(
-          [error, releaseError],
+          [invocationError, releaseError],
           "Codex Native invocation failed and its abandoned broker binding could not be retired",
         );
       }
+      if (invocationError !== error) throw invocationError;
       if (error instanceof TurnBrokerTimeoutError) {
         const toolName = wireName(tool);
-        console.error(
-          `[chatgpt-web-mcp] ${toolName} did not complete within ${timeoutMs}ms; retired its turn binding`
-          + ` broker_state_at_retirement=${JSON.stringify(diagnostics ?? null)}`,
-        );
         return result({
           code: "codex_tool_timeout",
           tool: toolName,
@@ -1046,5 +1097,21 @@ export async function runChatGptMcpServer(options: {
     );
   }
 
-  await server.connect(observeMcpToolCalls(new StdioServerTransport(), BRIDGE_TOOL_NAMES));
+  await server.connect(observeMcpToolCalls(new StdioServerTransport(), BRIDGE_TOOL_NAMES, event => {
+    const drafts = {
+      client_capabilities: { level: "INFO", event: "capability_observed", phase: "admission",
+        code: event.tasks_advertised === true ? "tasks_advertised" : "tasks_not_advertised" },
+      call_received: { level: "DEBUG", event: "call_received", phase: "tools", code: "ok" },
+      reply_sent: { level: event.is_error || event.outcome === "protocol_error" ? "WARN" : "DEBUG",
+        event: "reply_sent", phase: "completion", code: event.is_error || event.outcome === "protocol_error" ? "internal" : "ok" },
+      reply_send_failed: { level: "ERROR", event: "reply_send_failed", phase: "completion", code: "unavailable" },
+      transport_closed: { level: "WARN", event: "transport_closed", phase: "shutdown", code: "unavailable" },
+      uncorrelated_call: { level: "WARN", event: "uncorrelated_call", phase: "tools",
+        code: event.reason === "tracking_limit" ? "capacity" : "conflict" },
+    } as const;
+    const draft = drafts[event.event as keyof typeof drafts];
+    if (draft) reportActivity({ ...draft, category: "mcp",
+      ...(typeof event.elapsed_ms === "number" ? { duration_ms: Math.max(0, Math.min(86_400_000, event.elapsed_ms)) } : {}),
+      ...(typeof event.tracked_calls === "number" ? { count: event.tracked_calls } : {}) });
+  }));
 }

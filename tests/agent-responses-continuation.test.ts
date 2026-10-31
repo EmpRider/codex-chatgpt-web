@@ -1,4 +1,4 @@
-import { afterAll, expect, test } from "bun:test";
+import { afterAll, expect, jest, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -15,6 +15,29 @@ const root = mkdtempSync(join(tmpdir(), "cgw-agent-continuation-"));
 const broker = TurnBroker.forSocket(defaultBrokerEndpoint(root));
 afterAll(async () => { await broker.close(); rmSync(root, { recursive: true, force: true }); });
 
+for (const timerFirst of [true, false]) test(`owner expiry rejects a live RPC at the deadline (${timerFirst ? "timer first" : "admission first"})`, async () => {
+  const manager = managerFor([["boundary.ts"]], broker, 1_000, () => jest.useFakeTimers());
+  try {
+    const stage = await manager.start(request("Read boundary.ts"), backend);
+    const id = stage.calls[0]!.callId;
+    const continuation = request([{ role: "user", content: "Read boundary.ts" }, output(id, "late")]);
+    jest.advanceTimersByTime(999);
+    expect(manager.activeCount()).toBe(1);
+    expect(manager.hasPendingCall(id)).toBe(true);
+    if (timerFirst) jest.advanceTimersByTime(1);
+    else jest.setSystemTime(Date.now() + 1);
+    expect(manager.hasPendingCall(id)).toBe(false);
+    expect(manager.activeCount()).toBe(0);
+    await expect(manager.continue(continuation)).rejects.toMatchObject({ status: 409 });
+    jest.advanceTimersByTime(1);
+    await expect(manager.continue(continuation)).rejects.toMatchObject({ status: 409 });
+    expect(manager.activeCount()).toBe(0);
+  } finally {
+    manager.closeAll();
+    jest.useRealTimers();
+  }
+});
+
 const output = (callId: string, text: string) => ({ type: "function_call_output", call_id: callId, output: text });
 const richOutput = (callId: string, text: string, version = 1) => ({
   type: "function_call_output", call_id: callId,
@@ -23,7 +46,8 @@ const richOutput = (callId: string, text: string, version = 1) => ({
 });
 const request = (input: unknown) => parseAgentResponsesRequest({ model, input, tools: [tool] });
 
-function managerFor(rounds: string[][], owner: TurnBroker = broker, toolResultTtlMs?: number): AgentResponsesSessionManager {
+function managerFor(rounds: string[][], owner: TurnBroker = broker, toolResultTtlMs?: number,
+  beforeBatchAcknowledged: () => void = () => {}): AgentResponsesSessionManager {
   return new AgentResponsesSessionManager(owner, providerConfig(defaultConfig("full")), {
     async run(turn) {
       const token = (await turn.prepare()).turnToken!;
@@ -41,6 +65,7 @@ function managerFor(rounds: string[][], owner: TurnBroker = broker, toolResultTt
           await progress.waitForChange(progress.snapshot().revision);
         }
         revision = progress.snapshot().lastToolBatchRevision;
+        beforeBatchAcknowledged();
         await progress.acknowledgeToolBatch(revision);
         received.push(...(await Promise.all(pending)).map(result => result.content[0]?.text ?? ""));
       }

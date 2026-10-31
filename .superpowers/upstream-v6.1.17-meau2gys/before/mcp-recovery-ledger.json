@@ -1,0 +1,225 @@
+{
+  "task_id": "MCP-RECOVERY",
+  "branch": "feat/generic-openai-api-module-20261026",
+  "baseline_head": "47893aae5df98a7e73245faacdd1aaee37cda775",
+  "ledger_head": "bc5b416749a2c43665c8d9aecbaa6615ec8e630e",
+  "origin": "https://github.com/EmpRider/codex-chatgpt-web.git",
+  "attribution": "Co-Authored-By: Claude Code <noreply@anthropic.com>",
+  "status": "LOCAL_TESTING_BUILD_READY — boundary fix reviewed; root suite 1166 pass, 92 skip, 0 fail; rebuilt runtime smoke passed; authenticated validation and historical landing approval remain open",
+  "testing_build_2026_10_31": {
+    "installer": "launcher/artifacts/codex-web-gpt-6.1.14-win-x64.exe",
+    "sha256": "271ff6680bc73163f818005295ce4f3c619d94c38183e39a2c51b25c4e25b65f",
+    "bytes": 154045228,
+    "signature": "NotSigned",
+    "verification": "Bun 1.4.0 packaging exited 0; RELOCATABLE_RUNTIME_SMOKE_OK on rebuilt bundle",
+    "limitations": "Local testing candidate only. No installer execution, authenticated E2E, commit, push or release. Earlier transient MCP connection failures remain unexplained. Previous installer preserved in launcher/artifacts/previous-* subdirectory."
+  },
+  "boundary_fix_checkpoint_2026_10_30": {
+    "scope": "session-manager.ts evictExpired comparison only: expiresAt < Date.now() becomes expiresAt <= Date.now(); no lease duration, broker, auth or protocol changes",
+    "red": "Admission-first exact-deadline regression failed: hasPendingCall returned true; timer-first passed",
+    "green": "Both callback orderings passed on bundled Bun 1.4.0: 2 pass, 0 fail",
+    "verification": [
+      "Recovered full suite: 1164 pass, 92 skip, 2 fail; both agent-responses-mcp tests failed with MCP error -32000: Connection closed",
+      "Isolated agent-responses-mcp rerun: 2 pass, 0 fail; cause of earlier connection closures remains unproven",
+      "Full suite rerun: 1166 pass, 92 skip, 0 fail across 100 files; earlier MCP closures remain unexplained",
+      "Focused lifecycle suite: 24 pass, 0 fail; launcher suite: 422 pass, 5 skip, 0 fail",
+      "Root and launcher typecheck passed; git diff --check passed",
+      "Independent source review completed for session-manager and five changed test files: no confirmed defects; reviewer did not rerun tests and excluded preexisting routes/wrapper edits. Initial unrelated council-status report was rejected as evidence"
+    ],
+    "ruling": "Ruling: keep the reproduced one-line boundary correction as a provisional local candidate under the user's implementation request — it aligns admission with the existing expiry timer without extending authority — cost if wrong: retirement one millisecond earlier at the exact boundary. Historical scoped EDO approval is not claimed; no landing or release authorized.",
+    "installer_state": "Rebuilt with boundary fix; current hash in testing_build_2026_10_31. Older local_testing_checkpoint_2026_10_30 hash is historical only",
+    "unfinished_inventory": [
+      "Phase 0: actual ChatGPT Tasks negotiation and authenticated slow-A/fast-B timeline remain unverified",
+      "Phase 1: MCP invoke failures still release the whole binding; atomic queued-only cancellation and bounded tombstones are not implemented",
+      "Phase 2: exact-deadline owner admission candidate implemented, full suite green, independent source review found no confirmed defects; historical EDO landing gate remains open",
+      "Generic attempt-journal uses an in-memory Map; durable retry barrier/recovery requires a separately scoped persistence and acknowledgment contract",
+      "Phase 3: task-bound browser retention and negotiated Tasks support remain conditional; no SDK migration or incremental continuation authorized by capability evidence",
+      "Phase 4: real-host deadline, multi-hour, resource-capacity, authenticated Windows clean-install/upgrade and cross-platform acceptance remain open",
+      "Historical T1/T2/T3 named-agent sign-offs and commit/push rows are not current completion evidence"
+    ]
+  },
+  "local_testing_checkpoint_2026_10_30": {
+    "installer": "launcher/artifacts/codex-web-gpt-6.1.14-win-x64.exe",
+    "sha256": "cda7c28f197fc948d61d6a76fafecd9ae1e1bfb6522dc5d522aab916cb0c54c7",
+    "runtime": "Bun 1.4.0, Windows x64; unsigned installer",
+    "verification": [
+      "Root and launcher typecheck passed",
+      "Final root suite on bundled Bun 1.4.0: 1165 pass, 92 skip, 0 fail across 100 files",
+      "Scaled MCP timeout test passed three additional consecutive runs",
+      "Launcher: 422 pass, 5 skip, 0 fail",
+      "Fixture isolation/gateway/Codex integration: 63 pass, 2 Windows symlink privilege skips, 0 fail",
+      "T1 focused lifecycle suite: 23 pass, 0 fail",
+      "Native MCP abort/deadline subset: 3 pass, 0 fail",
+      "Relocatable bundled runtime smoke passed",
+      "Independent source review approved fixture and T1 test changes; reviewer did not rerun tests"
+    ],
+    "limitations": [
+      "No authenticated ChatGPT end-to-end or installer execution",
+      "T1b scales environment TTL; does not prove real-host 90-second deadline behavior",
+      "Existing 300-second wrapper preserved, not endorsed as a production remedy",
+      "No commit, push, merge or release; historical workflow statuses below are not updated sign-offs"
+    ]
+  },
+  "preserved_user_edits": [
+    "src/integrations/agent-responses/session-manager-wrapper.ts (untracked, 300s owner lease)",
+    "src/integrations/agent-responses/routes.ts (modified, selects wrapper)"
+  ],
+  "production_freeze": "All production changes including wrapper deletion frozen until reproduced supported-flow failure and scoped EDO remedy exist. Current 300s route behavior is observable baseline, not endorsed fix.",
+  "tasks": [
+    {
+      "id": "T1",
+      "title": "Bounded characterization tests (two-gap scope)",
+      "scope": "Test edits only. No production changes. Uses existing seams and Bun fake timers (in-process only).",
+      "assigned_developer": "afd876c7e6a07954f",
+      "assigned_qa": "a46f4d002a6357180",
+      "assigned_reviewer": "a010639c3a2e2e6ee",
+      "subtasks": {
+        "T1a": {
+          "file": "tests/agent-responses-continuation.test.ts",
+          "scope": "Owner TTL before/at/after boundary via narrowly scoped fake timers; always restore. Assert expired owner rejects even with live RPC; no unsafe replay. Preserve broker capability lifetime independently. Reuse existing fixture; do not duplicate existing 40ms/75ms tests without added boundary assertion."
+        },
+        "T1b": {
+          "file": "tests/agent-responses-mcp.test.ts",
+          "scope": "Paired real generic manager + MCP timeout/late-continuation test using real handler/release path. Owner TTL exceeds scaled environment TTL; child connected before deadline starts. Assert retirement/nonretryable MCP result and rejected late full-batch handoff without replay. Label as environment-TTL scaling, not owner expiry or proof of 90s cap. Test-only broker fixture may supply existing registration TTL seam; production APIs unchanged. If seam cannot preserve real path, report exact gap before expanding code."
+        }
+      },
+      "acceptance_criteria": [
+        "T1a demonstrates expired-owner rejection at exact boundary with controlled callback ordering",
+        "T1b demonstrates MCP retirement/nonretryable result and late-handoff rejection via real release path",
+        "All tests pass with bun test commands below",
+        "No swallowed errors, no journal TTL eviction changes, no extra Clock interface, no production clock policy changes"
+      ],
+      "qa_commands": [
+        "bun test ./tests/agent-responses-continuation.test.ts ./tests/agent-responses-session.test.ts ./tests/agent-responses-mcp.test.ts ./tests/turn-broker-diagnostics.test.ts --timeout 15000",
+        "bun test ./tests/chatgpt-web-harness.test.ts --test-name-pattern 'an explicitly aborted MCP request|a native tool deadline|an undelivered MCP call' --timeout 15000"
+      ],
+      "known_suite_limitations": [
+        "gateway-contract.test.ts:78 disabled-key expectation fails (fixture passes undefined key, triggers ambient config load)",
+        "codex-integration.test.ts symlink EPERM at lines 73 and 108 (Windows fixture setup, not product defect)",
+        "Full suite NOT green; these are environment/isolation issues, not T1 scope"
+      ],
+      "evidence_gate": "QA a46f4d002a6357180 independent run validation + reviewer a010639c3a2e2e6ee sign-off",
+      "status": "RELEASED_FOR_IMPLEMENTATION"
+    },
+    {
+      "id": "T2-DIAG-DISABLED-KEY",
+      "title": "Disabled-key fixture isolation defect (CONFIRMED)",
+      "scope": "Root cause reproduced by reliability a0100f7314f249e0a. Fixture passes undefined key at gateway-contract.test.ts:77 triggering routes.ts:107 default load. Product enabled behavior correct; fixture-only temp app-home isolation defect confirmed. No remedy authorized.",
+      "assigned_reliability": "a0100f7314f249e0a",
+      "status": "ROOT_CAUSE_CONFIRMED_NO_REMEDY_AUTHORIZED",
+      "finding": "Controlled child with fresh temp home: empty home 1pass/0fail; synthetic key via provisionAgentResponsesKey('create') then 0pass/1fail at line 78. No real key/config read, no source edits. Candidate fix: fixture-only temp app-home isolation with restoration/cleanup, not production admission change. Remedy under targeted EDO review."
+    },
+    {
+      "id": "T2-DIAG-FIXTURE-DEFECT",
+      "title": "Fixture defect remediation (EDO RESOLVED)",
+      "file": "tests/agent-responses-gateway-contract.test.ts",
+      "scope": "Fixture-only patch. No production API/route/key-loader changes. No null cast. No runner/global framework changes.",
+      "edo_resolution": {
+        "decision": "ACCEPT implementation proposal + reliability challenge",
+        "implementation_constraints": [
+          "Fresh empty temp app home for disabled-key fixture/imports",
+          "Override CODEX_CHATGPT_WEB_HOME solely around synchronous constructor",
+          "Exact previous value/delete restored in finally before any await, including constructor throw",
+          "Temp dir removed even on constructor/assertion/provider.close throw (nested finally)",
+          "Existing explicit-bearer assertions unchanged"
+        ],
+        "rejected_approaches": [
+          "null cast",
+          "production API/route/key-loader changes",
+          "runner/global framework changes"
+        ],
+        "qa_requirement": "Rerun exact isolated child test under empty AND synthetic provisioned parent homes; prior contrast is baseline red, not patched green"
+      },
+      "assigned_implementation": "a94d40c7ce439b957 (TL tiny fixture patch after gate)",
+      "assigned_qa": "a46f4d002a6357180",
+      "assigned_reviewer": "a010639c3a2e2e6ee",
+      "independence_note": "T1 developer afd876c7e6a07954f remains uninterrupted; TL implements fixture patch separately",
+      "status": "AWAITING_LEDGER_PUSH_BEFORE_EDIT_RELEASE"
+    },
+    {
+      "id": "T2-DIAG-EPERM",
+      "title": "EPERM symlink classification (environment limitation)",
+      "scope": "Classify codex-integration.test.ts symlink EPERM failures. No permission/config changes, no remedy.",
+      "assigned_architecture": "a6bd9846fc0e4b7b5",
+      "status": "CLASSIFIED_ENVIRONMENT_LIMITATION",
+      "finding": "EPERM at fixture setup (lines 73/108) before product actions. Temp-only fixtures, exact Windows denial mechanism unknown. Not a product defect."
+    },
+    {
+      "id": "T2-FIX",
+      "title": "Conditional production fix (NOT SELECTED)",
+      "scope": "CONDITIONAL on T1 reproducing supported-flow failure AND EDO scoping remedy within user design boundaries. No remedy currently selected.",
+      "condition": "Reproduced failure in supported flow + scoped EDO remedy required before any edit",
+      "status": "BLOCKED_NO_DEFECT_REPRODUCED"
+    },
+    {
+      "id": "T3",
+      "title": "Independent verification and review",
+      "scope": "Run focused QA commands, verify each new test case, then authorized project suite subset. Report all failures by exact name. Independent of T2 diagnosis tasks.",
+      "assigned_reviewer": "a010639c3a2e2e6ee",
+      "acceptance_criteria": [
+        "All T1 evidence verified independently",
+        "Red/green documented for any actual bug fix (characterization expected to pass baseline is not falsely called defect RED)",
+        "Task-specific commit/push through PM ledger workflow"
+      ],
+      "evidence_gate": "Reviewer sign-off required before any T2-FIX consideration",
+      "status": "BLOCKED_ON_T1"
+    }
+  ],
+  "council_record": {
+    "edo": "a94d40c7ce439b957",
+    "advisors": {
+      "architecture": "a6bd9846fc0e4b7b5",
+      "implementation": "afd876c7e6a07954f",
+      "reliability": "a0100f7314f249e0a",
+      "qa": "a46f4d002a6357180",
+      "alternative": "a326ea44f059776a0"
+    },
+    "peer_reviewers": [
+      "aa0d9a103073b79f8",
+      "aa7a6643f677b3542",
+      "ad9161c36512622e7",
+      "a49e8b9303fab798f",
+      "a087f9f0d483e4ac7"
+    ],
+    "independent_record_reviewer": "a010639c3a2e2e6ee",
+    "pm": "a5af1ee843f73d915",
+    "excluded": ["a39176f2a399c987d (wrong-worktree verifier)"],
+    "rebuttals_accepted": [
+      "owner+every RPC live required; expired owner rejects even with live RPC",
+      "complete-batch validation precedes sequential ACK with no rollback",
+      "protocol-specific timeout errors (codex_tool_timeout/nonretryable vs AggregateError)",
+      "scaled real handler/broker polling tests allowed without live-host claims",
+      "partial ACK consumption confirmed; assert close/revoke attempt, no replay/fabrication"
+    ],
+    "rebuttals_rejected": [
+      "contradictory expired-owner success criterion",
+      "zero-consumption after partial ACK",
+      "unconditional 409",
+      "misattributed withdrawn endpoint/RPC-cure proposals"
+    ],
+    "verdict_status": "bounded characterization approved; no production remedy selected; T2-DIAG-FIXTURE-DEFECT resolved"
+  },
+  "explicit_deferrals": [
+    "Five-tab saturation/reclamation stress: no lifecycle/resource-policy change or demonstrated capacity defect",
+    "New multi-poll sequence: no polling feature changed; existing bounded behavior preserved",
+    "Release-failure and staggered sibling expansion: do not duplicate existing coverage automatically"
+  ],
+  "ledger_push_sequence": [
+    "1. Sanitized ledger commit (this file only) to feat/generic-openai-api-module-20261026 — DONE at bc5b416",
+    "2. Verify remote SHA — DONE (bc5b416749a2c43665c8d9aecbaa6615ec8e630e)",
+    "3. Release T1 developer afd876c7e6a07954f for test-only edits — DONE",
+    "4. Update ledger with T2-DIAG-FIXTURE-DEFECT EDO resolution — PENDING COMMIT/PUSH",
+    "5. Release TL for fixture-only edit after ledger push verified",
+    "6. T1 characterization commit + push (after QA pass)",
+    "7. T2-DIAG-FIXTURE-DEFECT commit + push (after QA rerun under both homes)",
+    "8. T2-FIX commit + push ONLY if condition met and EDO releases scope",
+    "9. T3 review sign-off commit + push"
+  ],
+  "no_merge_pr_release": true,
+  "artifacts": [
+    "D:/mcp-recovery-scratch/council-ledger-handoff-input.txt",
+    "D:/mcp-recovery-scratch/council-review-context.txt",
+    "D:/mcp-recovery-scratch/council-anonymous-proposals.txt",
+    "D:/mcp-recovery-scratch/council-review-audit-input.txt"
+  ]
+}

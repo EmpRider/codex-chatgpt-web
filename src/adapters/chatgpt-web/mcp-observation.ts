@@ -25,6 +25,15 @@ export function observeMcpToolCalls(
   };
   const receive = transport.onmessage;
   transport.onmessage = (message, extra) => {
+    if ("method" in message && message.method === "initialize" && "id" in message) {
+      const version = message.params?.protocolVersion;
+      const capabilities = message.params?.capabilities;
+      const tasks = capabilities && typeof capabilities === "object" && !Array.isArray(capabilities)
+        ? (capabilities as Record<string, unknown>).tasks : undefined;
+      emit({ event: "client_capabilities",
+        protocol_version: typeof version === "string" && /^\d{4}-\d{2}-\d{2}$/.test(version) ? version : "unknown",
+        tasks_advertised: tasks !== null && typeof tasks === "object" && !Array.isArray(tasks) });
+    }
     if ("method" in message && message.method === "tools/call" && "id" in message) {
       const name = message.params?.name;
       const tool = typeof name === "string" && knownTools.has(name) ? name : "unknown";

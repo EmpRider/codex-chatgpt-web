@@ -1,0 +1,14 @@
+{
+  "task_id": "MCP-RECOVERY",
+  "retrieved_utc": "2026-10-28T20:31:05Z",
+  "skills": {
+    "council": {"repo": "EmpRider/claude-skills-llm-council", "sha": "a7565e21d5ab03551fe66e36818e05af245467b8", "path": "SKILL.md", "sha256": "6387755b0cd0f069720549c7e81d90b724433d4ff46cb127271b902939ad586d"},
+    "superpowers-brainstorming": {"repo": "obra/superpowers", "sha": "2ce8aa15d05bd57213e6f746f953aafb7ded7a8b", "path": "skills/brainstorming/SKILL.md", "sha256": "61a7ef918652108c76a3fd01e02dd92d39996c6b46d4cb2819cbd03f6c45e46a"},
+    "caveman": {"repo": "JuliusBrussee/caveman", "sha": "9b68f7ed12b05e7efaff18e65c5a3fc2849fd0a4", "path": "skills/caveman/SKILL.md", "sha256": "415d43518f2b1a9498c15a445d4657117b129ee5e81b19454ce348439cc6672b"},
+    "ponytail": {"repo": "DietrichGebert/ponytail", "sha": "09c434ab73ca43761c5d8b0c5d341926c2fba710", "path": "skills/ponytail/SKILL.md", "sha256": "9badd22a32e19cb884e46dfa8d3aae82bb81dfa5484105b8b4f0262df823a509"},
+    "i-have-adhd": {"repo": "ayghri/i-have-adhd", "sha": "1ecea1993b7fce257ffbd686c070948b5e07eda6", "path": "skills/i-have-adhd/SKILL.md", "sha256": "88955c019bbb1419ff4b49dbb1f80a867467de6233d7865af2e06a7d7b76c7d3"},
+    "attention-kind": {"repo": "alexgreensh/attention-span", "sha": "8a6e2250dbc1dfb1b4186e03a92484d8c799c1b0", "path": "output-styles/attention-kind.md", "sha256": "959c0ff96c80ae5f6c007618951cae339340ed586b3b1a7bb5970cf229344ece"},
+    "attention-rundown": {"repo": "alexgreensh/attention-span", "sha": "8a6e2250dbc1dfb1b4186e03a92484d8c799c1b0", "path": "output-styles/rundown.md", "sha256": "c78fd3f8e2c8e6a96515a48e4c32acef2dc6456cdec9aafadd5c53524bd19ced"}
+  },
+  "local_paths": ["/tmp/mcp-recovery-skills/council-SKILL.md", "/tmp/mcp-recovery-skills/superpowers-brainstorming.md", "/tmp/mcp-recovery-skills/caveman-SKILL.md", "/tmp/mcp-recovery-skills/ponytail-SKILL.md", "/tmp/mcp-recovery-skills/adhd-SKILL.md", "/tmp/mcp-recovery-skills/attention-kind.md", "/tmp/mcp-recovery-skills/attention-rundown.md"]
+}

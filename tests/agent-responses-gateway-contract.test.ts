@@ -1,4 +1,8 @@
 import { expect, test } from "bun:test";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { AgentResponsesAttemptJournal } from "../src/integrations/agent-responses/attempt-journal";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { defaultConfig } from "../src/config";
 import type { AppConfig } from "../src/config";
 import type { TurnBroker } from "../src/adapters/chatgpt-web/turn-broker";
@@ -74,10 +78,24 @@ function post(body: BodyInit, token?: string, headers: Record<string, string> = 
 
 test("generic /v1/models stays disabled without an operator-provisioned key, then requires its own bearer", async () => {
   const Provider = await gatewayConstructor();
-  const disabled = new Provider(config(), {} as TurnBroker, undefined, fakeManager());
-  expect(disabled.enabled).toBe(false);
-  expect((await disabled.handle(get("/v1/models"), "/v1/models")).status).toBe(404);
-  disabled.close();
+  // ponytail: fixture-only temp app-home isolates disabled-key construction from ambient operator config; upgrade if routes gains an explicit disabled constructor argument.
+  const isolatedHome = mkdtempSync(join(tmpdir(), "agent-responses-disabled-key-"));
+  const previousHome = process.env.CODEX_CHATGPT_WEB_HOME;
+  let disabled: InstanceType<typeof Provider> | undefined;
+  try {
+    try {
+      process.env.CODEX_CHATGPT_WEB_HOME = isolatedHome;
+      disabled = new Provider(config(), {} as TurnBroker, undefined, fakeManager());
+    } finally {
+      if (previousHome === undefined) delete process.env.CODEX_CHATGPT_WEB_HOME;
+      else process.env.CODEX_CHATGPT_WEB_HOME = previousHome;
+    }
+    expect(disabled.enabled).toBe(false);
+    expect((await disabled.handle(get("/v1/models"), "/v1/models")).status).toBe(404);
+  } finally {
+    try { disabled?.close(); }
+    finally { rmSync(isolatedHome, { recursive: true, force: true }); }
+  }
 
   const provider = new Provider(config(), {} as TurnBroker, bearer, fakeManager());
   try {
@@ -225,14 +243,8 @@ test("host, browser Origin, unknown route and untrusted tools cannot enter an ex
 test("journal duplicate is a 409 before a second browser Send", async () => {
   const Provider = await gatewayConstructor();
   const manager = fakeManager();
-  const claimed = new Set<string>();
-  const journal = { claim: (key: string | null) => {
-    if (!key) return undefined;
-    if (claimed.has(key)) throw new AgentResponsesRequestError("Already attempted", 409);
-    claimed.add(key);
-    return { advance: () => undefined };
-  } };
-  const provider = new Provider(config(), {} as TurnBroker, bearer, manager, journal);
+  const root = mkdtempSync(join(tmpdir(), "agent-gateway-journal-"));
+  const provider = new Provider(config(), {} as TurnBroker, bearer, manager, new AgentResponsesAttemptJournal(root));
   const request = () => post(JSON.stringify({ model, input: "Potential side effect" }), bearer,
     { "idempotency-key": "client-operation-unique-123" });
   try {
@@ -240,7 +252,26 @@ test("journal duplicate is a 409 before a second browser Send", async () => {
     const retry = await provider.handle(request(), "/v1/responses");
     expect(retry.status).toBe(409);
     expect(manager.starts).toBe(1);
-  } finally { provider.close(); }
+    const restarted = new Provider(config(), {} as TurnBroker, bearer, manager, new AgentResponsesAttemptJournal(root));
+    try { expect((await restarted.handle(request(), "/v1/responses")).status).toBe(409); }
+    finally { restarted.close(); }
+    expect(manager.starts).toBe(1);
+  } finally { provider.close(); rmSync(root, { recursive: true, force: true }); }
+});
+
+test("unavailable durable storage rejects a keyed request before browser Send", async () => {
+  const Provider = await gatewayConstructor();
+  const manager = fakeManager();
+  const root = mkdtempSync(join(tmpdir(), "agent-gateway-storage-"));
+  writeFileSync(join(root, "integrations"), "not a directory");
+  const provider = new Provider(config(), {} as TurnBroker, bearer, manager, new AgentResponsesAttemptJournal(root));
+  try {
+    const response = await provider.handle(post(JSON.stringify({ model, input: "Synthetic side effect" }), bearer,
+      { "idempotency-key": "blocked-operation-12345678" }), "/v1/responses");
+    expect(response.status).toBe(503);
+    expect(manager.starts).toBe(0);
+    expect(await response.text()).not.toContain(root);
+  } finally { provider.close(); rmSync(root, { recursive: true, force: true }); }
 });
 
 test("failure after SSE headers emits one terminal response.failed and no private exception", async () => {
