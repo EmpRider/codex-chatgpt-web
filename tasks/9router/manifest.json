@@ -845,8 +845,8 @@
         "items/R9-050-expose-safe-tool-result-continuation-conflict-causes.md#council-cw409-c1--execution-readiness-record; five real advisors, anonymous peer reviews and original-advisor rebuttals completed; diagnostic scope only, permanent root cause unverified"
       ],
       "blockedReason": null,
-      "updatedAt": "2026-11-01T12:31:26.000Z",
-      "work_status": "RUNNING",
+      "updatedAt": "2026-11-01T12:55:29.000Z",
+      "work_status": "REVIEW",
       "scope_status": "IN_SCOPE",
       "delivery_status": "NOT_PUBLISHED",
       "status_sync": "CONFIRMED",
@@ -866,11 +866,12 @@
         "items/R9-051-restore-diagnostic-code-allowlist-parity.md#council-cw409-c2-record; five real advisors, anonymous reviews and original-advisor rebuttals complete; C1 independent QA passed; one existing Activity literal and bounded regression only"
       ],
       "blockedReason": null,
-      "updatedAt": "2026-11-01T12:53:02.435Z",
-      "work_status": "READY",
+      "updatedAt": "2026-11-01T12:55:29.000Z",
+      "work_status": "RUNNING",
       "scope_status": "IN_SCOPE",
       "delivery_status": "NOT_PUBLISHED",
-      "status_sync": "PENDING",
+      "status_sync": "CONFIRMED",
+      "ledger_publication_commit": "621a24730b5f5ea77f5472c251f83fb3379aed5d",
       "agent": "S4 exclusive implementation specialist after C1 freeze; independent QA S3; sole ledger/publication coordinator PM"
     }
   ]
