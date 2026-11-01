@@ -41,6 +41,23 @@ test("string prompts normalize with existing defaults and tool results do not im
   ] }).newUserAfterToolHistory).toBe(false);
 });
 
+test("null tools from OpenAI-compatible clients means no advertised functions", () => {
+  const base = { model, input: "Hi" };
+  for (const tools of [undefined, null, []]) {
+    const parsed = parseAgentResponsesRequest({ ...base, tools });
+    expect(parsed.tools).toEqual([]);
+    expect(parsed.toolChoice).toBe("auto");
+  }
+  expect(() => parseAgentResponsesRequest({ ...base, tools: null, tool_choice: "required" }))
+    .toThrow("Requested tool_choice requires declared functions");
+  for (const invalid of [{}, "Read", 12]) {
+    expect(() => parseAgentResponsesRequest({ ...base, tools: invalid }))
+      .toThrow(`tools must be an array of up to 256 functions (received ${typeof invalid})`);
+  }
+  expect(() => parseAgentResponsesRequest({ ...base, tools: Array(257).fill(declared) }))
+    .toThrow("tools must be an array of up to 256 functions (received 257)");
+});
+
 test("unsupported stateful or control inputs fail closed with classified errors", () => {
   const base = { model, input: "Hi" };
   for (const override of [{ previous_response_id: "resp_123" }, { conversation: "conv_123" },

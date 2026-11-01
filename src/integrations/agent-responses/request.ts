@@ -181,10 +181,20 @@ export function parseAgentResponsesRequest(value: unknown): AgentResponsesReques
   }
   const input = typeof body.input === "string" ? [{ role: "user", content: body.input }] : body.input;
   if (!Array.isArray(input) || input.length > 2_048) throw new AgentResponsesRequestError("input must be text or an array of up to 2048 items");
-  if (body.tools !== undefined && (!Array.isArray(body.tools) || body.tools.length > 256)) {
-    throw new AgentResponsesRequestError("tools must be an array of up to 256 functions");
+  // Some OpenAI-compatible clients serialize an omitted optional tools list as null.
+  // Treat null as no tools; never discard malformed declarations or truncate the list.
+  const rawTools = body.tools == null ? [] : body.tools;
+  if (!Array.isArray(rawTools)) {
+    throw new AgentResponsesRequestError(
+      `tools must be an array of up to 256 functions (received ${typeof rawTools})`,
+    );
   }
-  const tools: CodexTool[] = (body.tools as unknown[] | undefined ?? []).map(normalizeAgentResponsesTool);
+  if (rawTools.length > 256) {
+    throw new AgentResponsesRequestError(
+      `tools must be an array of up to 256 functions (received ${rawTools.length})`,
+    );
+  }
+  const tools: CodexTool[] = rawTools.map(normalizeAgentResponsesTool);
   // Keep even agent-generated tool manuals bounded in aggregate. They remain
   // intact in the broker inventory; only their initial prompt previews shrink.
   if (tools.reduce((sum, tool) => sum + tool.description.length, 0) > 2_000_000) {
