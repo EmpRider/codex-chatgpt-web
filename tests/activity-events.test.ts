@@ -33,6 +33,21 @@ test("emits only versioned, bounded and enumerated flat Activity fields", () => 
   expect(contractModule.validateActivityEvent(event)).toEqual(event);
 });
 
+test("catalog diagnostics retain only bounded numeric sizes and fixed categories", () => {
+  const observed = contract().create({ level: "INFO", category: "api", event: "tool_catalog_observed",
+    phase: "validation", code: "ok", count: 305,
+    description_chars: 2_456_789, max_description_chars: 120_000 });
+  expect(observed).toMatchObject({ count: 305, description_chars: 2_456_789,
+    max_description_chars: 120_000 });
+  expect(JSON.stringify(observed)).not.toContain("description_text");
+  const rejected = contract().create({ level: "WARN", category: "api", event: "request_failed",
+    phase: "completion", code: "tool_description_total_limit", http_status: 413 });
+  expect(rejected).toMatchObject({ code: "tool_description_total_limit", http_status: 413 });
+  expect(contract().create({ level: "INFO", category: "api", event: "tool_catalog_observed",
+    phase: "validation", code: "ok", description_chars: 128_000_001 })).toBeNull();
+  expect(contractModule.validateActivityEvent({ ...observed, raw_tools: "secret" })).toBeNull();
+});
+
 test("never passes raw request, session or turn IDs to JSON or observer", () => {
   const rawRequest = "Bearer secret-request-should-not-log";
   const rawSession = "https://internal.example/private/user?token=secret-session";

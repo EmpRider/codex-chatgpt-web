@@ -45,8 +45,11 @@ test("invalid schemas, oversized manuals and unadvertised choices fail before ex
   expect(() => normalizeAgentResponsesTool({ ...declared,
     parameters: { type: "object", properties: { x: { type: "not-a-schema-type" } } } }, 0))
     .toThrow("invalid or unsupported JSON Schema");
-  expect(() => normalizeAgentResponsesTool({ ...declared, description: "x".repeat(128_001) }, 0))
-    .toThrow("exceeds 128000 characters");
+  const overlong = () => normalizeAgentResponsesTool({ ...declared, description: "x".repeat(128_001) }, 0);
+  expect(overlong).toThrow("exceeds 128000 characters");
+  try { overlong(); } catch (error) {
+    expect((error as { diagnosticCode?: string }).diagnosticCode).toBe("tool_description_item_limit");
+  }
   expect(() => normalizeAgentResponsesTool({ ...declared, description: 5 }, 0))
     .toThrow("Invalid function description");
   expect(() => parseAgentResponsesRequest({ ...base, tool_choice: { type: "function", name: "Write" } }))

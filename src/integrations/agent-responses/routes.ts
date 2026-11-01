@@ -98,6 +98,28 @@ function safeStageMessage(error: unknown, status: number): string {
   return "Generic Responses request failed";
 }
 
+/** Numerically summarize untrusted tool declarations; never retain or log their text or schemas. */
+function toolCatalogCounts(value: unknown): Pick<ActivityDraft, "count" | "description_chars" | "max_description_chars"> | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const tools = (value as Record<string, unknown>).tools;
+  if (!Array.isArray(tools)) return undefined;
+  let descriptionChars = 0;
+  let maxDescriptionChars = 0;
+  for (const raw of tools) {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) continue;
+    const description = (raw as Record<string, unknown>).description;
+    if (typeof description !== "string") continue;
+    descriptionChars += description.length;
+    maxDescriptionChars = Math.max(maxDescriptionChars, description.length);
+  }
+  return {
+    ...(tools.length <= 1_000_000 ? { count: tools.length } : {}),
+    ...(Number.isSafeInteger(descriptionChars) && descriptionChars <= 128_000_000
+      ? { description_chars: descriptionChars } : {}),
+    ...(maxDescriptionChars <= 128_000_000 ? { max_description_chars: maxDescriptionChars } : {}),
+  };
+}
+
 /** Untrusted API principal is distinct from native Codex. No native dispatch/fallback. */
 export class AgentResponsesProvider {
   private readonly manager: AgentResponsesSessionManager;
@@ -131,8 +153,10 @@ export class AgentResponsesProvider {
         code: response.ok ? "ok" : response.status === 401 ? "unauthorized" : "invalid_request",
         ...(response.status === 200 || response.status === 400 || response.status === 401
           || response.status === 403 || response.status === 404 || response.status === 409
-          || response.status === 415 || response.status === 422 || response.status === 429
-          || response.status === 503 ? { http_status: response.status } : {}),
+          || response.status === 413 || response.status === 415 || response.status === 422
+          || response.status === 429 || response.status === 500 || response.status === 503
+          || response.status === 504 || response.status === 507
+          ? { http_status: response.status } : {}),
         duration_ms: Math.min(86_400_000, Date.now() - started) });
       return response;
     };
@@ -179,6 +203,9 @@ export class AgentResponsesProvider {
         if (error instanceof SyntaxError) throw new AgentResponsesRequestError("Malformed JSON request body", 400);
         throw error;
       }
+      const toolCounts = toolCatalogCounts(rawBody);
+      if (toolCounts) log({ level: "INFO", category: "api", event: "tool_catalog_observed",
+        phase: "validation", code: "ok", ...toolCounts });
       const parsed = parseAgentResponsesRequest(rawBody);
       const matchesPending = parsed.outputs.some(output => this.manager.hasPendingCall(output.callId));
       if (matchesPending && parsed.newUserAfterToolHistory) {
@@ -270,8 +297,13 @@ export class AgentResponsesProvider {
       }), { headers: { "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-cache" } });
     } catch (error) {
       const status = statusOf(error);
+      const diagnosticCode = error instanceof AgentResponsesRequestError ? error.diagnosticCode
+        : error instanceof HttpBodyReadError && status === 413 ? "body_size_limit" : undefined;
       log({ level: status >= 500 ? "ERROR" : "WARN", category: "api", event: "request_failed", phase: "completion",
-        code: status >= 500 ? "internal" : "invalid_request",
+        code: diagnosticCode ?? (status >= 500 ? "internal" : status === 413 ? "capacity" : "invalid_request"),
+        ...(status === 400 || status === 408 || status === 409 || status === 413 || status === 415
+          || status === 422 || status === 429 || status === 500 || status === 503 || status === 504
+          ? { http_status: status as 400 | 409 | 413 | 415 | 422 | 429 | 500 | 503 | 504 } : {}),
         duration_ms: Math.min(86_400_000, Date.now() - started) });
       return done(publicError(status, stageStarted ? safeStageMessage(error, status) : safeMessage(error, status), error));
     }

@@ -5,6 +5,7 @@ const LEVELS = ["DEBUG", "INFO", "WARN", "ERROR"] as const;
 const CATEGORIES = ["api", "journal", "browser", "broker", "mcp", "recovery"] as const;
 const EVENTS = [
   "request_started", "request_completed", "request_failed", "auth_rejected", "request_rejected",
+  "tool_catalog_observed",
   "journal_claimed", "journal_failed", "browser_started", "prompt_prepared", "send_activated", "send_accepted",
   "send_unknown", "browser_rebound", "browser_finished", "tool_batch_delivered",
   "tool_results_received", "tool_results_returned", "tool_results_rejected", "owner_retired", "session_retired",
@@ -21,6 +22,8 @@ const PHASES = [
 ] as const;
 const CODES = [
   "ok", "unauthorized", "invalid_request", "model_rejected", "conflict", "capacity",
+  "body_size_limit", "tool_description_total_limit", "tool_description_item_limit",
+  "tool_schema_size_limit", "tool_schema_invalid",
   "unavailable", "timeout", "storage_failed", "unknown_outcome", "owner_mismatch",
   "partial_results", "cancelled", "internal", "tasks_advertised", "tasks_not_advertised",
   "send_possible", "send_activated", "browser_accepted", "tool_handoff_possible", "tools_pending", "response_prepared", "outcome_unknown",
@@ -40,13 +43,16 @@ export interface ActivityEvent {
   readonly duration_ms?: number;
   readonly count?: number;
   readonly buffer_bytes?: number;
+  readonly description_chars?: number;
+  readonly max_description_chars?: number;
   readonly request_hash?: string;
   readonly session_hash?: string;
   readonly turn_hash?: string;
 }
 
 export type ActivityDraft = Pick<ActivityEvent, "level" | "category" | "event" | "phase" | "code">
-  & Pick<ActivityEvent, "http_status" | "duration_ms" | "count" | "buffer_bytes">;
+  & Pick<ActivityEvent, "http_status" | "duration_ms" | "count" | "buffer_bytes"
+    | "description_chars" | "max_description_chars">;
 
 export interface ActivityCorrelationIds {
   readonly requestId?: string;
@@ -56,6 +62,7 @@ export interface ActivityCorrelationIds {
 
 const DRAFT_KEYS = new Set([
   "level", "category", "event", "phase", "code", "http_status", "duration_ms", "count", "buffer_bytes",
+  "description_chars", "max_description_chars",
 ]);
 const EVENT_KEYS = new Set([
   ...DRAFT_KEYS, "version", "at", "request_hash", "session_hash", "turn_hash",
@@ -96,6 +103,8 @@ function safeFields(record: Record<string, unknown>): boolean {
   if ("duration_ms" in record && !boundedInteger(record.duration_ms, 86_400_000)) return false;
   if ("count" in record && !boundedInteger(record.count, 1_000_000)) return false;
   if ("buffer_bytes" in record && !boundedInteger(record.buffer_bytes, 16_777_216)) return false;
+  if ("description_chars" in record && !boundedInteger(record.description_chars, 128_000_000)) return false;
+  if ("max_description_chars" in record && !boundedInteger(record.max_description_chars, 128_000_000)) return false;
   return true;
 }
 
@@ -145,6 +154,8 @@ export function createActivityContract(): {
           ...(fields.duration_ms !== undefined ? { duration_ms: fields.duration_ms } : {}),
           ...(fields.count !== undefined ? { count: fields.count } : {}),
           ...(fields.buffer_bytes !== undefined ? { buffer_bytes: fields.buffer_bytes } : {}),
+          ...(fields.description_chars !== undefined ? { description_chars: fields.description_chars } : {}),
+          ...(fields.max_description_chars !== undefined ? { max_description_chars: fields.max_description_chars } : {}),
           ...(correlations.requestId ? { request_hash: hash("request", correlations.requestId as string) } : {}),
           ...(correlations.sessionId ? { session_hash: hash("session", correlations.sessionId as string) } : {}),
           ...(correlations.turnId ? { turn_hash: hash("turn", correlations.turnId as string) } : {}),

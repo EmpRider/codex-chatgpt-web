@@ -199,7 +199,8 @@ export function parseAgentResponsesRequest(value: unknown): AgentResponsesReques
   // Keep even agent-generated tool manuals bounded in aggregate. They remain
   // intact in the broker inventory; only their initial prompt previews shrink.
   if (tools.reduce((sum, tool) => sum + tool.description.length, 0) > 2_000_000) {
-    throw new AgentResponsesRequestError("Function descriptions exceed the 2,000,000-character aggregate limit", 413);
+    throw new AgentResponsesRequestError("Function descriptions exceed the 2,000,000-character aggregate limit", 413,
+      "tool_description_total_limit");
   }
   const names = new Set<string>();
   for (const tool of tools) {

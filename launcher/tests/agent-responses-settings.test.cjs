@@ -83,6 +83,14 @@ test("gateway activity uses the original logger and sanitized export without lea
     assert.equal(logger.recent().at(-1).event, "agent_responses.api.request_completed");
     assert.equal(exportSanitizedLogs({ filePath, destinationPath: exported }), 1);
     assert.match(fs.readFileSync(exported, "utf8"), /agent_responses\.api\.request_completed/);
+    const catalog = parseGatewayActivityLine(`[agent-responses.activity] ${JSON.stringify({
+      ...payload, event: "tool_catalog_observed", phase: "validation", count: 305,
+      description_chars: 2_456_789, max_description_chars: 120_000,
+    })}`);
+    assert.deepEqual(catalog?.detail.description_chars, 2_456_789);
+    assert.deepEqual(catalog?.detail.max_description_chars, 120_000);
+    assert.equal(parseGatewayActivityLine(`[agent-responses.activity] ${JSON.stringify({ ...payload,
+      description_chars: 128_000_001 })}`), null);
     assert.equal(parseGatewayActivityLine(`[agent-responses.activity] ${JSON.stringify({ ...payload, apiKey: "secret" })}`), null);
     assert.equal(parseGatewayActivityLine(`[agent-responses.activity] ${JSON.stringify({ ...payload, request_hash: "sk-EXPOSEDsecretKey1234" })}`), null);
   } finally { fs.rmSync(directory, { recursive: true, force: true }); }

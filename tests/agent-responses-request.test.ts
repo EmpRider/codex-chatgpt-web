@@ -68,6 +68,17 @@ test("Responses preserves all 305 agent-declared functions without truncation", 
     .toThrow("tools must be an array of up to 512 functions (received 610)");
 });
 
+test("aggregate tool-description budget exposes only a fixed diagnostic category", () => {
+  const tools = Array.from({ length: 18 }, (_, index) => ({ ...declared,
+    name: `Manual_${index}`, description: "x".repeat(120_000) }));
+  let error: unknown;
+  try { parseAgentResponsesRequest({ model, input: "Hi", tools }); }
+  catch (cause) { error = cause; }
+  expect(error).toBeInstanceOf(AgentResponsesRequestError);
+  expect((error as AgentResponsesRequestError).status).toBe(413);
+  expect((error as AgentResponsesRequestError).diagnosticCode).toBe("tool_description_total_limit");
+});
+
 test("unsupported stateful or control inputs fail closed with classified errors", () => {
   const base = { model, input: "Hi" };
   for (const override of [{ previous_response_id: "resp_123" }, { conversation: "conv_123" },

@@ -3,8 +3,14 @@ import Ajv2020 from "ajv/dist/2020.js";
 import addFormats from "ajv-formats";
 import type { CodexTool } from "../../types";
 
+export type AgentResponsesDiagnosticCode =
+  | "tool_description_total_limit" | "tool_description_item_limit"
+  | "tool_schema_size_limit" | "tool_schema_invalid";
+
 export class AgentResponsesRequestError extends Error {
-  constructor(message: string, readonly status = 400) { super(message); }
+  constructor(message: string, readonly status = 400, readonly diagnosticCode?: AgentResponsesDiagnosticCode) {
+    super(message);
+  }
 }
 
 // Agent tools can advertise different JSON Schema dialects. Draft 2020-12
@@ -48,7 +54,8 @@ export function normalizeAgentResponsesTool(value: unknown, index: number): Code
     throw new AgentResponsesRequestError(`Invalid function description at index ${index}`);
   }
   if (description.length > MAX_TOOL_DESCRIPTION_CHARS) {
-    throw new AgentResponsesRequestError(`Function description at index ${index} exceeds ${MAX_TOOL_DESCRIPTION_CHARS} characters`, 413);
+    throw new AgentResponsesRequestError(`Function description at index ${index} exceeds ${MAX_TOOL_DESCRIPTION_CHARS} characters`, 413,
+      "tool_description_item_limit");
   }
   if (entry.strict !== undefined && typeof entry.strict !== "boolean") {
     throw new AgentResponsesRequestError(`Function strict must be a boolean at index ${index}`);
@@ -59,10 +66,12 @@ export function normalizeAgentResponsesTool(value: unknown, index: number): Code
     throw new AgentResponsesRequestError(`Function at index ${index} requires an object JSON Schema`);
   }
   if (JSON.stringify(parameters).length > 64_000) {
-    throw new AgentResponsesRequestError(`Function schema at index ${index} exceeds 64 KB`, 413);
+    throw new AgentResponsesRequestError(`Function schema at index ${index} exceeds 64 KB`, 413,
+      "tool_schema_size_limit");
   }
   try { validatorFor(parameters as Record<string, unknown>).compile(parameters); }
-  catch { throw new AgentResponsesRequestError(`Function at index ${index} has an invalid or unsupported JSON Schema`, 422); }
+  catch { throw new AgentResponsesRequestError(`Function at index ${index} has an invalid or unsupported JSON Schema`, 422,
+    "tool_schema_invalid"); }
   return { name: entry.name, description, parameters: parameters as Record<string, unknown>,
     ...(entry.strict === true ? { strict: true } : {}) };
 }

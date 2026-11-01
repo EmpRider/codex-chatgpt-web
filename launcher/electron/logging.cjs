@@ -9,7 +9,8 @@ const GATEWAY_ACTIVITY_PREFIX = "[agent-responses.activity] ";
 const GATEWAY_ACTIVITY_LEVELS = { DEBUG: "debug", INFO: "info", WARN: "warn", ERROR: "error" };
 const GATEWAY_ACTIVITY_FIELDS = new Set([
   "version", "at", "level", "category", "event", "phase", "code", "http_status",
-  "duration_ms", "count", "buffer_bytes", "request_hash", "session_hash", "turn_hash",
+  "duration_ms", "count", "buffer_bytes", "description_chars", "max_description_chars",
+  "request_hash", "session_hash", "turn_hash",
 ]);
 
 function parseGatewayActivityLine(line) {
@@ -24,9 +25,12 @@ function parseGatewayActivityLine(line) {
       || typeof event.code !== "string" || !/^[a-z][a-z_]{1,31}$/.test(event.code)
       || typeof event.at !== "string" || !/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/.test(event.at)) return null;
     const detail = { phase: event.phase, code: event.code };
-    for (const field of ["http_status", "duration_ms", "count", "buffer_bytes"]) {
+    for (const field of ["http_status", "duration_ms", "count", "buffer_bytes",
+      "description_chars", "max_description_chars"]) {
       if (field in event) {
-        if (!Number.isSafeInteger(event[field]) || event[field] < 0 || event[field] > 86_400_000) return null;
+        const max = field === "description_chars" || field === "max_description_chars"
+          ? 128_000_000 : 86_400_000;
+        if (!Number.isSafeInteger(event[field]) || event[field] < 0 || event[field] > max) return null;
         detail[field] = event[field];
       }
     }
