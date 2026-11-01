@@ -2,10 +2,11 @@ import Ajv from "ajv";
 import Ajv2020 from "ajv/dist/2020.js";
 import addFormats from "ajv-formats";
 import type { CodexTool } from "../../types";
+import { MAX_EXTERNAL_AGENT_TOOL_SCHEMA_BYTES } from "./limits";
 
 export type AgentResponsesDiagnosticCode =
   | "tool_description_total_limit" | "tool_description_item_limit"
-  | "tool_schema_size_limit" | "tool_schema_invalid";
+  | "tool_schema_size_limit" | "tool_schema_total_limit" | "tool_schema_invalid";
 
 export class AgentResponsesRequestError extends Error {
   constructor(message: string, readonly status = 400, readonly diagnosticCode?: AgentResponsesDiagnosticCode) {
@@ -65,8 +66,10 @@ export function normalizeAgentResponsesTool(value: unknown, index: number): Code
     || (parameters as Record<string, unknown>).type !== "object") {
     throw new AgentResponsesRequestError(`Function at index ${index} requires an object JSON Schema`);
   }
-  if (JSON.stringify(parameters).length > 64_000) {
-    throw new AgentResponsesRequestError(`Function schema at index ${index} exceeds 64 KB`, 413,
+  const schemaBytes = Buffer.byteLength(JSON.stringify(parameters), "utf8");
+  if (schemaBytes > MAX_EXTERNAL_AGENT_TOOL_SCHEMA_BYTES) {
+    throw new AgentResponsesRequestError(
+      `Function schema at index ${index} exceeds ${MAX_EXTERNAL_AGENT_TOOL_SCHEMA_BYTES} bytes`, 413,
       "tool_schema_size_limit");
   }
   try { validatorFor(parameters as Record<string, unknown>).compile(parameters); }

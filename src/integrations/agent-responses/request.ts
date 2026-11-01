@@ -3,7 +3,7 @@ import type { BrokerToolResult } from "../../adapters/chatgpt-web/turn-broker";
 import type { ChatGptWebPromptImage } from "../../adapters/chatgpt-web/prompt";
 import type { ChatGptWebCodexEffort } from "../../chatgpt-web-models";
 import { normalizeAgentResponsesTool } from "./tool-policy";
-import { MAX_EXTERNAL_AGENT_FUNCTIONS } from "./limits";
+import { MAX_EXTERNAL_AGENT_FUNCTIONS, MAX_EXTERNAL_AGENT_TOTAL_SCHEMA_BYTES } from "./limits";
 import { AgentResponsesRequestError } from "./tool-policy";
 
 export { AgentResponsesRequestError } from "./tool-policy";
@@ -194,6 +194,20 @@ export function parseAgentResponsesRequest(value: unknown): AgentResponsesReques
     throw new AgentResponsesRequestError(
       `tools must be an array of up to ${MAX_EXTERNAL_AGENT_FUNCTIONS} functions (received ${rawTools.length})`,
     );
+  }
+  // Reject unbounded catalogs before compiling any JSON Schema. The limit is
+  // independent of tool descriptions and does not truncate or rewrite schemas.
+  let totalSchemaBytes = 0;
+  for (const raw of rawTools) {
+    if (raw === null || typeof raw !== "object" || Array.isArray(raw)) continue;
+    const schema = (raw as Record<string, unknown>).parameters;
+    if (schema === undefined || schema === null || typeof schema !== "object" || Array.isArray(schema)) continue;
+    totalSchemaBytes += Buffer.byteLength(JSON.stringify(schema), "utf8");
+    if (totalSchemaBytes > MAX_EXTERNAL_AGENT_TOTAL_SCHEMA_BYTES) {
+      throw new AgentResponsesRequestError(
+        `Function schemas exceed the ${MAX_EXTERNAL_AGENT_TOTAL_SCHEMA_BYTES}-byte aggregate limit`, 413,
+        "tool_schema_total_limit");
+    }
   }
   const tools: CodexTool[] = rawTools.map(normalizeAgentResponsesTool);
   // Keep even agent-generated tool manuals bounded in aggregate. They remain

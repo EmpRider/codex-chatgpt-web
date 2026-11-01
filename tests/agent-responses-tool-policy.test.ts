@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { parseAgentResponsesRequest } from "../src/integrations/agent-responses/request";
-import { assertAgentResponsesToolArguments, normalizeAgentResponsesTool } from "../src/integrations/agent-responses/tool-policy";
+import { AgentResponsesRequestError, assertAgentResponsesToolArguments, normalizeAgentResponsesTool } from "../src/integrations/agent-responses/tool-policy";
 
 const model = "test-model";
 const declared = { type: "function", name: "Read", description: "Read file",
@@ -59,6 +59,23 @@ test("invalid schemas, oversized manuals and unadvertised choices fail before ex
   expect(() => parseAgentResponsesRequest({ ...base, tool_choice: { type: "allowed_tools", tools: [] } }))
     .toThrow("Unsupported tool_choice");
   expect(parseAgentResponsesRequest({ ...base, tool_choice: "none" }).toolChoice).toBe("none");
+});
+
+test("large valid tool schemas survive intact, but unreasonable per-tool sizes fail closed", () => {
+  const schema = { type: "object", properties: { value: {
+    type: "string", description: "x".repeat(100_000),
+  } }, required: ["value"] };
+  const tool = normalizeAgentResponsesTool({ ...declared, parameters: schema }, 0);
+  expect(tool.parameters).toEqual(schema);
+  expect(() => assertAgentResponsesToolArguments(tool, { value: "hello" })).not.toThrow();
+  expect(() => assertAgentResponsesToolArguments(tool, { value: 123 })).toThrow("violate its advertised JSON Schema");
+  let rejected: unknown;
+  try { normalizeAgentResponsesTool({ ...declared, parameters: { type: "object",
+    description: "z".repeat(4 * 1024 * 1024) } }, 0); }
+  catch (error) { rejected = error; }
+  expect(rejected).toBeInstanceOf(Error);
+  expect((rejected as AgentResponsesRequestError).status).toBe(413);
+  expect((rejected as AgentResponsesRequestError).diagnosticCode).toBe("tool_schema_size_limit");
 });
 
 test("strict function declaration must be a boolean", () => {

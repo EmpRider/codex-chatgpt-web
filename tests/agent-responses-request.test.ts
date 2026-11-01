@@ -52,7 +52,7 @@ test("null tools from OpenAI-compatible clients means no advertised functions", 
     .toThrow("Requested tool_choice requires declared functions");
   for (const invalid of [{}, "Read", 12]) {
     expect(() => parseAgentResponsesRequest({ ...base, tools: invalid }))
-      .toThrow(`tools must be an array of up to 256 functions (received ${typeof invalid})`);
+      .toThrow(`tools must be an array of up to 512 functions (received ${typeof invalid})`);
   }
   expect(() => parseAgentResponsesRequest({ ...base, tools: Array(513).fill(declared) }))
     .toThrow("tools must be an array of up to 512 functions (received 513)");
@@ -77,6 +77,25 @@ test("aggregate tool-description budget exposes only a fixed diagnostic category
   expect(error).toBeInstanceOf(AgentResponsesRequestError);
   expect((error as AgentResponsesRequestError).status).toBe(413);
   expect((error as AgentResponsesRequestError).diagnosticCode).toBe("tool_description_total_limit");
+});
+
+test("large schemas work with 305 tools, while aggregate oversized catalogs fail safely", () => {
+  const large = { type: "object", properties: { payload: {
+    type: "string", description: "schema".repeat(15_000),
+  } } };
+  const tools = Array.from({ length: 305 }, (_, index) => ({ ...declared,
+    name: `Function_${index}`, parameters: index === 304 ? large : declared.parameters }));
+  const parsed = parseAgentResponsesRequest({ model, input: "Hi", tools });
+  expect(parsed.tools).toHaveLength(305);
+  expect(parsed.tools[304]?.parameters).toEqual(large);
+  const sharedDescription = "x".repeat(900_000);
+  const oversized = Array.from({ length: 40 }, (_, index) => ({ ...declared,
+    name: `Wide_${index}`, parameters: { type: "object", description: sharedDescription } }));
+  let rejection: unknown;
+  try { parseAgentResponsesRequest({ model, input: "Hi", tools: oversized }); }
+  catch (error) { rejection = error; }
+  expect((rejection as AgentResponsesRequestError).status).toBe(413);
+  expect((rejection as AgentResponsesRequestError).diagnosticCode).toBe("tool_schema_total_limit");
 });
 
 test("unsupported stateful or control inputs fail closed with classified errors", () => {
