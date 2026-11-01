@@ -1,4 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
+import { MAX_EXTERNAL_AGENT_FUNCTIONS } from "../../integrations/agent-responses/limits";
 import { reportAgentResponsesActivity, type ActivityDraft } from "../../activity-events";
 import { chmodSync, existsSync, lstatSync, mkdirSync, unlinkSync } from "node:fs";
 import { createConnection, createServer, type Server, type Socket } from "node:net";
@@ -264,7 +265,7 @@ function ownerEnvironment(value: unknown): BrokerTurnEnvironment {
     const external = value as Partial<ExternalAgentTurnEnvironment> & Record<string, unknown>;
     if (Object.keys(external).some(key => key !== "kind" && key !== "tools")
       || !Array.isArray(external.tools)
-      || external.tools.length > 256
+      || external.tools.length > MAX_EXTERNAL_AGENT_FUNCTIONS
       || external.tools.some(tool => !tool || typeof tool.name !== "string"
         || typeof tool.description !== "string"
         || !tool.parameters || typeof tool.parameters !== "object" || Array.isArray(tool.parameters))) {

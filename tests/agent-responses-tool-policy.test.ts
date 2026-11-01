@@ -13,7 +13,7 @@ test("untrusted declarations reject reserved functions, duplicate names and unsu
     expect(() => normalizeAgentResponsesTool({ ...declared, name }, 0)).toThrow("reserved function name");
   }
   expect(() => parseAgentResponsesRequest({ ...base, tools: [declared, declared] })).toThrow("Duplicate tool name");
-  expect(() => parseAgentResponsesRequest({ ...base, tools: Array(257).fill(declared) })).toThrow("up to 256");
+  expect(() => parseAgentResponsesRequest({ ...base, tools: Array(513).fill(declared) })).toThrow("up to 512");
   expect(() => normalizeAgentResponsesTool({ ...declared, type: "custom" }, 0)).toThrow("Unsupported tool type");
   expect(() => normalizeAgentResponsesTool({ ...declared, name: "bad name" }, 0)).toThrow("Invalid or reserved");
 });

@@ -3,6 +3,7 @@ import type { BrokerToolResult } from "../../adapters/chatgpt-web/turn-broker";
 import type { ChatGptWebPromptImage } from "../../adapters/chatgpt-web/prompt";
 import type { ChatGptWebCodexEffort } from "../../chatgpt-web-models";
 import { normalizeAgentResponsesTool } from "./tool-policy";
+import { MAX_EXTERNAL_AGENT_FUNCTIONS } from "./limits";
 import { AgentResponsesRequestError } from "./tool-policy";
 
 export { AgentResponsesRequestError } from "./tool-policy";
@@ -186,12 +187,12 @@ export function parseAgentResponsesRequest(value: unknown): AgentResponsesReques
   const rawTools = body.tools == null ? [] : body.tools;
   if (!Array.isArray(rawTools)) {
     throw new AgentResponsesRequestError(
-      `tools must be an array of up to 256 functions (received ${typeof rawTools})`,
+      `tools must be an array of up to ${MAX_EXTERNAL_AGENT_FUNCTIONS} functions (received ${typeof rawTools})`,
     );
   }
-  if (rawTools.length > 256) {
+  if (rawTools.length > MAX_EXTERNAL_AGENT_FUNCTIONS) {
     throw new AgentResponsesRequestError(
-      `tools must be an array of up to 256 functions (received ${rawTools.length})`,
+      `tools must be an array of up to ${MAX_EXTERNAL_AGENT_FUNCTIONS} functions (received ${rawTools.length})`,
     );
   }
   const tools: CodexTool[] = rawTools.map(normalizeAgentResponsesTool);

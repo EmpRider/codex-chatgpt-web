@@ -54,8 +54,18 @@ test("null tools from OpenAI-compatible clients means no advertised functions", 
     expect(() => parseAgentResponsesRequest({ ...base, tools: invalid }))
       .toThrow(`tools must be an array of up to 256 functions (received ${typeof invalid})`);
   }
-  expect(() => parseAgentResponsesRequest({ ...base, tools: Array(257).fill(declared) }))
-    .toThrow("tools must be an array of up to 256 functions (received 257)");
+  expect(() => parseAgentResponsesRequest({ ...base, tools: Array(513).fill(declared) }))
+    .toThrow("tools must be an array of up to 512 functions (received 513)");
+});
+
+test("Responses preserves all 305 agent-declared functions without truncation", () => {
+  const tools = Array.from({ length: 305 }, (_, index) => ({ ...declared, name: `Tool_${index}` }));
+  const parsed = parseAgentResponsesRequest({ model, input: "Hi", tools });
+  expect(parsed.tools).toHaveLength(305);
+  expect(parsed.tools.map(tool => tool.name)).toEqual(tools.map(tool => tool.name));
+  expect(parsed.tools[304]?.parameters).toEqual(declared.parameters);
+  expect(() => parseAgentResponsesRequest({ model, input: "Hi", tools: [...tools, ...tools] }))
+    .toThrow("tools must be an array of up to 512 functions (received 610)");
 });
 
 test("unsupported stateful or control inputs fail closed with classified errors", () => {

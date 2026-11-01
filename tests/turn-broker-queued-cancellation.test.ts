@@ -37,6 +37,33 @@ async function fixture() {
 
 const id = (value: string) => `call_${value.repeat(32)}`;
 
+test("external-agent broker preserves 305 tools and rejects over-capacity registration", async () => {
+  const root = mkdtempSync(join(tmpdir(), "cgw-large-catalog-"));
+  const broker = TurnBroker.forSocket(defaultBrokerEndpoint(root));
+  const tools = Array.from({ length: 305 }, (_, index) => ({
+    name: `Tool_${index}`, description: `Tool ${index}`, parameters: { type: "object", properties: {} },
+  }));
+  try {
+    const { token } = await callTurnBroker<{ token: string }>(broker.socketPath, {
+      method: "owner_register", environment: { kind: "external-agent", tools },
+    });
+    const { bindingId } = await callTurnBroker<{ bindingId: string }>(broker.socketPath, {
+      method: "claim", token,
+    });
+    const { environment } = await callTurnBroker<{ environment: { tools: typeof tools } }>(broker.socketPath, {
+      method: "resolve", bindingId,
+    });
+    expect(environment.tools.map(tool => tool.name)).toEqual(tools.map(tool => tool.name));
+    await expect(callTurnBroker(broker.socketPath, {
+      method: "owner_register", environment: { kind: "external-agent",
+        tools: Array.from({ length: 513 }, (_, index) => ({ ...tools[0], name: `Extra_${index}` })) },
+    })).rejects.toThrow("external agent environment is invalid");
+  } finally {
+    try { await broker.close(); }
+    finally { rmSync(root, { recursive: true, force: true }); }
+  }
+});
+
 test("queued cancellation rejects malformed identities and cannot affect a native binding", async () => {
   const f = await fixture();
   try {
