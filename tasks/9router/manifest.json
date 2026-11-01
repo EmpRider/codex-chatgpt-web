@@ -866,8 +866,8 @@
         "items/R9-051-restore-diagnostic-code-allowlist-parity.md#council-cw409-c2-record; five real advisors, anonymous reviews and original-advisor rebuttals complete; C1 independent QA passed; one existing Activity literal and bounded regression only"
       ],
       "blockedReason": null,
-      "updatedAt": "2026-11-01T12:55:29.000Z",
-      "work_status": "RUNNING",
+      "updatedAt": "2026-11-01T13:36:05.000Z",
+      "work_status": "REVIEW",
       "scope_status": "IN_SCOPE",
       "delivery_status": "NOT_PUBLISHED",
       "status_sync": "CONFIRMED",
@@ -887,11 +887,12 @@
         "items/R9-052-classify-post-result-user-continuation-conflicts.md#council-cw409-c3-record; five independent proposals, anonymous reviews and original-session rebuttals complete; one context-bound enum only; frozen locally verified R9-050/R9-051 prerequisite, no false DONE dependency"
       ],
       "blockedReason": null,
-      "updatedAt": "2026-11-01T13:32:23.625Z",
-      "work_status": "READY",
+      "updatedAt": "2026-11-01T13:36:05.000Z",
+      "work_status": "RUNNING",
       "scope_status": "IN_SCOPE",
       "delivery_status": "NOT_PUBLISHED",
-      "status_sync": "PENDING",
+      "status_sync": "CONFIRMED",
+      "ledger_publication_commit": "83ac97e7c3f37372319d1d2c5f98fcfcf1c8a0eb",
       "agent": "S4 exclusive seven-path implementer; independent QA S3; sole ledger/publication coordinator PM; BA sole live-run owner"
     }
   ]
