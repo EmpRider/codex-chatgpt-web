@@ -852,6 +852,26 @@
       "status_sync": "CONFIRMED",
       "ledger_publication_commit": "c247d85f141732f06e3245c5cc98bae257fd2c09",
       "agent": "S4 implementation specialist; independent QA S3; technical owner TL; sole ledger/publication coordinator PM"
+    },
+    {
+      "id": "R9-051",
+      "epic": "R9-E07",
+      "title": "Restore diagnostic-code allowlist parity",
+      "file": "items/R9-051-restore-diagnostic-code-allowlist-parity.md",
+      "status": "in_progress",
+      "dependsOn": [
+        "R9-035"
+      ],
+      "evidence": [
+        "items/R9-051-restore-diagnostic-code-allowlist-parity.md#council-cw409-c2-record; five real advisors, anonymous reviews and original-advisor rebuttals complete; C1 independent QA passed; one existing Activity literal and bounded regression only"
+      ],
+      "blockedReason": null,
+      "updatedAt": "2026-11-01T12:53:02.435Z",
+      "work_status": "READY",
+      "scope_status": "IN_SCOPE",
+      "delivery_status": "NOT_PUBLISHED",
+      "status_sync": "PENDING",
+      "agent": "S4 exclusive implementation specialist after C1 freeze; independent QA S3; sole ledger/publication coordinator PM"
     }
   ]
 }
