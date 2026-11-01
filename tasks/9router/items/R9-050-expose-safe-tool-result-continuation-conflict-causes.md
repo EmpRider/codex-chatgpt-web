@@ -198,3 +198,9 @@ This branch's ordinary push does not prove CI: the inspected workflow triggers o
 Rollback is limited to reversing this task's diagnostic/test changes while preserving unrelated work. No reset, history rewrite, migration, configuration/data change, or cleanup is authorized. Later source publication and its rollback require separate authority.
 
 Kickoff state: Council and three-specialist gates complete; ledger publication pending verification; offline implementation not yet started; tests not yet run; live E2E waiting on its separate controls; permanent defect repair unresolved.
+
+### Verified publication and execution checkpoint
+
+Initial ledger commit `c247d85f141732f06e3245c5cc98bae257fd2c09` was pushed and verified at the exact remote feature-branch head. Its tree `77873ac215ad215720419cfe95bf32f325ef7adf` matches the verified two-file candidate. Tracker validation passed with 8 epics and 50 tasks; all 49 pre-existing records remained unchanged. Privacy/digest and staged whitespace checks passed after correcting two source-receipt transcription errors before publication. No source code was included.
+
+TL independently rechecked the clean published baseline and pre-edit audit, then released S4's exclusive six-file offline package. The original implementation agent is observed running. This is an execution-start checkpoint, not evidence that code, tests, live E2E, or a permanent fix are complete. The initial ledger publication is confirmed; implementation delivery remains `NOT_PUBLISHED`. The follow-up status commit is verified externally rather than self-referenced here.
