@@ -829,6 +829,28 @@
       ],
       "blockedReason": null,
       "updatedAt": "2026-10-24T17:12:00.000Z"
+    },
+    {
+      "id": "R9-050",
+      "epic": "R9-E07",
+      "title": "Expose safe tool-result continuation conflict causes",
+      "file": "items/R9-050-expose-safe-tool-result-continuation-conflict-causes.md",
+      "status": "in_progress",
+      "dependsOn": [
+        "R9-022",
+        "R9-027",
+        "R9-035"
+      ],
+      "evidence": [
+        "items/R9-050-expose-safe-tool-result-continuation-conflict-causes.md#council-cw409-c1--execution-readiness-record; five real advisors, anonymous peer reviews and original-advisor rebuttals completed; diagnostic scope only, permanent root cause unverified"
+      ],
+      "blockedReason": null,
+      "updatedAt": "2026-11-01T12:27:23.651Z",
+      "work_status": "READY",
+      "scope_status": "IN_SCOPE",
+      "delivery_status": "NOT_PUBLISHED",
+      "status_sync": "PENDING",
+      "agent": "S4 implementation specialist; independent QA S3; technical owner TL; sole ledger/publication coordinator PM"
     }
   ]
 }
